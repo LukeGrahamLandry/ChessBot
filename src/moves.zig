@@ -5,7 +5,7 @@ const Colour = @import("board.zig").Colour;
 const Piece = @import("board.zig").Piece;
 
 
-pub const Move = packed struct {
+pub const Move = struct {
     from: u6,
     to: u6,
 
@@ -32,7 +32,46 @@ pub fn possibleMoves(board: *const Board, me: Colour, allocator: std.mem.Allocat
         const file = i % 8;
         const rank = i / 8;
         switch (piece.kind) {
-            .Pawn => continue,
+            .Pawn => {
+                // TODO: promote
+                switch (me) {
+                    .White => {
+                        if (rank < 7) {
+                            if (board.get(file, rank + 1).empty()) {  // forward
+                                try moves.append(Move.irf(i, file, rank + 1));
+                            }
+                            if (file < 7 and board.get(file + 1, rank + 1).colour == me.other()) {  // right
+                                try moves.append(Move.irf(i, file + 1, rank + 1));
+                            }
+                            if (file > 0 and board.get(file - 1, rank + 1).colour == me.other()) {  // left
+                                try moves.append(Move.irf(i, file - 1, rank + 1));
+                            }
+                        }
+                        if (rank == 1 and board.get(file, 2).empty() and board.get(file, 3).empty()) {  // forward two
+                            try moves.append(Move.irf(i, file, 3));
+                        }
+                    },
+                    .Black => {
+                        if (rank > 0) {
+                            if (board.get(file, rank - 1).empty()) {  // forward
+                                try moves.append(Move.irf(i, file, rank - 1));
+                            }
+                            if (file < 7 and board.get(file + 1, rank - 1).colour == me.other()) {  // right
+                                try moves.append(Move.irf(i, file + 1, rank - 1));
+                            }
+                            if (file > 0 and board.get(file - 1, rank - 1).colour == me.other()) {  // left
+                                try moves.append(Move.irf(i, file - 1, rank - 1));
+                            }
+                        }
+                        
+                        if (rank == 6 and board.get(file, 5).empty() and board.get(file, 4).empty()) {  // forward two
+                            try moves.append(Move.irf(i, file, 4));
+                        }
+
+                    },
+                    .Empty => unreachable,
+                }
+            },
             .Bishop => continue,
             .Knight => continue,
             .Rook => {
@@ -40,7 +79,7 @@ pub fn possibleMoves(board: *const Board, me: Colour, allocator: std.mem.Allocat
             },
             .King => continue,
             .Queen => {
-                try rookSlide(&moves, board, i, file, rank, piece);
+                // try rookSlide(&moves, board, i, file, rank, piece);
             },
             .Empty => continue,
         }
@@ -90,3 +129,5 @@ fn rookSlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: u
         }
     }
 }
+
+// TODO: test that reads move data base and makes sure every move seems valid to me. 

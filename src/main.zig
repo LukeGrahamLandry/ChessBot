@@ -1,8 +1,8 @@
 const std = @import("std");
 const board = @import("board.zig");
 const moves = @import("moves.zig");
-var allocator = std.heap.GeneralPurposeAllocator(.{}){};
-var alloc = allocator.allocator();
+var allocatorT = std.heap.GeneralPurposeAllocator(.{}){};
+var alloc = allocatorT.allocator();
 
 pub fn main() !void {
     // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
@@ -23,37 +23,41 @@ pub fn main() !void {
     // TODO: can't chain because it decides to be const and can't shadow names so now I have to think of two names? this can't be right
     var notTheRng = std.rand.DefaultPrng.init(0);
     var rng = notTheRng.random();
-    const ss = try game.displayString(allocator.allocator());
+    const ss = try game.displayString(alloc);
     try stdout.print("{s}\n", .{ss});
     for (0..100) |i| {
+        std.time.sleep(1000000000);
         if (!try debugPlayOne(&game, i, .White, &rng, stdout)) {
             break;
         }
+        try bw.flush();
+        std.time.sleep(1000000000);
         if (!try debugPlayOne(&game, i, .Black, &rng, stdout)) {
             break;
         }
+        try bw.flush();
     }
 
 
     // Leaking a bunch of stuff, nobody cares. 
-    // try stdout.print("Run `zig build test` to run the tests.\n{s}\n\n{}\n{s}", .{ try b.toFEN(allocator.allocator()), @sizeOf(board.Board), try b.displayString(allocator.allocator())});
+    // try stdout.print("Run `zig build test` to run the tests.\n{s}\n\n{}\n{s}", .{ try b.toFEN(alloc), @sizeOf(board.Board), try b.displayString(alloc)});
     // try stdout.print("===BLACK===\n", .{});
-    // try stdout.print("{s} \n", .{try game.displayString(allocator.allocator())});
-    // for (try moves.possibleMoves(&game, .Black, allocator.allocator())) |move| {
+    // try stdout.print("{s} \n", .{try game.displayString(alloc)});
+    // for (try moves.possibleMoves(&game, .Black, alloc)) |move| {
     //     try stdout.print("{} \n", .{move});
     //     var temp = try board.Board.fromFEN(fen);
     //     temp.play(move);
-    //     try stdout.print("{s} \n", .{try temp.displayString(allocator.allocator())});
+    //     try stdout.print("{s} \n", .{try temp.displayString(alloc)});
     
     // }
 
     // try stdout.print("===WHITE===\n", .{});
-    // try stdout.print("{s} \n", .{try game.displayString(allocator.allocator())});
-    // for (try moves.possibleMoves(&game, .White, allocator.allocator())) |move| {
+    // try stdout.print("{s} \n", .{try game.displayString(alloc)});
+    // for (try moves.possibleMoves(&game, .White, alloc)) |move| {
     //     try stdout.print("{} \n", .{move});
     //     var temp = try board.Board.fromFEN(fen);
     //     temp.play(move);
-    //     try stdout.print("{s} \n", .{try temp.displayString(allocator.allocator())});
+    //     try stdout.print("{s} \n", .{try temp.displayString(alloc)});
     // }
 
 
@@ -62,7 +66,8 @@ pub fn main() !void {
 
 // TODO: how to refer to the writer interface 
 fn debugPlayOne(game: *board.Board, i: usize, colour: board.Colour, rng: *std.rand.Random, stdout: anytype) !bool {
-    const allMoves = try moves.possibleMoves(game, colour, allocator.allocator());
+    const allMoves = try moves.possibleMoves(game, colour, alloc);
+    defer alloc.free(allMoves);
     if (allMoves.len == 0) {
         try stdout.print("{} can't move. \n", .{colour});
         return false;
@@ -72,7 +77,8 @@ fn debugPlayOne(game: *board.Board, i: usize, colour: board.Colour, rng: *std.ra
     const move = allMoves[choice];
     try stdout.print("{} move {} is {}\n", .{colour, i, move});
     game.play(move);
-    const s = try game.displayString(allocator.allocator());
+    const s = try game.displayString(alloc);
+    defer alloc.free(s);
     try stdout.print("{s}\n", .{s});
 
     return true;

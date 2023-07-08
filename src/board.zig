@@ -5,7 +5,17 @@ const Move = @import("moves.zig").Move;
 // I don't care about the numbers but I like that a zeroed out piece is empty. 
 pub const Kind = enum(u4) { Empty = 0, Pawn, Bishop, Knight, Rook, Queen, King };
 // TODO: this could be one bit, the empty state is redundant. Is it helpful or does Piece need to be byte aligned in arrays anyway? 
-pub const Colour = enum(u2) { Empty = 0, Black, White };
+pub const Colour = enum(u2) { 
+    Empty = 0, Black, White, 
+
+    pub fn other(self: Colour) Colour {
+        return switch (self) {
+            .White => .Black,
+            .Black => .White,
+            .Empty => unreachable,
+        };
+    } 
+};
 
 pub const Piece = packed struct { 
     colour: Colour, 
