@@ -73,48 +73,32 @@ fn rookSlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: u
     // TODO: this does not spark joy. Feels like there should be some way to express it as a mask that you bit shift around. 
     if (file < 7) {
         for ((file + 1)..8) |checkFile| {
-            const check = board.get(checkFile, rank);
-            if (check.colour != piece.colour) {
-                try moves.append(Move.irf(i, checkFile, rank));
-                if (!check.empty()) break;
-            } else break;
+            if (try trySlide(moves, board, i, checkFile, rank, piece)) break;
         }
     }
     
     if (file > 0) {
         for (1..file) |checkFile| {
-            const check = board.get((file-checkFile), rank);
-            if (check.colour != piece.colour) {
-                try moves.append(Move.irf(i, file-checkFile, rank));
-                if (!check.empty()) break;
-            } else break;
+            if (try trySlide(moves, board, i, file - checkFile, rank, piece)) break;
         }
     }
 
     if (rank < 7) {
         for ((rank + 1)..8) |checkRank| {
-            const check = board.get(file, checkRank);
-            if (check.colour != piece.colour) {
-                try moves.append(Move.irf(i, file, checkRank));
-                if (!check.empty()) break;
-            } else break;
+            if (try trySlide(moves, board, i, file, checkRank, piece)) break;
         }
     }
     
     if (rank > 0) {
         for (1..rank) |checkRank| {
-                const check = board.get(file, (rank-checkRank));
-            if (check.colour != piece.colour) {
-                try moves.append(Move.irf(i, file, (rank-checkRank)));
-                if (!check.empty()) break;
-            } else break;
+            if (try trySlide(moves, board, i, file, rank-checkRank, piece)) break;
         }
     }
 }
 
 fn pawnMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
     const targetRank = switch (piece.colour) {
-        // Asserts can't have a pawn at the  end in real games because it would have promoted. 
+        // Asserts can't have a pawn at the end in real games because it would have promoted. 
         .White => w: {
             assert(rank < 7);  
             if (rank == 1 and board.get(file, 2).empty() and board.get(file, 3).empty()) {  // forward two
@@ -143,6 +127,15 @@ fn pawnMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: us
     }
 }
 
+// Returns true if this move was a capture or blocked by self so loop should break. 
+fn trySlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, checkFile: usize, checkRank: usize, piece: Piece) !bool {
+    const check = board.get(checkFile, checkRank);
+    if (check.colour != piece.colour) {
+        try moves.append(Move.irf(i, checkFile, checkRank));
+        return !check.empty();
+    } else return true;
+}
+
 // TODO: This is suck!
 fn bishopSlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
     {
@@ -151,11 +144,7 @@ fn bishopSlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, file:
         while (checkFile < 7 and checkRank < 7) {
             checkFile += 1;
             checkRank += 1;
-            const check = board.get(checkFile, checkRank);
-            if (check.colour != piece.colour) {
-                try moves.append(Move.irf(i, checkFile, checkRank));
-                if (!check.empty()) break;
-            } else break;
+            if (try trySlide(moves, board, i, checkFile, checkRank, piece)) break;
         }
     }
 
@@ -165,11 +154,7 @@ fn bishopSlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, file:
         while (checkFile > 0 and checkRank < 7) {
             checkFile -= 1;
             checkRank += 1;
-            const check = board.get(checkFile, checkRank);
-            if (check.colour != piece.colour) {
-                try moves.append(Move.irf(i, checkFile, checkRank));
-                if (!check.empty()) break;
-            } else break;
+            if (try trySlide(moves, board, i, checkFile, checkRank, piece)) break;
         }
     }
 
@@ -179,11 +164,7 @@ fn bishopSlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, file:
         while (checkFile < 7 and checkRank > 0) {
             checkFile += 1;
             checkRank -= 1;
-            const check = board.get(checkFile, checkRank);
-            if (check.colour != piece.colour) {
-                try moves.append(Move.irf(i, checkFile, checkRank));
-                if (!check.empty()) break;
-            } else break;
+            if (try trySlide(moves, board, i, checkFile, checkRank, piece)) break;
         }
     }
 
@@ -193,11 +174,7 @@ fn bishopSlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, file:
         while (checkFile > 0 and checkRank > 0) {
             checkFile -= 1;
             checkRank -= 1;
-            const check = board.get(checkFile, checkRank);
-            if (check.colour != piece.colour) {
-                try moves.append(Move.irf(i, checkFile, checkRank));
-                if (!check.empty()) break;
-            } else break;
+            if (try trySlide(moves, board, i, checkFile, checkRank, piece)) break;
         }
     }
 }
