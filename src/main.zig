@@ -6,7 +6,9 @@ var alloc = allocatorT.allocator();
 
 pub fn main() !void {
     // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
+    var ggame = try board.Board.fromFEN("R6R/3Q4/1Q4Q1/4Q3/2Q4Q/Q4Q2/pp1Q4/kBNNK1B1");
+    const allMoves = try moves.possibleMoves(&ggame, .White, alloc);
+    std.debug.print("All your {s} are belong to us. {}\n", .{"codebase", allMoves.len});
 
     // stdout is for the actual output of your application, for example if you
     // are implementing gzip, then only the compressed bytes should be sent to
@@ -26,7 +28,6 @@ pub fn main() !void {
     try stdout.print("{s}\n", .{ss});
     const delay = 500000000;
     for (0..100) |i| {
-        std.time.sleep(delay);
         if (!try debugPlayOne(&game, i, .White, &rng, stdout)) {
             break;
         }
@@ -36,6 +37,7 @@ pub fn main() !void {
             break;
         }
         try bw.flush();
+        std.time.sleep(delay);
     }
 
 
@@ -67,9 +69,10 @@ pub fn main() !void {
 // TODO: how to refer to the writer interface 
 fn debugPlayOne(game: *board.Board, i: usize, colour: board.Colour, rng: *std.rand.Random, stdout: anytype) !bool {
     const allMoves = try moves.possibleMoves(game, colour, alloc);
+    try stdout.print("_________________\n", .{});
+    try stdout.print("{} has {} legal moves. \n", .{colour, allMoves.len});
     defer alloc.free(allMoves);
     if (allMoves.len == 0) {
-        try stdout.print("{} can't move. \n", .{colour});
         return false;
     }
 
@@ -77,9 +80,14 @@ fn debugPlayOne(game: *board.Board, i: usize, colour: board.Colour, rng: *std.ra
     const move = allMoves[choice];
     try stdout.print("{} move {} is {}\n", .{colour, i, move});
     game.play(move);
+
+    const ss = try game.toFEN(alloc);
+    defer alloc.free(ss);
+    try stdout.print("{s}\n\n", .{ss});
+
     const s = try game.displayString(alloc);
     defer alloc.free(s);
-    try stdout.print("{s}\n", .{s});
+    try stdout.print("{s}", .{s});
 
     return true;
 }

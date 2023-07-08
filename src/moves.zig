@@ -180,3 +180,15 @@ fn bishopSlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, file:
 }
 
 // TODO: test that reads move data base and makes sure every move seems valid to me. 
+
+
+var tst = std.testing.allocator;
+
+test "count starting moves" {
+    var game = Board.initial();
+    const allMoves = try possibleMoves(&game, .White, tst);
+    defer tst.free(allMoves);
+    // These parameters are backwards because it can't infer type from a comptime_int. This seems dumb. 
+    // TODO: I don't have knight moves yet!
+    try std.testing.expectEqual(allMoves.len, 16);
+}

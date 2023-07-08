@@ -141,7 +141,7 @@ pub const Board = struct {
         for (0..8) |rank| {
             var empty: u8 = 0;
             for (0..8) |file| {
-                const p = self.get(file, rank);
+                const p = self.get(file, 7-rank);
                 if (p.empty()) {
                     empty += 1;
                     continue;
