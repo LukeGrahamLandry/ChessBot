@@ -2,11 +2,11 @@ const std = @import("std");
 const assert = std.debug.assert;
 const Move = @import("moves.zig").Move;
 
-// I don't care about the numbers but I like that a zeroed out piece is empty. 
-pub const Kind = enum(u4) { Empty = 0, Pawn, Bishop, Knight, Rook, Queen, King };
+// Numbers matter because js sees them. 
+pub const Kind = enum(u4) { Empty = 0, Pawn = 1, Bishop = 2, Knight = 3, Rook = 4, Queen = 5, King = 6 };
 // TODO: this could be one bit, the empty state is redundant. Is it helpful or does Piece need to be byte aligned in arrays anyway? 
 pub const Colour = enum(u2) { 
-    Empty = 0, Black, White, 
+    Empty = 0, Black = 1, White = 2, 
 
     pub fn other(self: Colour) Colour {
         return switch (self) {
@@ -20,6 +20,7 @@ pub const Colour = enum(u2) {
 pub const Piece = packed struct { 
     colour: Colour, 
     kind: Kind,
+    _pad: u2 = 0,
 
     pub fn fromChar(letter: u8) InvalidFenErr!Piece {
         return .{ 
@@ -60,7 +61,7 @@ pub const Piece = packed struct {
 };
 
 comptime {
-    assert(@sizeOf(Piece) == 1);
+    assert(@bitSizeOf(Piece) == 8);  // For js
 }
 
 const ASCII_ZERO_CHAR: u8 = 48;
