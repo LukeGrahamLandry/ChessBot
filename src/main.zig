@@ -15,8 +15,7 @@ pub fn main() !void {
     var bw = std.io.bufferedWriter(stdout_file);
     const stdout = bw.writer();
 
-    const fen = "r2Q3r/ppppqpp1/8/8/8/8/1PPPPPPP/R3KBNR";
-    var game = try board.Board.fromFEN(fen);
+    var game = board.Board.initial();
 
     // TODO: this is always the same sequence because I'm not seeding it. 
     // try std.os.getrandom(buffer: []u8)
@@ -25,13 +24,14 @@ pub fn main() !void {
     var rng = notTheRng.random();
     const ss = try game.displayString(alloc);
     try stdout.print("{s}\n", .{ss});
+    const delay = 500000000;
     for (0..100) |i| {
-        std.time.sleep(1000000000);
+        std.time.sleep(delay);
         if (!try debugPlayOne(&game, i, .White, &rng, stdout)) {
             break;
         }
         try bw.flush();
-        std.time.sleep(1000000000);
+        std.time.sleep(delay);
         if (!try debugPlayOne(&game, i, .Black, &rng, stdout)) {
             break;
         }

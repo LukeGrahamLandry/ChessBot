@@ -12,7 +12,7 @@ pub const Colour = enum(u2) {
         return switch (self) {
             .White => .Black,
             .Black => .White,
-            .Empty => unreachable,
+            .Empty => unreachable,  // Must revisit all usages of this function if I make empty not a colour!
         };
     } 
 };
