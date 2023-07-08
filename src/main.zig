@@ -1,5 +1,6 @@
 const std = @import("std");
 const board = @import("board.zig");
+const moves = @import("moves.zig");
 var allocator = std.heap.GeneralPurposeAllocator(.{}){};
 
 pub fn main() !void {
@@ -16,11 +17,25 @@ pub fn main() !void {
     var b = board.Board.initial();
 
 
-    try stdout.print("Run `zig build test` to run the tests.\n{s}\n", .{ try b.toFEN(allocator.allocator()) });
+    // Leaking a bunch of stuff, nobody cares. 
+    const fen = "r2Q3r/ppppppp1/8/8/8/8/1PPPPPPP/R3KBNR";
+    const game = try board.Board.fromFEN(fen);
+    try stdout.print("Run `zig build test` to run the tests.\n{s}\n\n{}\n{s}", .{ try b.toFEN(allocator.allocator()), @sizeOf(board.Board), try b.displayString(allocator.allocator())});
+    try stdout.print("=====\n", .{});
+    try stdout.print("{s} \n", .{try game.displayString(allocator.allocator())});
+    for (try moves.slowPossibleMoves(&game, .Black, allocator.allocator())) |move| {
+        try stdout.print("{} \n", .{move});
+        var temp = try board.Board.fromFEN(fen);
+        temp.play(move);
+        try stdout.print("{s} \n", .{try temp.displayString(allocator.allocator())});
+    
+    }
+
 
     try bw.flush(); // don't forget to flush!
 }
 
 test {
     _ = @import("board.zig");
+    _ = @import("moves.zig");
 }
