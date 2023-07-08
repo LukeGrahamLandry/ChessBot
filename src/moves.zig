@@ -3,18 +3,33 @@ const std = @import("std");
 const Board = @import("board.zig").Board;
 const Colour = @import("board.zig").Colour;
 const Piece = @import("board.zig").Piece;
+const Kind = @import("board.zig").Kind;
 
 
 pub const Move = struct {
     from: u6,
-    to: u6,
+    target: union(enum) {
+        to: u6,
+        promote: Kind,
+    },
 
     fn irf(from: usize, toFile: usize, toRank: usize) Move {
         std.debug.assert(from < 64 and toFile < 8 and toRank < 8);
         return .{
             .from=@truncate(from),
-            .to=@truncate(toRank*8 + toFile)
+            .target = .{.to = @truncate(toRank*8 + toFile)}
         };
+    }
+
+    fn irfPawn(from: usize, toFile: usize, toRank: usize, colour: Colour) Move {
+        if ((colour == .Black and toRank == 0) or (colour == .White and toRank == 7)){
+            return .{
+                .from=@truncate(from),
+                .target = .{.promote = .Queen }
+            };
+        } else {
+            return irf(from, toFile, toRank);
+        }
     }
 };
 
@@ -33,18 +48,17 @@ pub fn possibleMoves(board: *const Board, me: Colour, allocator: std.mem.Allocat
         const rank = i / 8;
         switch (piece.kind) {
             .Pawn => {
-                // TODO: promote
                 switch (me) {
                     .White => {
                         if (rank < 7) {
                             if (board.get(file, rank + 1).empty()) {  // forward
-                                try moves.append(Move.irf(i, file, rank + 1));
+                                try moves.append(Move.irfPawn(i, file, rank + 1, me));
                             }
                             if (file < 7 and board.get(file + 1, rank + 1).colour == me.other()) {  // right
-                                try moves.append(Move.irf(i, file + 1, rank + 1));
+                                try moves.append(Move.irfPawn(i, file + 1, rank + 1, me));
                             }
                             if (file > 0 and board.get(file - 1, rank + 1).colour == me.other()) {  // left
-                                try moves.append(Move.irf(i, file - 1, rank + 1));
+                                try moves.append(Move.irfPawn(i, file - 1, rank + 1, me));
                             }
                         }
                         if (rank == 1 and board.get(file, 2).empty() and board.get(file, 3).empty()) {  // forward two
@@ -54,13 +68,13 @@ pub fn possibleMoves(board: *const Board, me: Colour, allocator: std.mem.Allocat
                     .Black => {
                         if (rank > 0) {
                             if (board.get(file, rank - 1).empty()) {  // forward
-                                try moves.append(Move.irf(i, file, rank - 1));
+                                try moves.append(Move.irfPawn(i, file, rank - 1, me));
                             }
                             if (file < 7 and board.get(file + 1, rank - 1).colour == me.other()) {  // right
-                                try moves.append(Move.irf(i, file + 1, rank - 1));
+                                try moves.append(Move.irfPawn(i, file + 1, rank - 1, me));
                             }
                             if (file > 0 and board.get(file - 1, rank - 1).colour == me.other()) {  // left
-                                try moves.append(Move.irf(i, file - 1, rank - 1));
+                                try moves.append(Move.irfPawn(i, file - 1, rank - 1, me));
                             }
                         }
                         
