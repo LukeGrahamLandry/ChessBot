@@ -2,6 +2,7 @@ const std = @import("std");
 const board = @import("board.zig");
 const moves = @import("moves.zig");
 var allocator = std.heap.GeneralPurposeAllocator(.{}){};
+var alloc = allocator.allocator();
 
 pub fn main() !void {
     // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
@@ -14,25 +15,67 @@ pub fn main() !void {
     var bw = std.io.bufferedWriter(stdout_file);
     const stdout = bw.writer();
 
-    var b = board.Board.initial();
+    const fen = "r2Q3r/ppppqpp1/8/8/8/8/1PPPPPPP/R3KBNR";
+    var game = try board.Board.fromFEN(fen);
 
-
-    // Leaking a bunch of stuff, nobody cares. 
-    const fen = "r2Q3r/ppppppp1/8/8/8/8/1PPPPPPP/R3KBNR";
-    const game = try board.Board.fromFEN(fen);
-    try stdout.print("Run `zig build test` to run the tests.\n{s}\n\n{}\n{s}", .{ try b.toFEN(allocator.allocator()), @sizeOf(board.Board), try b.displayString(allocator.allocator())});
-    try stdout.print("=====\n", .{});
-    try stdout.print("{s} \n", .{try game.displayString(allocator.allocator())});
-    for (try moves.slowPossibleMoves(&game, .Black, allocator.allocator())) |move| {
-        try stdout.print("{} \n", .{move});
-        var temp = try board.Board.fromFEN(fen);
-        temp.play(move);
-        try stdout.print("{s} \n", .{try temp.displayString(allocator.allocator())});
-    
+    // TODO: this is always the same sequence because I'm not seeding it. 
+    // try std.os.getrandom(buffer: []u8)
+    // TODO: can't chain because it decides to be const and can't shadow names so now I have to think of two names? this can't be right
+    var notTheRng = std.rand.DefaultPrng.init(0);
+    var rng = notTheRng.random();
+    const ss = try game.displayString(allocator.allocator());
+    try stdout.print("{s}\n", .{ss});
+    for (0..100) |i| {
+        if (!try debugPlayOne(&game, i, .White, &rng, stdout)) {
+            break;
+        }
+        if (!try debugPlayOne(&game, i, .Black, &rng, stdout)) {
+            break;
+        }
     }
 
 
+    // Leaking a bunch of stuff, nobody cares. 
+    // try stdout.print("Run `zig build test` to run the tests.\n{s}\n\n{}\n{s}", .{ try b.toFEN(allocator.allocator()), @sizeOf(board.Board), try b.displayString(allocator.allocator())});
+    // try stdout.print("===BLACK===\n", .{});
+    // try stdout.print("{s} \n", .{try game.displayString(allocator.allocator())});
+    // for (try moves.possibleMoves(&game, .Black, allocator.allocator())) |move| {
+    //     try stdout.print("{} \n", .{move});
+    //     var temp = try board.Board.fromFEN(fen);
+    //     temp.play(move);
+    //     try stdout.print("{s} \n", .{try temp.displayString(allocator.allocator())});
+    
+    // }
+
+    // try stdout.print("===WHITE===\n", .{});
+    // try stdout.print("{s} \n", .{try game.displayString(allocator.allocator())});
+    // for (try moves.possibleMoves(&game, .White, allocator.allocator())) |move| {
+    //     try stdout.print("{} \n", .{move});
+    //     var temp = try board.Board.fromFEN(fen);
+    //     temp.play(move);
+    //     try stdout.print("{s} \n", .{try temp.displayString(allocator.allocator())});
+    // }
+
+
     try bw.flush(); // don't forget to flush!
+}
+
+// TODO: how to refer to the writer interface 
+fn debugPlayOne(game: *board.Board, i: usize, colour: board.Colour, rng: *std.rand.Random, stdout: anytype) !bool {
+    const allMoves = try moves.possibleMoves(game, colour, allocator.allocator());
+    if (allMoves.len == 0) {
+        try stdout.print("{} can't move. \n", .{colour});
+        return false;
+    }
+
+    const choice = rng.uintLessThanBiased(usize, allMoves.len);
+    const move = allMoves[choice];
+    try stdout.print("{} move {} is {}\n", .{colour, i, move});
+    game.play(move);
+    const s = try game.displayString(allocator.allocator());
+    try stdout.print("{s}\n", .{s});
+
+    return true;
 }
 
 test {
