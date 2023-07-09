@@ -6,39 +6,40 @@ var alloc = allocatorT.allocator();
 
 pub fn main() !void {
     // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
-    var ggame = try board.Board.fromFEN("R6R/3Q4/1Q4Q1/4Q3/2Q4Q/Q4Q2/pp1Q4/kBNNK1B1");
+    var ggame = try board.Board.fromFEN("R6R/3p4/1p4p1/4p3/2p4p/Q4p2/pp1p4/kBNNK1B1");
     const allMoves = try moves.possibleMoves(&ggame, .White, alloc);
-    std.debug.print("All your {s} are belong to us. {}\n", .{"codebase", allMoves.len});
-
+    std.debug.print("All your {s} are belong to us. \nThere are {} moves.\n", .{"codebase", allMoves.len});
     // stdout is for the actual output of your application, for example if you
     // are implementing gzip, then only the compressed bytes should be sent to
     // stdout, not any debugging messages.
     const stdout_file = std.io.getStdOut().writer();
     var bw = std.io.bufferedWriter(stdout_file);
     const stdout = bw.writer();
+    _ = stdout;
 
     var game = board.Board.initial();
+    _ = game;
 
     // TODO: this is always the same sequence because I'm not seeding it. 
     // try std.os.getrandom(buffer: []u8)
     // TODO: can't chain because it decides to be const and can't shadow names so now I have to think of two names? this can't be right
-    var notTheRng = std.rand.DefaultPrng.init(0);
-    var rng = notTheRng.random();
-    const ss = try game.displayString(alloc);
-    try stdout.print("{s}\n", .{ss});
-    const delay = 500000000;
-    for (0..100) |i| {
-        if (!try debugPlayOne(&game, i, .White, &rng, stdout)) {
-            break;
-        }
-        try bw.flush();
-        std.time.sleep(delay);
-        if (!try debugPlayOne(&game, i, .Black, &rng, stdout)) {
-            break;
-        }
-        try bw.flush();
-        std.time.sleep(delay);
-    }
+    // var notTheRng = std.rand.DefaultPrng.init(0);
+    // var rng = notTheRng.random();
+    // const ss = try game.displayString(alloc);
+    // try stdout.print("{s}\n", .{ss});
+    // const delay = 500000000;
+    // for (0..100) |i| {
+    //     if (!try debugPlayOne(&game, i, .White, &rng, stdout)) {
+    //         break;
+    //     }
+    //     try bw.flush();
+    //     std.time.sleep(delay);
+    //     if (!try debugPlayOne(&game, i, .Black, &rng, stdout)) {
+    //         break;
+    //     }
+    //     try bw.flush();
+    //     std.time.sleep(delay);
+    // }
 
 
     // Leaking a bunch of stuff, nobody cares. 

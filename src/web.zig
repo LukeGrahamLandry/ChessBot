@@ -11,6 +11,12 @@ const alloc = std.heap.wasm_allocator;
 var notTheRng = std.rand.DefaultPrng.init(0);
 var rng = notTheRng.random();
 
+export fn restartGame() void {
+   internalBoard = Board.initial();
+   theBoard = @bitCast(internalBoard.squares);
+   nextColour = .White;
+}
+
 export fn playNextMove() i32 {
    const allMoves = moves.possibleMoves(&internalBoard, nextColour, alloc) catch return 1;
    defer alloc.free(allMoves);

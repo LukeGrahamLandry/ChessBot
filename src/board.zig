@@ -17,6 +17,7 @@ pub const Colour = enum(u2) {
     } 
 };
 
+// This is packed with explicit padding so I can cast boards to byte arrays and pass to js. 
 pub const Piece = packed struct { 
     colour: Colour, 
     kind: Kind,

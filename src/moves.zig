@@ -41,6 +41,7 @@ fn toIndex(file: usize, rank: usize) u6  {
 // TODO: can I make this like an iterator struct? I kinda don't want to inline it into one big super function but storing them all seems dumb
 // TODO: for pruning, want to sort good moves first (like captures) so maybe that does mean need to put all in an array. 
 pub fn possibleMoves(board: *const Board, me: Colour, allocator: std.mem.Allocator) ![] Move {
+    assert(me != .Empty);
     var moves = std.ArrayList(Move).init(allocator);
     for (board.squares, 0..) |piece, i| {
         if (piece.colour != me) continue;
@@ -48,22 +49,16 @@ pub fn possibleMoves(board: *const Board, me: Colour, allocator: std.mem.Allocat
         const file = i % 8;
         const rank = i / 8;
         switch (piece.kind) {
-            .Pawn => {
-                try pawnMove(&moves, board, i, file, rank, piece);
-            },
-            .Bishop => {
-                try bishopSlide(&moves, board, i, file, rank, piece);
-            },
-            .Knight => continue,
-            .Rook => {
-                try rookSlide(&moves, board, i, file, rank, piece);
-            },
-            .King => continue,
+            .Pawn => try pawnMove(&moves, board, i, file, rank, piece),
+            .Bishop => try bishopSlide(&moves, board, i, file, rank, piece),
+            .Knight => try knightMove(&moves, board, i, file, rank, piece),
+            .Rook => try rookSlide(&moves, board, i, file, rank, piece),
+            .King => try kingMove(&moves, board, i, file, rank, piece),
             .Queen => {
                 try rookSlide(&moves, board, i, file, rank, piece);
                 try bishopSlide(&moves, board, i, file, rank, piece);
             },
-            .Empty => continue,
+            .Empty => unreachable,
         }
     }
     return try moves.toOwnedSlice();
@@ -179,9 +174,52 @@ fn bishopSlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, file:
     }
 }
 
+fn kingMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
+    // forward
+    if (file < 7) {
+        _ = try trySlide(moves, board, i, file + 1, rank, piece);
+        if (rank < 7) _ = try trySlide(moves, board, i, file + 1, rank + 1, piece);
+        if (rank > 0) _ = try trySlide(moves, board, i, file + 1, rank - 1, piece);
+    }
+    // back
+    if (file > 0) {
+        _ = try trySlide(moves, board, i, file - 1, rank, piece);
+        if (rank < 7) _ = try trySlide(moves, board, i, file - 1, rank + 1, piece);
+        if (rank > 0) _ = try trySlide(moves, board, i, file - 1, rank - 1, piece);
+    }
+    // horizontal
+    if (rank < 7) _ = try trySlide(moves, board, i, file, rank + 1, piece);
+    if (rank > 0) _ = try trySlide(moves, board, i, file, rank - 1, piece);
+}
+
+fn tryHop(moves: *std.ArrayList(Move), board: *const Board, i: usize, checkFile: usize, checkRank: usize, piece: Piece) !void {
+    const check = board.get(checkFile, checkRank);
+    if (check.colour != piece.colour) {
+        try moves.append(Move.irf(i, checkFile, checkRank));
+    } 
+}
+
+fn knightMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
+    if (rank < 6){
+        if (file < 7) try tryHop(moves, board, i, file + 1, rank + 2, piece);
+        if (file > 0) try tryHop(moves, board, i, file - 1, rank + 2, piece);
+    }
+    if (rank > 1){
+        if (file < 7) try tryHop(moves, board, i, file + 1, rank - 2, piece);
+        if (file > 0) try tryHop(moves, board, i, file - 1, rank - 2, piece);
+    }
+
+    if (file < 6){
+        if (rank < 7) try tryHop(moves, board, i, file + 2, rank + 1, piece);
+        if (rank > 0) try tryHop(moves, board, i, file + 2, rank - 1, piece);
+    }
+    if (file > 1){
+        if (rank < 7) try tryHop(moves, board, i, file - 2, rank + 1, piece);
+        if (rank > 0) try tryHop(moves, board, i, file - 2, rank - 1, piece);
+    }
+}
+
 // TODO: test that reads move data base and makes sure every move seems valid to me. 
-
-
 var tst = std.testing.allocator;
 
 test "count starting moves" {
@@ -189,6 +227,28 @@ test "count starting moves" {
     const allMoves = try possibleMoves(&game, .White, tst);
     defer tst.free(allMoves);
     // These parameters are backwards because it can't infer type from a comptime_int. This seems dumb. 
-    // TODO: I don't have knight moves yet!
-    try std.testing.expectEqual(allMoves.len, 16);
+    try std.testing.expectEqual(allMoves.len, 20);
 }
+
+// https://www.chess.com/forum/view/fun-with-chess/what-chess-position-has-the-most-number-of-possible-moves?page=2
+
+// test "many moves" {
+//     var game = try Board.fromFEN("R6R/3Q4/1Q4Q1/4Q3/2Q4Q/Q4Q2/pp1Q4/kBNNK1B1");
+//     const allMoves = try possibleMoves(&game, .White, tst);
+//     defer tst.free(allMoves);
+//     try std.testing.expectEqual(allMoves.len, 218);
+// }
+
+// test "many moves promotions" {
+//     var game = try Board.fromFEN("1nnrrbbq/PPPPPPPP/1R6/6K1/Q7/2BNNB2/7R/6k1");
+//     const allMoves = try possibleMoves(&game, .White, tst);
+//     defer tst.free(allMoves);
+//     try std.testing.expectEqual(allMoves.len, 139);
+// }
+
+// test "many moves 2" {
+//     var game = try Board.fromFEN("r6R/2pbpBk1/1P1B1N2/6q1/4Q3/2nn1p2/1PK1NbP1/R6r");
+//     const allMoves = try possibleMoves(&game, .White, tst);
+//     defer tst.free(allMoves);
+//     try std.testing.expectEqual(allMoves.len, 181);
+// }

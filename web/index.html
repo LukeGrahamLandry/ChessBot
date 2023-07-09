@@ -6,9 +6,11 @@
   <body style="background-color: gray;">
     <div style="text-align: center;">
         <canvas id="board" style="background:url(assets/board.svg); width: 30%;"> why do you no are have canvas?! </canvas> <br>
+        <button onclick="handleRestart()"> Reset Board </button>
     </div>
     <pre id="letters"></pre>
   </body>
+  <!-- TODO: put this in seperate js file? But I don't want it to wait for the js to load before downloading the wasm. -->
   <script>
     let boardWidth = document.getElementById("board").width;
     if (document.getElementById("board").height != boardWidth){
@@ -24,33 +26,41 @@
             if (!chessImg.complete){
                 document.getElementById("letters").innerText += "WASM ready but pieces image not loaded yet.\n";
             }
+            Engine.restartGame();
             renderBoard();
-            const run = () => window.setTimeout(function() {
-                let result = Engine.playNextMove();
-                renderBoard();
-                let msg;
-                switch (result) {
-                    case 0:
-                        run();
-                        return;
-                    case 1:
-                        msg = "Engine reported error.";
-                        break;
-                    case 2:
-                        msg = "White cannot move.";
-                        break;
-                    case 3:
-                        msg = "Black cannot move.";
-                        break;
-                    default:
-                        msg = "Invalid engine response: " + result;
-                }
-                document.getElementById("letters").innerText += "\n" + msg;
-            }, 500);
-            run();
-        },
+            tickGame();
+        }
     );
+    function tickGame() {
+        window.setTimeout(function() {
+            let result = Engine.playNextMove();
+            renderBoard();
+            let msg;
+            switch (result) {
+                case 0:
+                    tickGame();
+                    return;
+                case 1:
+                    msg = "Engine reported error.";
+                    break;
+                case 2:
+                    msg = "White cannot move.";
+                    break;
+                case 3:
+                    msg = "Black cannot move.";
+                    break;
+                default:
+                    msg = "Invalid engine response: " + result;
+            }
+            document.getElementById("letters").innerText += "\n" + msg;
+        }, 200);
+    };
 
+    function handleRestart() {
+        Engine.restartGame();
+        renderBoard();
+        // TODO: start tickGame running again if the game was over. 
+    }
 
     const chessImg = new Image();
     chessImg.src = "assets/pieces.svg";  // TODO: wait for on load? 
@@ -76,6 +86,7 @@
 
     function renderBoard() {
         let board = new Uint8Array(Engine.memory.buffer, Engine.theBoard);
+        // TODO: If I really cared I could just render the diff instead of clearing the board
         ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
         for (let rank=0;rank<8;rank++){
             for (let file=0;file<8;file++){
@@ -112,6 +123,7 @@
         return pieces
     }
 
+    // TODO: put this in build.zig
     // zig build-lib src/web.zig -target wasm32-freestanding -dynamic -rdynamic -O ReleaseFast && mv web.wasm web/main.wasm
   </script>
 </html>
