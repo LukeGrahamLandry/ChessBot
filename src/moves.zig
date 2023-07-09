@@ -6,10 +6,16 @@ const Colour = @import("board.zig").Colour;
 const Piece = @import("board.zig").Piece;
 const Kind = @import("board.zig").Kind;
 
+// This is 4 bytes but, 
+// If I was more efficient for promotion targets because you know it's on the far rank, and there's only 4 promotion options,
+// this could fit in 3 bytes, [from: u6, action: u1, (to: u6) or (kind: u2, to: u3)] = u13. 
+// Or even 2 bytes because if you can check if its a pawn moving from second back rank so you don't need the action flag. 
+// But it's not worth dealing with yet. Might be worth it to store the opening book in half the space tho!
 pub const Move = struct {
     from: u6,
-    target: union(enum) {
-        to: u6,
+    to: u6,
+    action: union(enum) {
+        none,
         promote: Kind,
     },
 
@@ -17,7 +23,8 @@ pub const Move = struct {
         std.debug.assert(fromIndex < 64 and toFile < 8 and toRank < 8);
         return .{
             .from=@truncate(fromIndex),
-            .target = .{.to = @truncate(toRank*8 + toFile)}
+            .to = @truncate(toRank*8 + toFile),
+            .action = .none,
         };
     }
 
@@ -26,27 +33,11 @@ pub const Move = struct {
             // Just assume making a queen is always the right choice. 
             return .{
                 .from=@truncate(fromIndex),
-                .target = .{.promote = .Queen }
+                .to = @truncate(toRank*8 + toFile),
+                .action = .{.promote = .Queen }
             };
         } else {
             return irf(fromIndex, toFile, toRank);
-        }
-    }
-
-    pub fn getTo(self: Move) u64 {
-        switch (self.target) {
-            .to => |to| {
-                return to;
-            },
-            .promote => |_| {
-                const file = self.from % 8;
-                const rank: u8 = switch (self.from) {
-                    1 => 0,
-                    6 => 7,
-                    else => unreachable,
-                };
-                return rank*8 + file;
-            }
         }
     }
 };
@@ -57,6 +48,7 @@ fn toIndex(file: usize, rank: usize) u6  {
 
 // TODO: can I make this like an iterator struct? I kinda don't want to inline it into one big super function but storing them all seems dumb
 // TODO: for pruning, want to sort good moves first (like captures) so maybe that does mean need to put all in an array. 
+// TODO: castling, en-passant, check
 pub fn possibleMoves(board: *const Board, me: Colour, allocator: std.mem.Allocator) ![] Move {
     assert(me != .Empty);
     var moves = std.ArrayList(Move).init(allocator);
@@ -90,7 +82,7 @@ fn rookSlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: u
     }
     
     if (file > 0) {
-        for (1..file) |checkFile| {
+        for (1..(file+1)) |checkFile| {
             if (try trySlide(moves, board, i, file - checkFile, rank, piece)) break;
         }
     }
@@ -102,7 +94,7 @@ fn rookSlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: u
     }
     
     if (rank > 0) {
-        for (1..rank) |checkRank| {
+        for (1..(rank+1)) |checkRank| {
             if (try trySlide(moves, board, i, file, rank-checkRank, piece)) break;
         }
     }
@@ -249,21 +241,21 @@ test "count starting moves" {
 
 // https://www.chess.com/forum/view/fun-with-chess/what-chess-position-has-the-most-number-of-possible-moves?page=2
 
-// test "many moves" {
+// test "many moves some promotions" {
 //     var game = try Board.fromFEN("R6R/3Q4/1Q4Q1/4Q3/2Q4Q/Q4Q2/pp1Q4/kBNNK1B1");
 //     const allMoves = try possibleMoves(&game, .White, tst);
 //     defer tst.free(allMoves);
 //     try std.testing.expectEqual(allMoves.len, 218);
 // }
 
-// test "many moves promotions" {
+// test "many moves many promotions" {
 //     var game = try Board.fromFEN("1nnrrbbq/PPPPPPPP/1R6/6K1/Q7/2BNNB2/7R/6k1");
 //     const allMoves = try possibleMoves(&game, .White, tst);
 //     defer tst.free(allMoves);
 //     try std.testing.expectEqual(allMoves.len, 139);
 // }
 
-// test "many moves 2" {
+// test "many moves" {
 //     var game = try Board.fromFEN("r6R/2pbpBk1/1P1B1N2/6q1/4Q3/2nn1p2/1PK1NbP1/R6r");
 //     const allMoves = try possibleMoves(&game, .White, tst);
 //     defer tst.free(allMoves);

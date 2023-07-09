@@ -87,20 +87,14 @@ pub const Board = struct {
     }
 
     pub fn play(self: *Board, move: Move) void {
-        switch (move.target) {
-            .to => |to| {
-                self.squares[to] = self.squares[move.from];
+        switch (move.action) {
+            .none => {
+                self.squares[move.to] = self.squares[move.from];
                 self.squares[move.from] = .{ .colour = .Empty, .kind = .Empty };
             },
             .promote => |kind| {
                 const c = self.squares[move.from].colour;
-                const file = move.from % 8;
-                const rank: u8 = switch (c) {
-                    .Black => 0,
-                    .White => 7,
-                    .Empty => unreachable,
-                };
-                self.set(file, rank, .{ .colour = c, .kind = kind });
+                self.squares[move.to] = .{ .colour = c, .kind = kind };
                 self.squares[move.from] = .{ .colour = .Empty, .kind = .Empty };
             }
         }
