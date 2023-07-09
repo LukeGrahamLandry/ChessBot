@@ -11,11 +11,11 @@ const alloc = std.heap.wasm_allocator;
 var notTheRng = std.rand.DefaultPrng.init(0);
 var rng = notTheRng.random();
 
-export fn playNextMove() bool {
-   const allMoves = moves.possibleMoves(&internalBoard, nextColour, alloc) catch return false;
+export fn playNextMove() i32 {
+   const allMoves = moves.possibleMoves(&internalBoard, nextColour, alloc) catch return 1;
    defer alloc.free(allMoves);
    if (allMoves.len == 0) {
-      return false;
+      return if (nextColour == .White) 2 else 3;
    }
 
    const choice = rng.uintLessThanBiased(usize, allMoves.len);
@@ -24,5 +24,5 @@ export fn playNextMove() bool {
 
    theBoard = @bitCast(internalBoard.squares);
    nextColour = nextColour.other();
-   return true;
+   return 0;
 }
