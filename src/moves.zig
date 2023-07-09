@@ -6,6 +6,60 @@ const Colour = @import("board.zig").Colour;
 const Piece = @import("board.zig").Piece;
 const Kind = @import("board.zig").Kind;
 
+var notTheRng = std.rand.DefaultPrng.init(0);
+var rng = notTheRng.random();
+const MoveResult = error { GameOver, OutOfMemory };
+
+pub fn bestMove(game: *const Board, me: Colour, alloc: std.mem.Allocator) MoveResult!Move {
+    const moves = try possibleMoves(game, me, alloc);
+    defer alloc.free(moves);
+    if (moves.len == 0) return error.GameOver;
+    var bestMoves = std.ArrayList(Move).init(alloc);
+    defer bestMoves.deinit();
+    
+    var bestVal: i32 = -1000000;
+    for (moves) |move| {
+        var checkBoard = game.*;
+        checkBoard.play(move);
+        const value = if (me == .White) simpleEval(&checkBoard) else -simpleEval(&checkBoard);
+        if (value > bestVal) {
+            bestVal = value;
+            bestMoves.clearRetainingCapacity();
+            try bestMoves.append(move);
+        } else if (value == bestVal) {
+            try bestMoves.append(move);
+        }
+    }
+    
+    assert(bestMoves.items.len > 0);
+    const choice = rng.uintLessThanBiased(usize,  bestMoves.items.len);
+    return bestMoves.items[choice];
+}
+
+/// Positive means white is winning. 
+fn simpleEval(game: *const Board) i32 {
+    var result: i32 = 0;
+    for (game.squares) |piece| {
+        const value: i32 = switch (piece.kind) {
+            .Pawn => 100,
+            .Bishop => 300,
+            .Knight => 300,
+            .Rook => 500,
+            .King => 100000,
+            .Queen => 900,
+            .Empty => continue,
+        };
+        switch (piece.colour) {
+            .White => result += value,
+            .Black => result -= value,
+            .Empty => unreachable,
+        }
+    }
+    return result;
+}
+
+
+
 // This is 4 bytes but, 
 // If I was more efficient for promotion targets because you know it's on the far rank, and there's only 4 promotion options,
 // this could fit in 3 bytes, [from: u6, action: u1, (to: u6) or (kind: u2, to: u3)] = u13. 
@@ -49,9 +103,9 @@ fn toIndex(file: usize, rank: usize) u6  {
 // TODO: can I make this like an iterator struct? I kinda don't want to inline it into one big super function but storing them all seems dumb
 // TODO: for pruning, want to sort good moves first (like captures) so maybe that does mean need to put all in an array. 
 // TODO: castling, en-passant, check
-pub fn possibleMoves(board: *const Board, me: Colour, allocator: std.mem.Allocator) ![] Move {
+pub fn possibleMoves(board: *const Board, me: Colour, alloc: std.mem.Allocator) ![] Move {
     assert(me != .Empty);
-    var moves = std.ArrayList(Move).init(allocator);
+    var moves = std.ArrayList(Move).init(alloc);
     for (board.squares, 0..) |piece, i| {
         if (piece.colour != me) continue;
         

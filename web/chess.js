@@ -46,7 +46,6 @@ function handleResume(){
 }
 
 function handleSetFromFen(){
-    // TODO: validation
     handlePause();
     // The length here must match the size of fenView in Zig to prevent writes overflowing when string too long. 
     const fenBuffer = new Uint8Array(Engine.memory.buffer, Engine.fenView, 80);

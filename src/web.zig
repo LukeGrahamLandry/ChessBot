@@ -7,7 +7,7 @@ const moves = @import("moves.zig");
 var internalBoard = Board.initial();
 export var boardView: [64] u8 = @bitCast(Board.initial().squares);
 var nextColour: Colour = .White;
-export var fenView: [80] u8 = undefined;
+export var fenView: [80] u8 = undefined;  // This length must match the one in js handleSetFromFen.
 
 const alloc = std.heap.wasm_allocator;
 var notTheRng = std.rand.DefaultPrng.init(0);
@@ -23,7 +23,7 @@ export fn restartGame() void {
 /// Returns 0->continue, 1->error, 2->black wins, 3->white wins. 
 /// IN: internalBoard, boardView, nextColour
 /// OUT: internalBoard, boardView, nextColour
-export fn playNextMove() i32 {
+export fn playRandomMove() i32 {
    const allMoves = moves.possibleMoves(&internalBoard, nextColour, alloc) catch return 1;
    defer alloc.free(allMoves);
    if (allMoves.len == 0) {
@@ -34,6 +34,23 @@ export fn playNextMove() i32 {
    const move = allMoves[choice];
    internalBoard.play(move);
 
+   boardView = @bitCast(internalBoard.squares);
+   nextColour = nextColour.other();
+   return 0;
+}
+
+/// Returns 0->continue, 1->error, 2->black wins, 3->white wins. 
+/// IN: internalBoard, boardView, nextColour
+/// OUT: internalBoard, boardView, nextColour
+export fn playNextMove() i32 {
+   const move = moves.bestMove(&internalBoard, nextColour, alloc) catch |err| {
+      switch (err) {
+         error.OutOfMemory => return 1,
+         error.GameOver => return if (nextColour == .White) 2 else 3,
+      }
+   };
+
+   internalBoard.play(move);
    boardView = @bitCast(internalBoard.squares);
    nextColour = nextColour.other();
    return 0;

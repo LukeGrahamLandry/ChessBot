@@ -57,6 +57,8 @@
 
     // TODO: put this in build.zig
     // zig build-lib src/web.zig -target wasm32-freestanding -dynamic -rdynamic -O ReleaseFast && mv web.wasm web/main.wasm
+    // benchmark then consider ReleaseSmall cause its ~1/14 the size. 
+    // could build both, default to small and have a button to download the better one. 
   </script>
   </body>
 </html>
