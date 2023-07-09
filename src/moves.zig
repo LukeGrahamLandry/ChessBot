@@ -36,13 +36,21 @@ pub fn bestMoveDepth1(game: *const Board, me: Colour, alloc: std.mem.Allocator) 
     return bestMoves.items[choice];
 }
 
+const MemoMap = std.AutoHashMap(Board, struct {
+    eval: i32,
+    remaining: u64
+});
+
 pub fn bestMove(game: *const Board, me: Colour, alloc: std.mem.Allocator) MoveResult!Move {
-    // const start = std.time.nanoTimestamp();
+    const start = std.time.nanoTimestamp();
     const moves = try possibleMoves(game, me, alloc);
     defer alloc.free(moves);
     if (moves.len == 0) return error.GameOver;
     var bestMoves = std.ArrayList(Move).init(alloc);
     defer bestMoves.deinit();
+
+    var memo = MemoMap.init(alloc);
+    defer memo.deinit();
 
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
@@ -53,7 +61,7 @@ pub fn bestMove(game: *const Board, me: Colour, alloc: std.mem.Allocator) MoveRe
     for (moves) |move| {
         var checkBoard = game.*;
         checkBoard.play(move);
-        const value = -try walkEval(&checkBoard, me.other(), 3, arena.allocator(), &count);  // TODO: need to catch
+        const value = -try walkEval(&checkBoard, me.other(), 3, arena.allocator(), &count, &memo);  // TODO: need to catch
         if (value > bestVal) {
             bestVal = value;
             bestMoves.clearRetainingCapacity();
@@ -66,11 +74,20 @@ pub fn bestMove(game: *const Board, me: Colour, alloc: std.mem.Allocator) MoveRe
     
     assert(bestMoves.items.len > 0);
     const choice = rng.uintLessThanBiased(usize,  bestMoves.items.len);
-    // std.debug.print("Checked {} end states. Found move in {}ms", .{count, @divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms))});
+    std.debug.print("Checked {} end states. Found move in {}ms", .{count, @divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms))});
     return bestMoves.items[choice];
 }
 
-pub fn walkEval(game: *const Board, me: Colour, remaining: u32, alloc: std.mem.Allocator, count: *u64) MoveResult!i32 {
+pub fn walkEval(game: *const Board, me: Colour, remaining: u32, alloc: std.mem.Allocator, count: *u64, memo: *MemoMap) MoveResult!i32 {
+    // If the cache had the same or more depth than us, trust it. Otherwise, recalculate. 
+    // Using this reduces the calls to simpleEval by a lot but makes the time longer cause hashmaps slow I guess. even a big assumeCapacity doesnt help enough. 
+    // I didnt try keeping it between moves tho. 
+    // if (memo.get(game.*)) |cached| {
+    //     if (cached.remaining >= remaining){
+    //         return if (me == .White) cached.eval else -cached.eval;
+    //     }
+    // }
+
     const moves = try possibleMoves(game, me, alloc);
     defer alloc.free(moves);
     if (moves.len == 0) return error.GameOver;
@@ -83,7 +100,7 @@ pub fn walkEval(game: *const Board, me: Colour, remaining: u32, alloc: std.mem.A
             count.* += 1;
             break :e if (me == .White) simpleEval(&checkBoard) else -simpleEval(&checkBoard);
         } else r: {
-            const v = walkEval(&checkBoard, me.other(), remaining - 1, alloc, count) catch |err| {
+            const v = walkEval(&checkBoard, me.other(), remaining - 1, alloc, count, memo) catch |err| {
                 switch (err) {
                     error.OutOfMemory => return err,
                     error.GameOver => break :r 1000000,
@@ -96,7 +113,11 @@ pub fn walkEval(game: *const Board, me: Colour, remaining: u32, alloc: std.mem.A
             bestVal = value;
         }
     }
-    
+
+    // try memo.put(game.*, .{
+    //     .eval = if (me == .White) bestVal else -bestVal,
+    //     .remaining = remaining,
+    // });
     return bestVal;
 
 }
