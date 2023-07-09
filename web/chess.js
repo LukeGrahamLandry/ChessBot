@@ -24,7 +24,7 @@ function tickGame() {
         document.getElementById("resume").disabled = true;
         document.getElementById("pause").disabled = true;
         document.getElementById("letters").innerText += "\n" + msg;
-    }, 300);
+    }, 1);
 };
 
 function handleRestart() {

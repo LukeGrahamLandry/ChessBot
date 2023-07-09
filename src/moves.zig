@@ -10,7 +10,7 @@ var notTheRng = std.rand.DefaultPrng.init(0);
 var rng = notTheRng.random();
 const MoveResult = error { GameOver, OutOfMemory };
 
-pub fn bestMove(game: *const Board, me: Colour, alloc: std.mem.Allocator) MoveResult!Move {
+pub fn bestMoveDepth1(game: *const Board, me: Colour, alloc: std.mem.Allocator) MoveResult!Move {
     const moves = try possibleMoves(game, me, alloc);
     defer alloc.free(moves);
     if (moves.len == 0) return error.GameOver;
@@ -36,6 +36,70 @@ pub fn bestMove(game: *const Board, me: Colour, alloc: std.mem.Allocator) MoveRe
     return bestMoves.items[choice];
 }
 
+pub fn bestMove(game: *const Board, me: Colour, alloc: std.mem.Allocator) MoveResult!Move {
+    // const start = std.time.nanoTimestamp();
+    const moves = try possibleMoves(game, me, alloc);
+    defer alloc.free(moves);
+    if (moves.len == 0) return error.GameOver;
+    var bestMoves = std.ArrayList(Move).init(alloc);
+    defer bestMoves.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+
+    
+    var bestVal: i32 = -1000000;
+    var count: u64 = 0;
+    for (moves) |move| {
+        var checkBoard = game.*;
+        checkBoard.play(move);
+        const value = -try walkEval(&checkBoard, me.other(), 3, arena.allocator(), &count);  // TODO: need to catch
+        if (value > bestVal) {
+            bestVal = value;
+            bestMoves.clearRetainingCapacity();
+            try bestMoves.append(move);
+        } else if (value == bestVal) {
+            try bestMoves.append(move);
+        }
+        _ = arena.reset(.retain_capacity);
+    }
+    
+    assert(bestMoves.items.len > 0);
+    const choice = rng.uintLessThanBiased(usize,  bestMoves.items.len);
+    // std.debug.print("Checked {} end states. Found move in {}ms", .{count, @divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms))});
+    return bestMoves.items[choice];
+}
+
+pub fn walkEval(game: *const Board, me: Colour, remaining: u32, alloc: std.mem.Allocator, count: *u64) MoveResult!i32 {
+    const moves = try possibleMoves(game, me, alloc);
+    defer alloc.free(moves);
+    if (moves.len == 0) return error.GameOver;
+    
+    var bestVal: i32 = -1000000;
+    for (moves) |move| {
+        var checkBoard = game.*;
+        checkBoard.play(move);
+        const value = if (remaining == 0) e: {
+            count.* += 1;
+            break :e if (me == .White) simpleEval(&checkBoard) else -simpleEval(&checkBoard);
+        } else r: {
+            const v = walkEval(&checkBoard, me.other(), remaining - 1, alloc, count) catch |err| {
+                switch (err) {
+                    error.OutOfMemory => return err,
+                    error.GameOver => break :r 1000000,
+                }
+            };
+            break :r -v;
+        };
+
+        if (value > bestVal) {
+            bestVal = value;
+        }
+    }
+    
+    return bestVal;
+
+}
 /// Positive means white is winning. 
 fn simpleEval(game: *const Board) i32 {
     var result: i32 = 0;

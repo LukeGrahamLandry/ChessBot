@@ -15,31 +15,29 @@ pub fn main() !void {
     const stdout_file = std.io.getStdOut().writer();
     var bw = std.io.bufferedWriter(stdout_file);
     const stdout = bw.writer();
-    _ = stdout;
 
     var game = board.Board.initial();
-    _ = game;
 
     // TODO: this is always the same sequence because I'm not seeding it. 
     // try std.os.getrandom(buffer: []u8)
     // TODO: can't chain because it decides to be const and can't shadow names so now I have to think of two names? this can't be right
-    // var notTheRng = std.rand.DefaultPrng.init(0);
-    // var rng = notTheRng.random();
-    // const ss = try game.displayString(alloc);
-    // try stdout.print("{s}\n", .{ss});
-    // const delay = 500000000;
-    // for (0..100) |i| {
-    //     if (!try debugPlayOne(&game, i, .White, &rng, stdout)) {
-    //         break;
-    //     }
-    //     try bw.flush();
-    //     std.time.sleep(delay);
-    //     if (!try debugPlayOne(&game, i, .Black, &rng, stdout)) {
-    //         break;
-    //     }
-    //     try bw.flush();
-    //     std.time.sleep(delay);
-    // }
+    var notTheRng = std.rand.DefaultPrng.init(0);
+    var rng = notTheRng.random();
+    const ss = try game.displayString(alloc);
+    try stdout.print("{s}\n", .{ss});
+    const delay = 500000000;
+    for (0..100) |i| {
+        if (!try debugPlayOne(&game, i, .White, &rng, stdout)) {
+            break;
+        }
+        try bw.flush();
+        std.time.sleep(delay);
+        if (!try debugPlayOne(&game, i, .Black, &rng, stdout)) {
+            break;
+        }
+        try bw.flush();
+        std.time.sleep(delay);
+    }
 
 
     // Leaking a bunch of stuff, nobody cares. 
@@ -69,6 +67,7 @@ pub fn main() !void {
 
 // TODO: how to refer to the writer interface 
 fn debugPlayOne(game: *board.Board, i: usize, colour: board.Colour, rng: *std.rand.Random, stdout: anytype) !bool {
+    _ = rng;
     const allMoves = try moves.possibleMoves(game, colour, alloc);
     try stdout.print("_________________\n", .{});
     try stdout.print("{} has {} legal moves. \n", .{colour, allMoves.len});
@@ -77,8 +76,7 @@ fn debugPlayOne(game: *board.Board, i: usize, colour: board.Colour, rng: *std.ra
         return false;
     }
 
-    const choice = rng.uintLessThanBiased(usize, allMoves.len);
-    const move = allMoves[choice];
+    const move = try moves.bestMove(game, colour, alloc);
     try stdout.print("{} move {} is {}\n", .{colour, i, move});
     game.play(move);
 
