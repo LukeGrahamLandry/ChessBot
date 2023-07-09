@@ -104,7 +104,6 @@ pub const Board = struct {
                 self.squares[move.from] = .{ .colour = .Empty, .kind = .Empty };
             }
         }
-        
     }
 
     // TODO: this rejects the extra data at the end because I can't store it yet. 

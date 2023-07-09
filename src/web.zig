@@ -32,3 +32,19 @@ export fn playNextMove() i32 {
    nextColour = nextColour.other();
    return 0;
 }
+
+// TODO: this is a really slow way of doing this. 
+// Returns a bit board showing which squares the piece in <from> can move to. 
+export fn getPossibleMoves(from: i32) u64 {
+   const piece = internalBoard.squares[@intCast(from)];
+   if (piece.empty()) return 0;
+   var result: u64 = 0;
+   const allMoves = moves.possibleMoves(&internalBoard, piece.colour, alloc) catch return 1;
+   defer alloc.free(allMoves);
+   for (allMoves) |move| {
+      if (@as(i32, move.from) == from) {
+         result |= @as(u64, 1) << @intCast(move.getTo());
+      }
+   }
+   return result;
+}

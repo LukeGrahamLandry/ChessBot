@@ -32,6 +32,23 @@ pub const Move = struct {
             return irf(fromIndex, toFile, toRank);
         }
     }
+
+    pub fn getTo(self: Move) u64 {
+        switch (self.target) {
+            .to => |to| {
+                return to;
+            },
+            .promote => |_| {
+                const file = self.from % 8;
+                const rank: u8 = switch (self.from) {
+                    1 => 0,
+                    6 => 7,
+                    else => unreachable,
+                };
+                return rank*8 + file;
+            }
+        }
+    }
 };
 
 fn toIndex(file: usize, rank: usize) u6  {
