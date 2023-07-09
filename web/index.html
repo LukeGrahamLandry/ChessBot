@@ -2,203 +2,61 @@
 <html>
   <head>
     <title>Wasm Chess</title>
+    <script defer src="chess.js"></script>
   </head>
   <body style="background-color: gray;">
     <div style="text-align: center;">
         <canvas id="board" style="background:url(assets/board.svg); width: 30%;"> why do you no are have canvas?! </canvas>
-        <br>
-        <button onclick="handleRestart()"> Reset Board </button>
-        <button onclick="handlePause()" id="pause" disabled> Pause </button>
-        <button onclick="handleResume()" id="resume"> Resume </button>
-        <br> <br>
-        FEN: <input type="text" id="fen" style="width: 350px;"> <button onclick="handleSetFromFen()">Set Board</button>
+        <div id="controls">
+            <button onclick="handleRestart()"> Reset Board </button>
+            <button onclick="handlePause()" id="pause" disabled> Pause </button>
+            <button onclick="handleResume()" id="resume"> Resume </button>
+            <br> <br>
+            FEN: <input type="text" id="fen" style="width: 350px;"> <button onclick="handleSetFromFen()">Set Board</button>
+        </div>
+        <div id="loading"> Loading... </div>
     </div>
     <pre id="letters"></pre>
-  </body>
-  <!-- TODO: put this in seperate js file? But I don't want it to wait for the js to load before downloading the wasm. -->
   <script>
-    const textEncoder = new TextEncoder();
-    const textDecoder = new TextDecoder();
-    let boardWidth = document.getElementById("board").width;
-    if (document.getElementById("board").height != boardWidth){
-        document.getElementById("board").height = boardWidth;
+    var wasmReady = false;
+    function startChessIfReady() {
+        // This get's called each time something loads. Wait until everything is loaded...
+        if (!wasmReady || window.chessJsReady === undefined || !chessImg.complete) return;
+
+        document.getElementById("loading").style.display = "none";
+        ctx.canvas.addEventListener("click", handleCanvasClick);
+        renderBoard();
     }
-    
-    const pieces = pieceArray();
-    let Engine;
-    let ticker = null;
+
+    var Engine;
+    var ticker = null;
     WebAssembly.instantiateStreaming(fetch("main.wasm"), {}).then(
         (result) => {
             console.log(result.instance.exports);
             Engine = result.instance.exports;
-            if (!chessImg.complete){
-                document.getElementById("letters").innerText += "WASM ready but pieces image not loaded yet.\n";
-            }
             Engine.restartGame();
-            renderBoard();
+            wasmReady = true;
+            window.startChessIfReady();
         }
     );
-    function tickGame() {
-        ticker = window.setTimeout(function() {
-            let result = Engine.playNextMove();
-            renderBoard();
-            let msg;
-            switch (result) {
-                case 0:
-                    tickGame();
-                    return;
-                case 1:
-                    // TODO: give zig a way to return the type of error and don't resuming the game in a broken state. 
-                    msg = "Engine reported error.";
-                    break;
-                case 2:
-                    msg = "White cannot move.";
-                    break;
-                case 3:
-                    msg = "Black cannot move.";
-                    break;
-                default:
-                    msg = "Invalid engine response: " + result;
-                    break;
-            }
-            document.getElementById("resume").disabled = true;
-            document.getElementById("pause").disabled = true;
-            document.getElementById("letters").innerText += "\n" + msg;
-        }, 300);
-    };
 
-    function handleRestart() {
-        Engine.restartGame();
-        renderBoard();
-        handlePause();
-    }
-
-    function handlePause(){
-        window.clearTimeout(ticker);
-        document.getElementById("resume").disabled = false;
-        document.getElementById("pause").disabled = true;
-    }
-
-    function handleResume(){
-        tickGame();
-        document.getElementById("resume").disabled = true;
-        document.getElementById("pause").disabled = false;
-    }
-
-    function handleSetFromFen(){
-        // TODO: validation
-        handlePause();
-        const fenBuffer = new Uint8Array(Engine.memory.buffer, Engine.fenString);
-        const fenString = document.getElementById("fen").value;
-        const length = textEncoder.encodeInto(fenString, fenBuffer).written;
-        const success = Engine.setFromFen(length);
-        if (!success) alert("Invalid FEN.");
-        renderBoard();
-    }
-
-    function getFenFromEngine() {
-        const length = Engine.getFen();
-        if (length == 0) {
-            alert("Engine Error.");
-            return;
-        }
-        const fenBuffer = new Uint8Array(Engine.memory.buffer, Engine.fenString, length);
-        const fenString = textDecoder.decode(fenBuffer);
-        return fenString;
-    }
-
+    const textEncoder = new TextEncoder();
+    const textDecoder = new TextDecoder();
     const chessImg = new Image();
-    chessImg.src = "assets/pieces.svg";  // TODO: wait for on load? 
+    chessImg.src = "assets/pieces.svg";
+    chessImg.onload = window.startChessIfReady;
     const ctx = document.getElementById("board").getContext("2d");
     var clicked = null;
 
-    ctx.canvas.addEventListener("click", (e) => {
-        let squareSize = ctx.canvas.getBoundingClientRect().width / 8;
-        let file = Math.floor(e.offsetX / squareSize);
-        let rank = 7 - Math.floor(e.offsetY / squareSize);
-        clicked = [file, rank];
-        renderBoard();
-    });
-
-    function drawPiece(file, rank, pieceByte) {
-        if (pieceByte == 0) return;
-
-        let squareSize = boardWidth / 8;
-        let imgSquareSize = chessImg.width / 6;
-        let offset = pieces[pieceByte];
-        if (offset === undefined) {
-            console.log("Engine gave invalid pieceByte (" + pieceByte + ")");
-            return;
+    {
+        let boardWidth = document.getElementById("board").width;
+        if (document.getElementById("board").height != boardWidth){
+            document.getElementById("board").height = boardWidth;
         }
-        let sX = offset * imgSquareSize;
-        let sY = 0;
-        if (pieceByte % 2 == 1){
-            sY = imgSquareSize;
-        }
-        ctx.drawImage(chessImg, sX, sY, imgSquareSize, imgSquareSize, file * squareSize, (7 - rank) * squareSize, squareSize, squareSize);
-    }
-
-    function renderBoard() {
-        // TODO: doing this all the time is unnessary because you don't care most of the time and it makes typing one in annoying. 
-        document.getElementById("fen").value = getFenFromEngine();
-
-        // TODO: If I really cared I could just render the diff instead of clearing the board
-        ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-        if (clicked != null) {
-            fillSquare(clicked[0], clicked[1], "yellow");
-            // The 'n' suffix makes it use BigInt instead of doubles so I can use it as a u64 bit flag. 
-            let targetSquaresFlag = Engine.getPossibleMoves(clicked[1]*8 + clicked[0]);
-            for (let i=0n;i<64n;i++) {
-                let flag = 1n << i;
-                if (targetSquaresFlag & flag) {
-                    fillSquare(Number(i % 8n), Number(i / 8n), "lightblue");
-                }
-            }
-        }
-        // TODO: why do I need to remake this slice every time?
-        let board = new Uint8Array(Engine.memory.buffer, Engine.theBoard);
-        for (let rank=0;rank<8;rank++){
-            for (let file=0;file<8;file++){
-                const p = board[rank*8 + file];
-                drawPiece(file, rank, p);
-            }
-        }
-    }
-
-    function fillSquare(file, rank, colour) {
-        let squareSize = boardWidth / 8;
-        ctx.fillStyle = colour;
-        ctx.fillRect(file*squareSize, (7-rank)*squareSize, squareSize, squareSize);
-    }
-
-    // TODO: these should be done in drawPiece with (b & flag)
-    function pieceArray() {
-        // These are the indexes of each type of piece in the pieces.svg image.
-        const piecesMap = {
-            5: 5,
-            6: 5,
-            9: 2,
-            10: 2,
-            13: 3,
-            14: 3,
-            17: 4,
-            18: 4,
-            21: 1,
-            22: 1,
-            25: 0,
-            26: 0,
-        };
-        const pieces = new Array(26);
-        for (let i = 0; i<27;i++) {
-            let c = piecesMap[i];
-            if (c != undefined) {
-                pieces[i] = c;
-            }
-        }
-        return pieces
     }
 
     // TODO: put this in build.zig
     // zig build-lib src/web.zig -target wasm32-freestanding -dynamic -rdynamic -O ReleaseFast && mv web.wasm web/main.wasm
   </script>
+  </body>
 </html>

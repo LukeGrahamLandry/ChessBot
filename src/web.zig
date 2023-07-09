@@ -5,24 +5,24 @@ const Board = @import("board.zig").Board;
 const moves = @import("moves.zig");
 
 var internalBoard = Board.initial();
-export var theBoard: [64] u8 = @bitCast(Board.initial().squares);
+export var boardView: [64] u8 = @bitCast(Board.initial().squares);
 var nextColour: Colour = .White;
-export var fenString: [80] u8 = undefined;
+export var fenView: [80] u8 = undefined;
 
 const alloc = std.heap.wasm_allocator;
 var notTheRng = std.rand.DefaultPrng.init(0);
 var rng = notTheRng.random();
 
-/// OUT: internalBoard, theBoard, nextColour
+/// OUT: internalBoard, boardView, nextColour
 export fn restartGame() void {
    internalBoard = Board.initial();
-   theBoard = @bitCast(internalBoard.squares);
+   boardView = @bitCast(internalBoard.squares);
    nextColour = .White;
 }
 
 /// Returns 0->continue, 1->error, 2->black wins, 3->white wins. 
-/// IN: internalBoard, theBoard, nextColour
-/// OUT: internalBoard, theBoard, nextColour
+/// IN: internalBoard, boardView, nextColour
+/// OUT: internalBoard, boardView, nextColour
 export fn playNextMove() i32 {
    const allMoves = moves.possibleMoves(&internalBoard, nextColour, alloc) catch return 1;
    defer alloc.free(allMoves);
@@ -34,7 +34,7 @@ export fn playNextMove() i32 {
    const move = allMoves[choice];
    internalBoard.play(move);
 
-   theBoard = @bitCast(internalBoard.squares);
+   boardView = @bitCast(internalBoard.squares);
    nextColour = nextColour.other();
    return 0;
 }
@@ -56,25 +56,25 @@ export fn getPossibleMoves(from: i32) u64 {
    return result;
 }
 
-/// IN: fenString
-/// OUT: internalBoard, theBoard, nextColour
+/// IN: fenView
+/// OUT: internalBoard, boardView, nextColour
 // TODO: this always sets next move to white but real fen contains that info. 
 export fn setFromFen(length: u32) bool {
-   const fenSlice = fenString[0..@as(usize, length)];
+   const fenSlice = fenView[0..@as(usize, length)];
    internalBoard = Board.fromFEN(fenSlice) catch return false;
-   theBoard = @bitCast(internalBoard.squares);
+   boardView = @bitCast(internalBoard.squares);
    nextColour = .White;
    return true;
 }
 
 // Returns the length of the string or 0 if error. 
 /// IN: internalBoard
-/// OUT: fenString
+/// OUT: fenView
 // TODO: unnecessary allocation just to memcpy. 
 export fn getFen() u32 {
    const fen = internalBoard.toFEN(alloc) catch return 0;
    defer alloc.free(fen);
-   assert(fen.len <= fenString.len);
-   @memcpy(fenString[0..fen.len], fen);
+   assert(fen.len <= fenView.len);
+   @memcpy(fenView[0..fen.len], fen);
    return fen.len;
 }
