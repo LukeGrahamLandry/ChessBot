@@ -8,7 +8,7 @@ pub fn main() !void {
     // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
     var ggame = try board.Board.fromFEN("R6R/3p4/1p4p1/4p3/2p4p/Q4p2/pp1p4/kBNNK1B1");
     const allMoves = try moves.possibleMoves(&ggame, .White, alloc);
-    std.debug.print("All your {s} are belong to us. \nThere are {} moves.\n", .{"codebase", allMoves.len});
+    std.debug.print("♔ ♚ All your {s} are belong to us. \nThere are {} moves.\n", .{"codebase", allMoves.len});
     // stdout is for the actual output of your application, for example if you
     // are implementing gzip, then only the compressed bytes should be sent to
     // stdout, not any debugging messages.
@@ -26,7 +26,8 @@ pub fn main() !void {
     const ss = try game.displayString(alloc);
     try stdout.print("{s}\n", .{ss});
     const delay = 500000000;
-    for (0..100) |i| {
+    const start = std.time.nanoTimestamp();
+    for (0..5) |i| {
         if (!try debugPlayOne(&game, i, .White, &rng, stdout)) {
             break;
         }
@@ -38,6 +39,8 @@ pub fn main() !void {
         try bw.flush();
         std.time.sleep(delay);
     }
+    try stdout.print("Ran 5 moves in {}ms.\n", .{@divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms))});
+    
 
 
     // Leaking a bunch of stuff, nobody cares. 
@@ -64,6 +67,11 @@ pub fn main() !void {
 
     try bw.flush(); // don't forget to flush!
 }
+///////
+// For profiling, run it then get the process id from activity monitor or whatever. 
+// sample <pid> -f zig-out/temp_profile_info.sample
+// filtercalltree zig-out/temp_profile_info.sample
+////////
 
 // TODO: how to refer to the writer interface 
 fn debugPlayOne(game: *board.Board, i: usize, colour: board.Colour, rng: *std.rand.Random, stdout: anytype) !bool {

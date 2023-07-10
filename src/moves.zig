@@ -9,6 +9,7 @@ const Kind = @import("board.zig").Kind;
 var notTheRng = std.rand.DefaultPrng.init(0);
 var rng = notTheRng.random();
 const MoveResult = error { GameOver, OutOfMemory };
+const isWasm = @import("builtin").target.isWasm();
 
 pub fn bestMoveDepth1(game: *const Board, me: Colour, alloc: std.mem.Allocator) MoveResult!Move {
     const moves = try possibleMoves(game, me, alloc);
@@ -43,7 +44,7 @@ const MemoMap = std.AutoHashMap(Board, struct {
 
 pub fn bestMove(game: *const Board, me: Colour, alloc: std.mem.Allocator) MoveResult!Move {
     // const start = std.time.nanoTimestamp();
-    const moves = try possibleMoves(game, me, alloc);
+    const moves = try sortedMoves(game, me, alloc);
     defer alloc.free(moves);
     if (moves.len == 0) return error.GameOver;
     var bestMoves = std.ArrayList(Move).init(alloc);
@@ -74,11 +75,12 @@ pub fn bestMove(game: *const Board, me: Colour, alloc: std.mem.Allocator) MoveRe
     
     assert(bestMoves.items.len > 0);
     const choice = rng.uintLessThanBiased(usize,  bestMoves.items.len);
-    // std.debug.print("Checked {} end states.", .{count});
+    if (!isWasm) std.debug.print("Checked {} end states.\n", .{count});
     return bestMoves.items[choice];
 }
 
-pub fn walkEval(game: *const Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, count: *u64, memo: *MemoMap) MoveResult!i32 {
+// https://en.wikipedia.org/wiki/Alpha%E2%80%93beta_pruning
+fn walkEval(game: *const Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, count: *u64, memo: *MemoMap) MoveResult!i32 {
     // If the cache had the same or more depth than us, trust it. Otherwise, recalculate. 
     // Using this reduces the calls to simpleEval by a lot but makes the time longer cause hashmaps slow I guess. even a big assumeCapacity doesnt help enough. 
     // I didnt try keeping it between moves tho. 
@@ -91,7 +93,8 @@ pub fn walkEval(game: *const Board, me: Colour, remaining: u32, bestWhiteEvalIn:
     var bestWhiteEval = bestWhiteEvalIn;
     var bestBlackEval = bestBlackEvalIn;
 
-    const moves = try possibleMoves(game, me, alloc);
+    // Since the last layer doesn't use alpha/beta, don't bother sorting. 
+    const moves = if (remaining == 0) try possibleMoves(game, me, alloc) else try sortedMoves(game, me, alloc);
     defer alloc.free(moves);
     if (moves.len == 0) return error.GameOver;
     
@@ -100,7 +103,7 @@ pub fn walkEval(game: *const Board, me: Colour, remaining: u32, bestWhiteEvalIn:
         var checkBoard = game.*;
         checkBoard.play(move);
         const value = if (remaining == 0) e: {
-            count.* += 1;
+            if (!isWasm) count.* += 1;
             break :e if (me == .White) simpleEval(&checkBoard) else -simpleEval(&checkBoard);
         } else r: {
             const v = walkEval(&checkBoard, me.other(), remaining - 1, bestWhiteEval, bestBlackEval, alloc, count, memo) catch |err| {
@@ -143,7 +146,7 @@ pub fn walkEval(game: *const Board, me: Colour, remaining: u32, bestWhiteEvalIn:
 
 }
 /// Positive means white is winning. 
-fn simpleEval(game: *const Board) i32 {
+pub fn simpleEval(game: *const Board) i32 {
     var result: i32 = 0;
     for (game.squares) |piece| {
         const value: i32 = switch (piece.kind) {
@@ -206,8 +209,29 @@ fn toIndex(file: usize, rank: usize) u6  {
     return @truncate(rank*8 + file);
 }
 
-// TODO: can I make this like an iterator struct? I kinda don't want to inline it into one big super function but storing them all seems dumb
-// TODO: for pruning, want to sort good moves first (like captures) so maybe that does mean need to put all in an array. 
+const MoveSortContext = struct { 
+    me: Colour,
+    board: Board,
+};
+
+// This is used as a lessThan function but is flipped because std sorts in ascending order. 
+fn bestMovesFirst(ctx: MoveSortContext, a: Move, b: Move) bool {
+    switch (ctx.me) {
+        .White => return simpleEval(&ctx.board.copyPlay(a)) > simpleEval(&ctx.board.copyPlay(b)),
+        .Black => return simpleEval(&ctx.board.copyPlay(a)) < simpleEval(&ctx.board.copyPlay(b)),
+        .Empty => unreachable,
+    }
+}
+
+// The alpha-beta pruning saves a lot more time if the best moves are the first ones it tries. 
+// Sort by material eval with the best moves first. 
+pub fn sortedMoves(board: *const Board, me: Colour, alloc: std.mem.Allocator) ![] Move {
+    var moves = try possibleMoves(board, me, alloc);
+    const ctx: MoveSortContext = .{ .me=me, .board=board.* };
+    std.sort.insertion(Move, moves, ctx, bestMovesFirst);
+    return moves;
+}
+
 // TODO: castling, en-passant, check
 pub fn possibleMoves(board: *const Board, me: Colour, alloc: std.mem.Allocator) ![] Move {
     assert(me != .Empty);
@@ -295,22 +319,24 @@ fn pawnMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: us
 fn trySlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, checkFile: usize, checkRank: usize, piece: Piece) !bool {
     const check = board.get(checkFile, checkRank);
     if (check.colour != piece.colour) {
-        if (check.empty()){
-            try moves.append(Move.irf(i, checkFile, checkRank));
-        } else {
-            // this is a capture, we like that, put it first. 
-            var toPush = Move.irf(i, checkFile, checkRank);
-            for (moves.items, 0..) |move, index| {
-                moves.items[index] = toPush;
-                toPush = move;
-                if (board.squares[toPush.to].empty()) {
-                    break;
-                }
-            } 
+        // TODO: compare this to just sorting at the end. 
+        // if (check.empty()){
+        //     try moves.append(Move.irf(i, checkFile, checkRank));
+        // } else {
+        //     // this is a capture, we like that, put it first. 
+        //     var toPush = Move.irf(i, checkFile, checkRank);
+        //     for (moves.items, 0..) |move, index| {
+        //         moves.items[index] = toPush;
+        //         toPush = move;
+        //         if (board.squares[toPush.to].empty()) {
+        //             break;
+        //         }
+        //     } 
 
-            try moves.append(toPush);
-        }
-        
+        //     try moves.append(toPush);
+        // }
+
+        try moves.append(Move.irf(i, checkFile, checkRank));
         return !check.empty();
     } else return true;
 }

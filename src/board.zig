@@ -56,6 +56,23 @@ pub const Piece = packed struct {
         };
     }
 
+    pub fn toUnicode(self: Piece) u21 {
+        const letter = @as(u21, switch (self.kind) {
+            .Pawn => '♙',
+            .Bishop => '♗',
+            .Knight => '♘',
+            .Rook => '♖',
+            .King => '♔',
+            .Queen => '♕',
+            .Empty => return ' ',
+        });
+        return switch (self.colour) {
+            .White => letter,
+            .Black => letter + 6,
+            .Empty => unreachable,
+        };
+    }
+
     pub fn empty(self: Piece) bool {
         return self.kind == .Empty;
     }
@@ -98,6 +115,12 @@ pub const Board = struct {
                 self.squares[move.from] = .{ .colour = .Empty, .kind = .Empty };
             }
         }
+    }
+
+    pub fn copyPlay(self: *const Board, move: Move) Board {
+        var board = self.*;
+        board.play(move);
+        return board;
     }
 
     // TODO: this rejects the extra data at the end because I can't store it yet. 
@@ -158,24 +181,24 @@ pub const Board = struct {
     }
 
     // Caller owns the returned string. 
-    pub fn displayString(self: *const Board, allocator: std.mem.Allocator) std.mem.Allocator.Error![] u8 {
+    pub fn displayString(self: *const Board, allocator: std.mem.Allocator) ![] u8 {
         // Pre-allocate enough space for the string so appendAssumeCapacity is safe to use. 
         // 64 squares, a pipe before every square, a pipe before each line, and 8 line breaks. 
-        var letters = try std.ArrayList(u8).initCapacity(allocator, 64*2 + 8 + 8);
+        var letters = try std.ArrayList(u8).initCapacity(allocator, (64*3) + 64 + 8 + 8);
         
         for (0..8) |rank| {
             letters.appendAssumeCapacity('|');
             for (0..8) |file| {
-                letters.appendAssumeCapacity(self.get(file, 7 - rank).toChar());
+                const char = self.get(file, 7 - rank).toUnicode();
+                const remaining = letters.allocatedSlice()[letters.items.len..letters.capacity];
+                const count = try std.unicode.utf8Encode(char, remaining);
+                letters.items.len += count;
                 letters.appendAssumeCapacity('|');
             }
             letters.appendAssumeCapacity('\n');
         }
 
-        // Since we're returning everything we allocated, don't need to deinit the list. 
-        // Using toOwnedSlice would be fine but it offends me that it's technically allowed to reallocate. 
-        assert(letters.items.len == letters.capacity);
-        return letters.allocatedSlice();
+        return try letters.toOwnedSlice();
     }
 };
 

@@ -95,3 +95,8 @@ export fn getFen() u32 {
    @memcpy(fenView[0..fen.len], fen);
    return fen.len;
 }
+
+/// IN: internalBoard
+export fn getMaterialEval() i32 {
+   return moves.simpleEval(&internalBoard);
+}

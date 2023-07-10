@@ -96,6 +96,7 @@ function drawPiece(file, rank, pieceByte) {
 function renderBoard() {
     // TODO: doing this all the time is unnessary because you don't care most of the time and it makes typing one in annoying. 
     document.getElementById("fen").value = getFenFromEngine();
+    document.getElementById("mEval").innerText = Engine.getMaterialEval();
 
     // TODO: If I really cared I could just render the diff instead of clearing the board
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
