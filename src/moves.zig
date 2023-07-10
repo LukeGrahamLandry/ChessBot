@@ -15,7 +15,7 @@ pub fn bestMoveDepth1(game: *const Board, me: Colour, alloc: std.mem.Allocator) 
     const moves = try possibleMoves(game, me, alloc);
     defer alloc.free(moves);
     if (moves.len == 0) return error.GameOver;
-    var bestMoves = std.ArrayList(Move).init(alloc);
+    var bestMoves = try std.ArrayList(Move).initCapacity(alloc, 50);
     defer bestMoves.deinit();
     
     var bestVal: i32 = -1000000;
@@ -42,27 +42,32 @@ const MemoMap = std.AutoHashMap(Board, struct {
     remaining: u64
 });
 
-pub fn bestMove(game: *const Board, me: Colour, alloc: std.mem.Allocator) MoveResult!Move {
-    // const start = std.time.nanoTimestamp();
+// This gets reset after each whole decision is done.
+var upperArena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+// This gets reset after checking each top level move. 
+var movesArena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+
+pub fn bestMove(game: *const Board, me: Colour, unusedAlloc: std.mem.Allocator) MoveResult!Move {
+    _ = unusedAlloc;
+    var alloc = upperArena.allocator();
+    defer _ = upperArena.reset(.retain_capacity);
+    
     const moves = try sortedMoves(game, me, alloc);
     defer alloc.free(moves);
     if (moves.len == 0) return error.GameOver;
-    var bestMoves = std.ArrayList(Move).init(alloc);
+    var bestMoves = try std.ArrayList(Move).initCapacity(alloc, 50);
     defer bestMoves.deinit();
 
     var memo = MemoMap.init(alloc);
+    try memo.ensureTotalCapacity(600000);
     defer memo.deinit();
-
-    var arena = std.heap.ArenaAllocator.init(alloc);
-    defer arena.deinit();
-
     
     var bestVal: i32 = -1000000;
     var count: u64 = 0;
     for (moves) |move| {
         var checkBoard = game.*;
         checkBoard.play(move);
-        const value = -try walkEval(&checkBoard, me.other(), 4, -999999, -999999, arena.allocator(), &count, &memo);  // TODO: need to catch
+        const value = -try walkEval(&checkBoard, me.other(), 4, -999999, -999999, movesArena.allocator(), &count, &memo);  // TODO: need to catch
         if (value > bestVal) {
             bestVal = value;
             bestMoves.clearRetainingCapacity();
@@ -70,7 +75,7 @@ pub fn bestMove(game: *const Board, me: Colour, alloc: std.mem.Allocator) MoveRe
         } else if (value == bestVal) {
             try bestMoves.append(move);
         }
-        _ = arena.reset(.retain_capacity);
+        _ = movesArena.reset(.retain_capacity);
     }
     
     assert(bestMoves.items.len > 0);
@@ -81,14 +86,13 @@ pub fn bestMove(game: *const Board, me: Colour, alloc: std.mem.Allocator) MoveRe
 
 // https://en.wikipedia.org/wiki/Alpha%E2%80%93beta_pruning
 fn walkEval(game: *const Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, count: *u64, memo: *MemoMap) MoveResult!i32 {
-    // If the cache had the same or more depth than us, trust it. Otherwise, recalculate. 
-    // Using this reduces the calls to simpleEval by a lot but makes the time longer cause hashmaps slow I guess. even a big assumeCapacity doesnt help enough. 
-    // I didnt try keeping it between moves tho. 
-    // if (memo.get(game.*)) |cached| {
-    //     if (cached.remaining >= remaining){
-    //         return if (me == .White) cached.eval else -cached.eval;
-    //     }
-    // }
+    // After alpha-beta, bigger starting cap, and not reallocating each move, this does make it faster. 
+    // Makes Black move 4 end states go 16,000,000 -> 1,000,000
+    if (memo.get(game.*)) |cached| {
+        if (cached.remaining >= remaining){
+            return if (me == .White) cached.eval else -cached.eval;
+        }
+    }
 
     var bestWhiteEval = bestWhiteEvalIn;
     var bestBlackEval = bestBlackEvalIn;
@@ -138,10 +142,10 @@ fn walkEval(game: *const Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32
         }
     }
 
-    // try memo.put(game.*, .{
-    //     .eval = if (me == .White) bestVal else -bestVal,
-    //     .remaining = remaining,
-    // });
+    try memo.put(game.*, .{
+        .eval = if (me == .White) bestVal else -bestVal,
+        .remaining = remaining,
+    });
     return bestVal;
 
 }
@@ -227,15 +231,17 @@ fn bestMovesFirst(ctx: MoveSortContext, a: Move, b: Move) bool {
 // Sort by material eval with the best moves first. 
 pub fn sortedMoves(board: *const Board, me: Colour, alloc: std.mem.Allocator) ![] Move {
     var moves = try possibleMoves(board, me, alloc);
-    const ctx: MoveSortContext = .{ .me=me, .board=board.* };
-    std.sort.insertion(Move, moves, ctx, bestMovesFirst);
+    // This was much slower than the simple prefer captures in trySlide. 
+    // TODO: maybe check again if I improve that eval function or do the iterative deepening thing then remove this. 
+    // const ctx: MoveSortContext = .{ .me=me, .board=board.* };
+    // std.sort.insertion(Move, moves, ctx, bestMovesFirst);
     return moves;
 }
 
 // TODO: castling, en-passant, check
 pub fn possibleMoves(board: *const Board, me: Colour, alloc: std.mem.Allocator) ![] Move {
     assert(me != .Empty);
-    var moves = std.ArrayList(Move).init(alloc);
+    var moves = try std.ArrayList(Move).initCapacity(alloc, 50);
     for (board.squares, 0..) |piece, i| {
         if (piece.colour != me) continue;
         
@@ -254,6 +260,8 @@ pub fn possibleMoves(board: *const Board, me: Colour, alloc: std.mem.Allocator) 
             .Empty => unreachable,
         }
     }
+
+    // TODO: make sure this isn't reallocating 
     return try moves.toOwnedSlice();
 }
 
@@ -319,24 +327,23 @@ fn pawnMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: us
 fn trySlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, checkFile: usize, checkRank: usize, piece: Piece) !bool {
     const check = board.get(checkFile, checkRank);
     if (check.colour != piece.colour) {
-        // TODO: compare this to just sorting at the end. 
-        // if (check.empty()){
-        //     try moves.append(Move.irf(i, checkFile, checkRank));
-        // } else {
-        //     // this is a capture, we like that, put it first. 
-        //     var toPush = Move.irf(i, checkFile, checkRank);
-        //     for (moves.items, 0..) |move, index| {
-        //         moves.items[index] = toPush;
-        //         toPush = move;
-        //         if (board.squares[toPush.to].empty()) {
-        //             break;
-        //         }
-        //     } 
+        // This was much faster than just doing them in order and sorting the list by material eval at the end. 
+        if (check.empty()){
+            try moves.append(Move.irf(i, checkFile, checkRank));
+        } else {
+            // this is a capture, we like that, put it first. // TODO: same for pawn promotions
+            var toPush = Move.irf(i, checkFile, checkRank);
+            for (moves.items, 0..) |move, index| {
+                moves.items[index] = toPush;
+                toPush = move;
+                if (board.squares[toPush.to].empty()) {
+                    break;
+                }
+            } 
 
-        //     try moves.append(toPush);
-        // }
+            try moves.append(toPush);
+        }
 
-        try moves.append(Move.irf(i, checkFile, checkRank));
         return !check.empty();
     } else return true;
 }

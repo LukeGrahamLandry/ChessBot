@@ -25,21 +25,18 @@ pub fn main() !void {
     var rng = notTheRng.random();
     const ss = try game.displayString(alloc);
     try stdout.print("{s}\n", .{ss});
-    const delay = 500000000;
     const start = std.time.nanoTimestamp();
     for (0..5) |i| {
         if (!try debugPlayOne(&game, i, .White, &rng, stdout)) {
             break;
         }
         try bw.flush();
-        std.time.sleep(delay);
         if (!try debugPlayOne(&game, i, .Black, &rng, stdout)) {
             break;
         }
         try bw.flush();
-        std.time.sleep(delay);
     }
-    try stdout.print("Ran 5 moves in {}ms.\n", .{@divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms))});
+    try stdout.print("Finished in {}ms.\n", .{@divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms))});
     
 
 
@@ -67,17 +64,19 @@ pub fn main() !void {
 
     try bw.flush(); // don't forget to flush!
 }
+
 ///////
+/// TODO: formalize a script for comparing different versions.  
 // For profiling, run it then get the process id from activity monitor or whatever. 
 // sample <pid> -f zig-out/temp_profile_info.sample
 // filtercalltree zig-out/temp_profile_info.sample
-////////
+///////
 
 // TODO: how to refer to the writer interface 
 fn debugPlayOne(game: *board.Board, i: usize, colour: board.Colour, rng: *std.rand.Random, stdout: anytype) !bool {
     _ = rng;
-    const allMoves = try moves.possibleMoves(game, colour, alloc);
     try stdout.print("_________________\n", .{});
+    const allMoves = try moves.possibleMoves(game, colour, alloc);
     try stdout.print("{} has {} legal moves. \n", .{colour, allMoves.len});
     defer alloc.free(allMoves);
     if (allMoves.len == 0) {
