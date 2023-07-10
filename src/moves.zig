@@ -42,7 +42,7 @@ const MemoMap = std.AutoHashMap(Board, struct {
 });
 
 pub fn bestMove(game: *const Board, me: Colour, alloc: std.mem.Allocator) MoveResult!Move {
-    const start = std.time.nanoTimestamp();
+    // const start = std.time.nanoTimestamp();
     const moves = try possibleMoves(game, me, alloc);
     defer alloc.free(moves);
     if (moves.len == 0) return error.GameOver;
@@ -61,7 +61,7 @@ pub fn bestMove(game: *const Board, me: Colour, alloc: std.mem.Allocator) MoveRe
     for (moves) |move| {
         var checkBoard = game.*;
         checkBoard.play(move);
-        const value = -try walkEval(&checkBoard, me.other(), 3, arena.allocator(), &count, &memo);  // TODO: need to catch
+        const value = -try walkEval(&checkBoard, me.other(), 4, -999999, -999999, arena.allocator(), &count, &memo);  // TODO: need to catch
         if (value > bestVal) {
             bestVal = value;
             bestMoves.clearRetainingCapacity();
@@ -74,11 +74,11 @@ pub fn bestMove(game: *const Board, me: Colour, alloc: std.mem.Allocator) MoveRe
     
     assert(bestMoves.items.len > 0);
     const choice = rng.uintLessThanBiased(usize,  bestMoves.items.len);
-    std.debug.print("Checked {} end states. Found move in {}ms", .{count, @divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms))});
+    // std.debug.print("Checked {} end states.", .{count});
     return bestMoves.items[choice];
 }
 
-pub fn walkEval(game: *const Board, me: Colour, remaining: u32, alloc: std.mem.Allocator, count: *u64, memo: *MemoMap) MoveResult!i32 {
+pub fn walkEval(game: *const Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, count: *u64, memo: *MemoMap) MoveResult!i32 {
     // If the cache had the same or more depth than us, trust it. Otherwise, recalculate. 
     // Using this reduces the calls to simpleEval by a lot but makes the time longer cause hashmaps slow I guess. even a big assumeCapacity doesnt help enough. 
     // I didnt try keeping it between moves tho. 
@@ -87,6 +87,9 @@ pub fn walkEval(game: *const Board, me: Colour, remaining: u32, alloc: std.mem.A
     //         return if (me == .White) cached.eval else -cached.eval;
     //     }
     // }
+
+    var bestWhiteEval = bestWhiteEvalIn;
+    var bestBlackEval = bestBlackEvalIn;
 
     const moves = try possibleMoves(game, me, alloc);
     defer alloc.free(moves);
@@ -100,7 +103,7 @@ pub fn walkEval(game: *const Board, me: Colour, remaining: u32, alloc: std.mem.A
             count.* += 1;
             break :e if (me == .White) simpleEval(&checkBoard) else -simpleEval(&checkBoard);
         } else r: {
-            const v = walkEval(&checkBoard, me.other(), remaining - 1, alloc, count, memo) catch |err| {
+            const v = walkEval(&checkBoard, me.other(), remaining - 1, bestWhiteEval, bestBlackEval, alloc, count, memo) catch |err| {
                 switch (err) {
                     error.OutOfMemory => return err,
                     error.GameOver => break :r 1000000,
@@ -111,6 +114,24 @@ pub fn walkEval(game: *const Board, me: Colour, remaining: u32, alloc: std.mem.A
 
         if (value > bestVal) {
             bestVal = value;
+
+            if (remaining > 0){
+                switch (me) {
+                    .White => {
+                        bestWhiteEval = @max(bestWhiteEval, bestVal);
+                        if (bestVal >= -bestBlackEval) {
+                            break;
+                        }
+                    },
+                    .Black => {
+                        bestBlackEval = @max(bestBlackEval, bestVal);
+                        if (bestVal >= -bestWhiteEval) {
+                            break;
+                        }
+                    },
+                    .Empty => unreachable,
+                }
+            }
         }
     }
 
@@ -274,7 +295,22 @@ fn pawnMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: us
 fn trySlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, checkFile: usize, checkRank: usize, piece: Piece) !bool {
     const check = board.get(checkFile, checkRank);
     if (check.colour != piece.colour) {
-        try moves.append(Move.irf(i, checkFile, checkRank));
+        if (check.empty()){
+            try moves.append(Move.irf(i, checkFile, checkRank));
+        } else {
+            // this is a capture, we like that, put it first. 
+            var toPush = Move.irf(i, checkFile, checkRank);
+            for (moves.items, 0..) |move, index| {
+                moves.items[index] = toPush;
+                toPush = move;
+                if (board.squares[toPush.to].empty()) {
+                    break;
+                }
+            } 
+
+            try moves.append(toPush);
+        }
+        
         return !check.empty();
     } else return true;
 }

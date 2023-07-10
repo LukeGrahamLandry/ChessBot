@@ -76,9 +76,13 @@ fn debugPlayOne(game: *board.Board, i: usize, colour: board.Colour, rng: *std.ra
         return false;
     }
 
+
+    const start = std.time.nanoTimestamp();
     const move = try moves.bestMove(game, colour, alloc);
+    try stdout.print("Found move in {}ms\n", .{@divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms))});
     try stdout.print("{} move {} is {}\n", .{colour, i, move});
     game.play(move);
+
 
     const ss = try game.toFEN(alloc);
     defer alloc.free(ss);
