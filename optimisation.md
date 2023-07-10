@@ -54,3 +54,7 @@ pub fn simpleEval(game: *const Board) i32 {
 - I'm assuming it just really confused the branch prediction.  
 - Sadly I found this by accident when factoring out the piece value into its own function to use for ordering moves. 
     - (ordering moves by value of captured piece instead of just capture or not didn't help but I only tried it on the first 10 halfmoves so should revisit). 
+
+## Hashing
+
+Fnv1a_64 is ~2x as fast as getAutoHashFn (Wyhash)

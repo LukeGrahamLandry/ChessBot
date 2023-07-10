@@ -1,6 +1,9 @@
 function tickGame() {
     ticker = window.setTimeout(function() {
-        let result = Engine.playNextMove();
+        const start = performance.now();
+        const result = Engine.playNextMove();
+        const time = Math.round(performance.now() - start);
+        console.log("Found move in " + time + "ms.");
         renderBoard();
         let msg;
         switch (result) {

@@ -20,8 +20,7 @@ pub fn bestMoveDepth1(game: *const Board, me: Colour, alloc: std.mem.Allocator) 
     
     var bestVal: i32 = -1000000;
     for (moves) |move| {
-        var checkBoard = game.*;
-        checkBoard.play(move);
+        var checkBoard = game.copyPlay(move);
         const value = if (me == .White) simpleEval(&checkBoard) else -simpleEval(&checkBoard);
         if (value > bestVal) {
             bestVal = value;
@@ -37,10 +36,37 @@ pub fn bestMoveDepth1(game: *const Board, me: Colour, alloc: std.mem.Allocator) 
     return bestMoves.items[choice];
 }
 
-const MemoMap = std.AutoHashMap(Board, struct {
+const MemoMap = std.HashMap(Board, struct {
     eval: i32,
     remaining: u64
-});
+}, struct {
+    // TODO: script that just runs a bunch of games with each so I can easily make sure I'm still using the best as I change what's going on. figure out how statistics works!
+    // TODO: make sure this benchmarking is still true for wasm. can probably just run ^ on wasmtime
+    // TODO: check 32 bit ones as well.
+    // TODO: https://www.chessprogramming.org/Zobrist_Hashing
+    pub fn hash(a: @This(), key: Board) u64 {
+        _ = a;
+        // TODO: this is including 16 bytes of padding for js. might be worth it to re-encode when sending to js to make this hashing faster but looks like CityHash64 does the same thing for 33 to 64 bytes.
+        const data = std.mem.asBytes(&key.squares);  
+        // return std.hash.Fnv1a_64.hash(data);  // ~2.11x
+        // return std.hash.XxHash64.hash(0, data);  // ~2.28x
+        // return std.hash.Murmur2_64.hash(data);  // ~2.44x
+        return std.hash.CityHash64.hash(data);  // ~2.48x
+        
+        // const func = comptime std.hash_map.getAutoHashFn(Board, @This());  // 1x
+        // return func(a, key);
+    }
+    
+    pub fn eql(_: @This(), a: Board, b: Board) bool {
+        return std.mem.eql(u8, &@as([64] u8, @bitCast(a.squares)), &@as([64] u8,  @bitCast(b.squares)));
+    }
+}, FILL_PERCENT);  
+
+const MAX_DEPTH = 4;
+// TODO: this wont be exact because capacity goes to the next highest power of two. 
+const MEMO_MAX_MB = 20;  // TODO: make this configurable 
+const MEMO_CAPACITY = (MEMO_MAX_MB * 1024 * 1024) / @sizeOf(MemoMap.KV) * 100 / FILL_PERCENT;
+const FILL_PERCENT = 60;  // TODO: script to test different values 
 
 // This gets reset after each whole decision is done.
 var upperArena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -59,15 +85,14 @@ pub fn bestMove(game: *const Board, me: Colour, unusedAlloc: std.mem.Allocator) 
     defer bestMoves.deinit();
 
     var memo = MemoMap.init(alloc);
-    try memo.ensureTotalCapacity(600000);
+    try memo.ensureTotalCapacity(MEMO_CAPACITY);
     defer memo.deinit();
     
     var bestVal: i32 = -1000000;
     var count: u64 = 0;
     for (moves) |move| {
-        var checkBoard = game.*;
-        checkBoard.play(move);
-        const value = -try walkEval(&checkBoard, me.other(), 4, -999999, -999999, movesArena.allocator(), &count, &memo);  // TODO: need to catch
+        var checkBoard = game.copyPlay(move);
+        const value = -try walkEval(&checkBoard, me.other(), MAX_DEPTH, -999999, -999999, movesArena.allocator(), &count, &memo);  // TODO: need to catch
         if (value > bestVal) {
             bestVal = value;
             bestMoves.clearRetainingCapacity();
@@ -80,12 +105,13 @@ pub fn bestMove(game: *const Board, me: Colour, unusedAlloc: std.mem.Allocator) 
     
     assert(bestMoves.items.len > 0);
     const choice = rng.uintLessThanBiased(usize,  bestMoves.items.len);
-    if (!isWasm) std.debug.print("Checked {} end states.\n", .{count});
+    if (!isWasm) std.debug.print("Checked {} end states. {} boards in memo table.\n", .{count, memo.count()});
     return bestMoves.items[choice];
 }
 
 // https://en.wikipedia.org/wiki/Alpha%E2%80%93beta_pruning
 // TODO: I don't trust that I'm doing this right, need to test it against not pruning and make sure it likes the same moves (make sure to disable random). 
+// TODO: when hit depth, keep going but only look at captures
 fn walkEval(game: *const Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, count: *u64, memo: *MemoMap) MoveResult!i32 {
     // After alpha-beta, bigger starting cap, and not reallocating each move, this does make it faster. 
     // Makes Black move 4 end states go 16,000,000 -> 1,000,000
@@ -93,6 +119,7 @@ fn walkEval(game: *const Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32
         if (cached.remaining >= remaining){
             return if (me == .White) cached.eval else -cached.eval;
         }
+        // TODO: should save the best move from that position at the old low depth and use it as the start for the search 
     }
 
     var bestWhiteEval = bestWhiteEvalIn;
@@ -105,8 +132,7 @@ fn walkEval(game: *const Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32
     
     var bestVal: i32 = -1000000;
     for (moves) |move| {
-        var checkBoard = game.*;
-        checkBoard.play(move);
+        var checkBoard = game.copyPlay(move);
         const value = if (remaining == 0) e: {
             if (!isWasm) count.* += 1;
             break :e if (me == .White) simpleEval(&checkBoard) else -simpleEval(&checkBoard);
@@ -143,10 +169,17 @@ fn walkEval(game: *const Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32
         }
     }
 
-    try memo.put(game.*, .{
-        .eval = if (me == .White) bestVal else -bestVal,
-        .remaining = remaining,
-    });
+    // TODO: I want to not reset the table between moves but then when it runs out of space it would be full of positions we don't need anymore.
+    //       need to get rid of old ones somehow. maybe my own hash map that just overwrites on collissions? 
+    // Don't need to check `and memo.capacity() > MEMO_CAPACITY` because we allocate enough capacity up front.
+    const memoFull = memo.unmanaged.available == 0;
+    if (!memoFull) {
+        try memo.put(game.*, .{
+            .eval = if (me == .White) bestVal else -bestVal,
+            .remaining = remaining,
+        });
+    }
+    
     return bestVal;
 
 }
@@ -209,13 +242,13 @@ const MoveSortContext = struct {
 };
 
 // This is used as a lessThan function but is flipped because std sorts in ascending order. 
-fn bestMovesFirst(ctx: MoveSortContext, a: Move, b: Move) bool {
-    switch (ctx.me) {
-        .White => return simpleEval(&ctx.board.copyPlay(a)) > simpleEval(&ctx.board.copyPlay(b)),
-        .Black => return simpleEval(&ctx.board.copyPlay(a)) < simpleEval(&ctx.board.copyPlay(b)),
-        .Empty => unreachable,
-    }
-}
+// fn bestMovesFirst(ctx: MoveSortContext, a: Move, b: Move) bool {
+//     switch (ctx.me) {
+//         .White => return simpleEval(&ctx.board.copyPlay(a)) > simpleEval(&ctx.board.copyPlay(b)),
+//         .Black => return simpleEval(&ctx.board.copyPlay(a)) < simpleEval(&ctx.board.copyPlay(b)),
+//         .Empty => unreachable,
+//     }
+// }
 
 // The alpha-beta pruning saves a lot more time if the best moves are the first ones it tries. 
 // Sort by material eval with the best moves first. 
@@ -324,6 +357,7 @@ fn trySlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, checkFil
             // this is a capture, we like that, put it first. 
             // TODO: same for pawn promotions
             // Tried putting better takes first but it was slower (to calculate I assume).
+            // TODO: try again with more depth and when I'm more confident that I'm pruning correctly. 
             var toPush = Move.irf(i, checkFile, checkRank);
             for (moves.items, 0..) |move, index| {
                 moves.items[index] = toPush;

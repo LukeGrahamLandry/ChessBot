@@ -132,6 +132,7 @@ pub const Board = struct {
         }
     }
 
+    // TODO: have an unplay instead of copying all the time. memcpy(64) is cheap but then surely swapping bytes is basically free. play can return the extra info you need 
     pub fn copyPlay(self: *const Board, move: Move) Board {
         var board = self.*;
         board.play(move);
