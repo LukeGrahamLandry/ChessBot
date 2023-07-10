@@ -32,18 +32,14 @@
 
     var Engine;
     var ticker = null;
-    WebAssembly.instantiateStreaming(fetch("main.wasm"), {}).then(
-        (result) => {
-            console.log(result.instance.exports);
-            Engine = result.instance.exports;
-            Engine.restartGame();
-            wasmReady = true;
-            window.startChessIfReady();
-        }
-    );
+    function handleWasmLoaded(wasm) {
+        Engine = wasm.instance.exports;
+        Engine.restartGame();
+        wasmReady = true;
+        window.startChessIfReady();
+    }
+    WebAssembly.instantiateStreaming(fetch("main.wasm"), {}).then(handleWasmLoaded);
 
-    const textEncoder = new TextEncoder();
-    const textDecoder = new TextDecoder();
     const chessImg = new Image();
     chessImg.src = "assets/pieces.svg";
     chessImg.onload = window.startChessIfReady;
@@ -59,8 +55,6 @@
 
     // TODO: put this in build.zig
     // zig build-lib src/web.zig -target wasm32-freestanding -dynamic -rdynamic -O ReleaseFast && mv web.wasm web/main.wasm
-    // benchmark then consider ReleaseSmall cause its ~1/14 the size. 
-    // could build both, default to small and have a button to download the better one. 
   </script>
   </body>
 </html>

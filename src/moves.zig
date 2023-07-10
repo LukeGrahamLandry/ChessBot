@@ -8,10 +8,10 @@ const Kind = @import("board.zig").Kind;
 
 var notTheRng = std.rand.DefaultPrng.init(0);
 var rng = notTheRng.random();
-const MoveResult = error { GameOver, OutOfMemory };
+const MoveErr = error { GameOver, OutOfMemory };
 const isWasm = @import("builtin").target.isWasm();
 
-pub fn bestMoveDepth1(game: *const Board, me: Colour, alloc: std.mem.Allocator) MoveResult!Move {
+pub fn bestMoveDepth1(game: *const Board, me: Colour, alloc: std.mem.Allocator) MoveErr!Move {
     const moves = try possibleMoves(game, me, alloc);
     defer alloc.free(moves);
     if (moves.len == 0) return error.GameOver;
@@ -40,25 +40,14 @@ const MemoMap = std.HashMap(Board, struct {
     eval: i32,
     remaining: u64
 }, struct {
-    // TODO: script that just runs a bunch of games with each so I can easily make sure I'm still using the best as I change what's going on. figure out how statistics works!
-    // TODO: make sure this benchmarking is still true for wasm. can probably just run ^ on wasmtime
-    // TODO: check 32 bit ones as well.
-    // TODO: https://www.chessprogramming.org/Zobrist_Hashing
-    pub fn hash(a: @This(), key: Board) u64 {
-        _ = a;
-        // TODO: this is including 16 bytes of padding for js. might be worth it to re-encode when sending to js to make this hashing faster but looks like CityHash64 does the same thing for 33 to 64 bytes.
+    // TODO: auto test different algos, don't include padding bytes, try Zobrist. 
+    pub fn hash(_: @This(), key: Board) u64 {
         const data = std.mem.asBytes(&key.squares);  
-        // return std.hash.Fnv1a_64.hash(data);  // ~2.11x
-        // return std.hash.XxHash64.hash(0, data);  // ~2.28x
-        // return std.hash.Murmur2_64.hash(data);  // ~2.44x
-        return std.hash.CityHash64.hash(data);  // ~2.48x
-        
-        // const func = comptime std.hash_map.getAutoHashFn(Board, @This());  // 1x
-        // return func(a, key);
+        return std.hash.CityHash64.hash(data); 
     }
     
     pub fn eql(_: @This(), a: Board, b: Board) bool {
-        return std.mem.eql(u8, &@as([64] u8, @bitCast(a.squares)), &@as([64] u8,  @bitCast(b.squares)));
+        return std.mem.eql(u8, std.mem.asBytes(&a.squares), std.mem.asBytes(&b.squares));
     }
 }, FILL_PERCENT);  
 
@@ -73,8 +62,7 @@ var upperArena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 // This gets reset after checking each top level move. 
 var movesArena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 
-pub fn bestMove(game: *const Board, me: Colour, unusedAlloc: std.mem.Allocator) MoveResult!Move {
-    _ = unusedAlloc;
+pub fn bestMove(game: *const Board, me: Colour) MoveErr!Move {
     var alloc = upperArena.allocator();
     defer _ = upperArena.reset(.retain_capacity);
     
@@ -87,16 +75,20 @@ pub fn bestMove(game: *const Board, me: Colour, unusedAlloc: std.mem.Allocator) 
     var memo = MemoMap.init(alloc);
     try memo.ensureTotalCapacity(MEMO_CAPACITY);
     defer memo.deinit();
+
+    var bestWhiteEval: i32 = -999999;
+    var bestBlackEval: i32 = -999999;
     
     var bestVal: i32 = -1000000;
     var count: u64 = 0;
     for (moves) |move| {
         var checkBoard = game.copyPlay(move);
-        const value = -try walkEval(&checkBoard, me.other(), MAX_DEPTH, -999999, -999999, movesArena.allocator(), &count, &memo);  // TODO: need to catch
+        const value = -try walkEval(&checkBoard, me.other(), MAX_DEPTH, bestWhiteEval, bestBlackEval, movesArena.allocator(), &count, &memo);  // TODO: need to catch
         if (value > bestVal) {
             bestVal = value;
             bestMoves.clearRetainingCapacity();
             try bestMoves.append(move);
+            if (checkAlphaBeta(bestVal, me, &bestWhiteEval, &bestBlackEval)) break;
         } else if (value == bestVal) {
             try bestMoves.append(move);
         }
@@ -112,7 +104,8 @@ pub fn bestMove(game: *const Board, me: Colour, unusedAlloc: std.mem.Allocator) 
 // https://en.wikipedia.org/wiki/Alpha%E2%80%93beta_pruning
 // TODO: I don't trust that I'm doing this right, need to test it against not pruning and make sure it likes the same moves (make sure to disable random). 
 // TODO: when hit depth, keep going but only look at captures
-fn walkEval(game: *const Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, count: *u64, memo: *MemoMap) MoveResult!i32 {
+// The alpha-beta values effect lower layers, not higher layers, so passed by value. 
+fn walkEval(game: *const Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, count: *u64, memo: *MemoMap) MoveErr!i32 {
     // After alpha-beta, bigger starting cap, and not reallocating each move, this does make it faster. 
     // Makes Black move 4 end states go 16,000,000 -> 1,000,000
     if (memo.get(game.*)) |cached| {
@@ -122,11 +115,11 @@ fn walkEval(game: *const Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32
         // TODO: should save the best move from that position at the old low depth and use it as the start for the search 
     }
 
+    // Want to mutate values from parameters. 
     var bestWhiteEval = bestWhiteEvalIn;
     var bestBlackEval = bestBlackEvalIn;
 
-    // Since the last layer doesn't use alpha/beta, don't bother sorting. 
-    const moves = if (remaining == 0) try possibleMoves(game, me, alloc) else try sortedMoves(game, me, alloc);
+    const moves = try sortedMoves(game, me, alloc);
     defer alloc.free(moves);
     if (moves.len == 0) return error.GameOver;
     
@@ -148,30 +141,13 @@ fn walkEval(game: *const Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32
 
         if (value > bestVal) {
             bestVal = value;
-
-            if (remaining > 0){
-                switch (me) {
-                    .White => {
-                        bestWhiteEval = @max(bestWhiteEval, bestVal);
-                        if (bestVal >= -bestBlackEval) {
-                            break;
-                        }
-                    },
-                    .Black => {
-                        bestBlackEval = @max(bestBlackEval, bestVal);
-                        if (bestVal >= -bestWhiteEval) {
-                            break;
-                        }
-                    },
-                    .Empty => unreachable,
-                }
-            }
+            if (checkAlphaBeta(bestVal, me, &bestWhiteEval, &bestBlackEval)) break;
         }
     }
 
     // TODO: I want to not reset the table between moves but then when it runs out of space it would be full of positions we don't need anymore.
     //       need to get rid of old ones somehow. maybe my own hash map that just overwrites on collissions? 
-    // Don't need to check `and memo.capacity() > MEMO_CAPACITY` because we allocate enough capacity up front.
+    // Don't need to check `and memo.capacity() > MEMO_CAPACITY` because we allocate the desired capacity up front.
     const memoFull = memo.unmanaged.available == 0;
     if (!memoFull) {
         try memo.put(game.*, .{
@@ -181,8 +157,29 @@ fn walkEval(game: *const Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32
     }
     
     return bestVal;
-
 }
+
+// This is in it's own function because it's used in the special upper loop and the walkEval. 
+/// Returns true if the move is so good we should stop considering this branch. 
+fn checkAlphaBeta(bestVal: i32, me: Colour, bestWhiteEval: *i32, bestBlackEval: *i32) bool {
+    switch (me) {
+        .White => {
+            bestWhiteEval.* = @max(bestWhiteEval.*, bestVal);
+            if (bestVal >= -bestBlackEval.*) {
+                return true;
+            }
+        },
+        .Black => {
+            bestBlackEval.* = @max(bestBlackEval.*, bestVal);
+            if (bestVal >= -bestWhiteEval.*) {
+                return true;
+            }
+        },
+        .Empty => unreachable,
+    }
+    return false;
+}
+
 /// Positive means white is winning. 
 pub fn simpleEval(game: *const Board) i32 {
     var result: i32 = 0;

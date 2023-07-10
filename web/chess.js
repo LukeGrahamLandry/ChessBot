@@ -1,39 +1,42 @@
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder();
+const minMoveTimeMs = 0;  // If the engine is faster than this, it will wait before playing again. 
+
 function tickGame() {
-    ticker = window.setTimeout(function() {
-        const start = performance.now();
-        const result = Engine.playNextMove();
-        const time = Math.round(performance.now() - start);
-        console.log("Found move in " + time + "ms.");
-        renderBoard();
-        let msg;
-        switch (result) {
-            case 0:
-                tickGame();
-                return;
-            case 1:
-                // TODO: give zig a way to return the type of error and don't resuming the game in a broken state. 
-                msg = "Engine reported error.";
-                break;
-            case 2:
-                msg = "White cannot move.";
-                break;
-            case 3:
-                msg = "Black cannot move.";
-                break;
-            default:
-                msg = "Invalid engine response: " + result;
-                break;
-        }
-        document.getElementById("resume").disabled = true;
-        document.getElementById("pause").disabled = true;
-        document.getElementById("letters").innerText += "\n" + msg;
-    }, 1);
+    const start = performance.now();
+    const result = Engine.playNextMove();
+    const time = Math.round(performance.now() - start);
+    console.log("Found move in " + time + "ms.");
+    renderBoard();
+    let msg;
+    switch (result) {
+        case 0:
+            if (time < minMoveTimeMs) ticker = window.setTimeout(tickGame, minMoveTimeMs - time);
+            else ticker = window.setTimeout(tickGame, 1);
+            return;
+        case 1:
+            // TODO: give zig a way to return the type of error and don't resuming the game in a broken state. 
+            msg = "Engine reported error.";
+            break;
+        case 2:
+            msg = "White cannot move.";
+            break;
+        case 3:
+            msg = "Black cannot move.";
+            break;
+        default:
+            msg = "Invalid engine response: " + result;
+            break;
+    }
+    document.getElementById("resume").disabled = true;
+    document.getElementById("pause").disabled = true;
+    document.getElementById("letters").innerText += "\n" + msg;
 };
 
 function handleRestart() {
+    handlePause();
     Engine.restartGame();
     renderBoard();
-    handlePause();
 }
 
 function handlePause(){
@@ -61,7 +64,7 @@ function handleSetFromFen(){
 
 function getFenFromEngine() {
     const length = Engine.getFen();
-    if (length == 0) {
+    if (length === 0) {
         alert("Engine Error.");
         return;
     }
@@ -74,12 +77,12 @@ function handleCanvasClick(e) {
     let squareSize = ctx.canvas.getBoundingClientRect().width / 8;
     let file = Math.floor(e.offsetX / squareSize);
     let rank = 7 - Math.floor(e.offsetY / squareSize);
-    clicked = [file, rank];
+    clicked = [file, rank];  // TODO: dont like this. use index
     renderBoard();
 }
 
 function drawPiece(file, rank, pieceByte) {
-    if (pieceByte == 0) return;
+    if (pieceByte === 0) return;
 
     let squareSize = document.getElementById("board").width / 8;
     let imgSquareSize = chessImg.width / 6;
@@ -90,7 +93,7 @@ function drawPiece(file, rank, pieceByte) {
     }
     let sX = offset * imgSquareSize;
     let sY = 0;
-    if (pieceByte % 2 == 1){
+    if (pieceByte % 2 === 1){
         sY = imgSquareSize;
     }
     ctx.drawImage(chessImg, sX, sY, imgSquareSize, imgSquareSize, file * squareSize, (7 - rank) * squareSize, squareSize, squareSize);
@@ -154,10 +157,10 @@ function pieceArray() {
         25: 0,
         26: 0,
     };
-    const pieces = new Array(26);
+    const pieces = new Array(26);  // TODO: Why does making this a Uint8Array hide the kings? that's offset zero
     for (let i = 0; i<27;i++) {
         let c = piecesMap[i];
-        if (c != undefined) {
+        if (c !== undefined) {
             pieces[i] = c;
         }
     }
@@ -166,3 +169,26 @@ function pieceArray() {
 
 window.chessJsReady = true;
 if (window.startChessIfReady !== undefined) window.startChessIfReady();
+
+//////////
+// The Zen of HashMap Lang;
+// - (() => () => ({ this is cringe }))()();
+// - var hoisting is deranged;
+// - Lexical object shapes are good; 
+//   Mono is struct, Poly is virtual, Mega is recompile;
+//   Why we insist on making the JIT guess everything's class is beyond me;
+// - Bitwise operate only with the 'n' suffix; 
+//   Bit shifting a double casts to an i32 first;
+//   The price of 'n' is now every number is a Vec<usize>, of length 1, 
+//   and we hope the JIT doesn't allocate and GC a new copy for every intermediary calculation;
+// - 2 spaces is 2 cramped dispite what VS Code wants you to believe;
+// - Throwing things at me is a poor excuse for control flow; 
+//   WASM grants all the ergonomics of C style global 'errno', 
+//   because God help you if you want to manually unpack a tagged union from a byte array;
+// - 'const' affects the binding not the object;
+// - One new Array saves 64 pushes; 
+// - Anything the tempts an object literal could be better written in try @keyWord(comptime Lang);
+// - '==' takes 70% more lines of spec to describe than '===';
+// - Explicitly prefixing global variables with 'window' makes them almost as ugly to read as they are to think about; 
+// - Typed arrays are real arrays;
+//////////
