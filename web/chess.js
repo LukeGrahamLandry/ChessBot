@@ -95,8 +95,13 @@ function drawPiece(file, rank, pieceByte) {
 
 function renderBoard() {
     // TODO: doing this all the time is unnessary because you don't care most of the time and it makes typing one in annoying. 
-    document.getElementById("fen").value = getFenFromEngine();
+    let fen = getFenFromEngine();
+    document.getElementById("fen").value = fen;
     document.getElementById("mEval").innerText = Engine.getMaterialEval();
+    // TODO: If you go back to a previous state and then resume, it makes different moves because the rng state changed. idk if that's good or bad 
+    let history = document.getElementById("history");
+    history.value += "\n" + fen;
+    history.scrollTop = history.scrollHeight;
 
     // TODO: If I really cared I could just render the diff instead of clearing the board
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
@@ -111,6 +116,7 @@ function renderBoard() {
             }
         }
     }
+
     // TODO: why do I need to remake this slice every time?
     let board = new Uint8Array(Engine.memory.buffer, Engine.boardView);
     for (let rank=0;rank<8;rank++){

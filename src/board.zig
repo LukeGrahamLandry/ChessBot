@@ -3,7 +3,22 @@ const assert = std.debug.assert;
 const Move = @import("moves.zig").Move;
 
 // Numbers matter because js sees them. 
-pub const Kind = enum(u4) { Empty = 0, Pawn = 1, Bishop = 2, Knight = 3, Rook = 4, Queen = 5, King = 6 };
+pub const Kind = enum(u4) { 
+    Empty = 0, Pawn = 1, Bishop = 2, Knight = 3, Rook = 4, Queen = 5, King = 6, 
+
+    pub fn material(self: Kind) i32 {
+        return switch (self) {
+            .Pawn => 100,
+            .Bishop => 300,
+            .Knight => 300,
+            .Rook => 500,
+            .King => 100000,
+            .Queen => 900,
+            .Empty => 0,
+        };
+    }
+};
+
 // TODO: this could be one bit, the empty state is redundant. Is it helpful or does Piece need to be byte aligned in arrays anyway? 
 pub const Colour = enum(u2) { 
     Empty = 0, Black = 1, White = 2, 

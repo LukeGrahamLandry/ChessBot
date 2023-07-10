@@ -85,6 +85,7 @@ pub fn bestMove(game: *const Board, me: Colour, unusedAlloc: std.mem.Allocator) 
 }
 
 // https://en.wikipedia.org/wiki/Alpha%E2%80%93beta_pruning
+// TODO: I don't trust that I'm doing this right, need to test it against not pruning and make sure it likes the same moves (make sure to disable random). 
 fn walkEval(game: *const Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, count: *u64, memo: *MemoMap) MoveResult!i32 {
     // After alpha-beta, bigger starting cap, and not reallocating each move, this does make it faster. 
     // Makes Black move 4 end states go 16,000,000 -> 1,000,000
@@ -153,24 +154,13 @@ fn walkEval(game: *const Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32
 pub fn simpleEval(game: *const Board) i32 {
     var result: i32 = 0;
     for (game.squares) |piece| {
-        const value: i32 = switch (piece.kind) {
-            .Pawn => 100,
-            .Bishop => 300,
-            .Knight => 300,
-            .Rook => 500,
-            .King => 100000,
-            .Queen => 900,
-            .Empty => continue,
-        };
         switch (piece.colour) {
-            .White => result += value,
-            .Black => result -= value,
-            .Empty => unreachable,
+            .White => result += piece.kind.material(),
+            else => result -= piece.kind.material(),
         }
     }
     return result;
 }
-
 
 
 // This is 4 bytes but, 
@@ -232,7 +222,7 @@ fn bestMovesFirst(ctx: MoveSortContext, a: Move, b: Move) bool {
 pub fn sortedMoves(board: *const Board, me: Colour, alloc: std.mem.Allocator) ![] Move {
     var moves = try possibleMoves(board, me, alloc);
     // This was much slower than the simple prefer captures in trySlide. 
-    // TODO: maybe check again if I improve that eval function or do the iterative deepening thing then remove this. 
+    // TODO: maybe check again if I do the iterative deepening thing then remove this. even doubling speed of simpleEval didn't help. 
     // const ctx: MoveSortContext = .{ .me=me, .board=board.* };
     // std.sort.insertion(Move, moves, ctx, bestMovesFirst);
     return moves;
@@ -331,7 +321,9 @@ fn trySlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, checkFil
         if (check.empty()){
             try moves.append(Move.irf(i, checkFile, checkRank));
         } else {
-            // this is a capture, we like that, put it first. // TODO: same for pawn promotions
+            // this is a capture, we like that, put it first. 
+            // TODO: same for pawn promotions
+            // Tried putting better takes first but it was slower (to calculate I assume).
             var toPush = Move.irf(i, checkFile, checkRank);
             for (moves.items, 0..) |move, index| {
                 moves.items[index] = toPush;
