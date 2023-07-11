@@ -1,6 +1,6 @@
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
-const minMoveTimeMs = 0;  // If the engine is faster than this, it will wait before playing again. 
+const minMoveTimeMs = 500;  // If the engine is faster than this, it will wait before playing again. 
 
 function tickGame() {
     const start = performance.now();

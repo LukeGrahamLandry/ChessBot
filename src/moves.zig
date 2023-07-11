@@ -62,7 +62,7 @@ var upperArena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 // This gets reset after checking each top level move. 
 var movesArena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 
-pub fn bestMove(game: *const Board, me: Colour) MoveErr!Move {
+pub fn bestMove(game: *const Board, me: Colour, comptime doPruning: bool, comptime expectOneBestMove: bool) !Move {
     var alloc = upperArena.allocator();
     defer _ = upperArena.reset(.retain_capacity);
     
@@ -76,28 +76,34 @@ pub fn bestMove(game: *const Board, me: Colour) MoveErr!Move {
     try memo.ensureTotalCapacity(MEMO_CAPACITY);
     defer memo.deinit();
 
-    var bestWhiteEval: i32 = -999999;
-    var bestBlackEval: i32 = -999999;
+    var bestWhiteEval: i32 = -99999999;
+    var bestBlackEval: i32 = -99999999;
     
     var bestVal: i32 = -1000000;
     var count: u64 = 0;
     for (moves) |move| {
         var checkBoard = game.copyPlay(move);
-        const value = -try walkEval(&checkBoard, me.other(), MAX_DEPTH, bestWhiteEval, bestBlackEval, movesArena.allocator(), &count, &memo);  // TODO: need to catch
+        const value = -try walkEval(&checkBoard, me.other(), MAX_DEPTH, bestWhiteEval, bestBlackEval, movesArena.allocator(), &count, &memo, doPruning);  // TODO: need to catch
         if (value > bestVal) {
             bestVal = value;
             bestMoves.clearRetainingCapacity();
             try bestMoves.append(move);
-            if (checkAlphaBeta(bestVal, me, &bestWhiteEval, &bestBlackEval)) break;
+            if (doPruning and checkAlphaBeta(bestVal, me, &bestWhiteEval, &bestBlackEval)) break;
         } else if (value == bestVal) {
             try bestMoves.append(move);
         }
         _ = movesArena.reset(.retain_capacity);
     }
-    
-    assert(bestMoves.items.len > 0);
+
+    assert(bestMoves.items.len > 0 and bestMoves.items.len <= moves.len);
+    // TODO: might crash on something that would be fine as I change the selection algorithim. 
+    if (expectOneBestMove and bestMoves.items.len != 1) std.debug.panic("There were {} best moves, so one would be picked randomly.", .{bestMoves.items.len});
     const choice = rng.uintLessThanBiased(usize,  bestMoves.items.len);
-    if (!isWasm) std.debug.print("Checked {} end states. {} boards in memo table.\n", .{count, memo.count()});
+    if (!isWasm and !expectOneBestMove) std.debug.print("Checked {} end states. {} boards in memo table. {} moves with eval {}.\n", .{count, memo.count(), bestMoves.items.len, bestVal});
+    // for (bestMoves.items, 0..) |move, i| {
+    //     std.debug.print("{}. \n{s}\n", .{i, try game.copyPlay(move).displayString(alloc)});
+    // } 
+    
     return bestMoves.items[choice];
 }
 
@@ -105,7 +111,7 @@ pub fn bestMove(game: *const Board, me: Colour) MoveErr!Move {
 // TODO: I don't trust that I'm doing this right, need to test it against not pruning and make sure it likes the same moves (make sure to disable random). 
 // TODO: when hit depth, keep going but only look at captures
 // The alpha-beta values effect lower layers, not higher layers, so passed by value. 
-fn walkEval(game: *const Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, count: *u64, memo: *MemoMap) MoveErr!i32 {
+fn walkEval(game: *const Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, count: *u64, memo: *MemoMap, comptime doPruning: bool) MoveErr!i32 {
     // After alpha-beta, bigger starting cap, and not reallocating each move, this does make it faster. 
     // Makes Black move 4 end states go 16,000,000 -> 1,000,000
     if (memo.get(game.*)) |cached| {
@@ -130,7 +136,7 @@ fn walkEval(game: *const Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32
             if (!isWasm) count.* += 1;
             break :e if (me == .White) simpleEval(&checkBoard) else -simpleEval(&checkBoard);
         } else r: {
-            const v = walkEval(&checkBoard, me.other(), remaining - 1, bestWhiteEval, bestBlackEval, alloc, count, memo) catch |err| {
+            const v = walkEval(&checkBoard, me.other(), remaining - 1, bestWhiteEval, bestBlackEval, alloc, count, memo, doPruning) catch |err| {
                 switch (err) {
                     error.OutOfMemory => return err,
                     error.GameOver => break :r 1000000,
@@ -141,7 +147,7 @@ fn walkEval(game: *const Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32
 
         if (value > bestVal) {
             bestVal = value;
-            if (checkAlphaBeta(bestVal, me, &bestWhiteEval, &bestBlackEval)) break;
+            if (doPruning and checkAlphaBeta(bestVal, me, &bestWhiteEval, &bestBlackEval)) break;
         }
     }
 
@@ -318,14 +324,14 @@ fn pawnMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: us
         .White => w: {
             assert(rank < 7);  
             if (rank == 1 and board.get(file, 2).empty() and board.get(file, 3).empty()) {  // forward two
-                try moves.append(Move.irf(i, file, 3));
+                try moves.append(Move.irf(i, file, 3));  // cant promote
             }
             break :w rank + 1;
         },
         .Black => b: {
             assert(rank > 0);
             if (rank == 6 and board.get(file, 5).empty() and board.get(file, 4).empty()) {  // forward two
-                try moves.append(Move.irf(i, file, 4));
+                try moves.append(Move.irf(i, file, 4));  // cant promote
             }
             break :b rank - 1;
         },
@@ -351,18 +357,19 @@ fn trySlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, checkFil
         if (check.empty()){
             try moves.append(Move.irf(i, checkFile, checkRank));
         } else {
-            // this is a capture, we like that, put it first. 
             // TODO: same for pawn promotions
-            // Tried putting better takes first but it was slower (to calculate I assume).
-            // TODO: try again with more depth and when I'm more confident that I'm pruning correctly. 
             var toPush = Move.irf(i, checkFile, checkRank);
+
+            // This is a capture, we like that, put it first. Capturing more valuable pieces is also good. 
             for (moves.items, 0..) |move, index| {
-                moves.items[index] = toPush;
-                toPush = move;
-                if (board.squares[toPush.to].empty()) {
-                    break;
+                const holding = board.squares[toPush.to].kind.material();
+                const lookingAt = board.squares[moves.items[index].to].kind.material();
+                if (holding == 0) break;
+                if (holding > lookingAt){
+                    moves.items[index] = toPush;
+                    toPush = move;
                 }
-            } 
+            }
 
             try moves.append(toPush);
         }
@@ -468,6 +475,34 @@ test "count starting moves" {
     defer tst.free(allMoves);
     // These parameters are backwards because it can't infer type from a comptime_int. This seems dumb. 
     try std.testing.expectEqual(allMoves.len, 20);
+}
+
+fn testPruning(fen: [] const u8, me: Colour) !void {
+    var game = try Board.fromFEN(fen);
+    const slow = try bestMove(&game, me, false, true);
+    const fast = try bestMove(&game, me, true, true);
+
+    if (!std.meta.eql(slow, fast)){
+        const startBoard = try game.displayString(tst);
+        const slowBoard = try game.copyPlay(slow).displayString(tst);
+        const fastBoard = try game.copyPlay(fast).displayString(tst);
+        std.debug.panic("Moves did not match.\nInitial ({} to move):\n{s}\n\nWithout pruning: \n{s}\nWith pruning: \n{s}", .{me, startBoard, slowBoard, fastBoard});
+    }
+}
+
+test "simple compare pruning" {
+    try testPruning("8/p7/8/8/8/4b3/P2P4/8", .White);
+    try testPruning("8/p7/8/8/8/4b3/P2P4/8", .Black);
+
+    try testPruning("7K/8/7B/8/8/8/Pq6/kN6", .White);
+    // TODO: this doesnt work because it thinks taking your king now or later are equally good? 
+    // try testPruning("7K/8/7B/8/8/8/Pq6/kN6", .Black);
+
+    // TODO: it thinks a bunch of things, including hanging its queen, are eval 0. Also takes way too long to run without pruning. 
+    // try testPruning("rn1q1bnr/1p2pkp1/2p2p1p/p2p1b2/1PP4P/3PQP2/P2KP1PB/RN3BNR", .White);
+
+    try testPruning("7K/7p/8/8/8/r1q5/1P5P/k7", .White); // multiple best moves for black. 
+    
 }
 
 // https://www.chess.com/forum/view/fun-with-chess/what-chess-position-has-the-most-number-of-possible-moves?page=2

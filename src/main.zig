@@ -26,7 +26,7 @@ pub fn main() !void {
     const ss = try game.displayString(alloc);
     try stdout.print("{s}\n", .{ss});
     const start = std.time.nanoTimestamp();
-    for (0..5) |i| {
+    for (0..15) |i| {
         if (!try debugPlayOne(&game, i, .White, &rng, stdout)) {
             break;
         }
@@ -84,7 +84,7 @@ fn debugPlayOne(game: *board.Board, i: usize, colour: board.Colour, rng: *std.ra
     }
 
     const start = std.time.nanoTimestamp();
-    const move = try moves.bestMove(game, colour);
+    const move = try moves.bestMove(game, colour, true, false);
     try stdout.print("Found move in {}ms\n", .{@divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms))});
     try stdout.print("{} move {} is {}\n", .{colour, i, move});
     game.play(move);

@@ -43,7 +43,9 @@ export fn playRandomMove() i32 {
 /// IN: internalBoard, boardView, nextColour
 /// OUT: internalBoard, boardView, nextColour
 export fn playNextMove() i32 {
-   const move = moves.bestMove(&internalBoard, nextColour) catch |err| {
+   // if (nextColour == .Black) return playRandomMove();
+
+   const move = moves.bestMove(&internalBoard, nextColour, true, false) catch |err| {
       switch (err) {
          error.OutOfMemory => return 1,
          error.GameOver => return if (nextColour == .White) 2 else 3,

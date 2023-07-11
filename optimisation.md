@@ -21,6 +21,38 @@ sample <pid> -f zig-out/temp_profile_info.sample
 filtercalltree zig-out/temp_profile_info.sample
 ```
 
+## Sorting moves. 
+
+
+Captures first: 
+
+```
+for (moves.items, 0..) |move, index| {
+    moves.items[index] = toPush;
+    toPush = move;
+    if (board.squares[toPush.to].empty()) {
+        break;
+    }
+} 
+```
+
+Higher material captures first: 
+```
+for (moves.items, 0..) |move, index| {
+    const holding = board.squares[toPush.to].kind.material();
+    const lookingAt = board.squares[moves.items[index].to].kind.material();
+    if (holding == 0) break;
+    if (holding > lookingAt){
+        moves.items[index] = toPush;
+        toPush = move;
+    }
+}
+```
+
+When adding moves, ordering by value of piece captured instead of just capture or not is ~1.4x as fast for depth=4, moves=15 (but for slower for moves=5).
+
+Not doing that and insertion sorting the whole list by board eval at the end is massivly slower. 
+
 ## Always alpha-beta
 
 The upper layer of the tree in bestMove has a custom loop because I need to actually hold on to which move was best (it also resets an arena allocator each iteraction so less memory usage). However, I forgot to make that update alpha-beta numbers so was missing out on the most important pruning. Fixing made it ~1.9x as fast. 
