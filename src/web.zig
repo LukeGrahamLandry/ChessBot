@@ -3,7 +3,8 @@ const assert = std.debug.assert;
 const Colour = @import("board.zig").Colour;
 const Board = @import("board.zig").Board;
 const Piece = @import("board.zig").Piece;
-const moves = @import("moves.zig");
+const moves = @import("moves.zig").default;
+const Move = @import("moves.zig").Move;
 
 comptime { assert(@sizeOf(Piece) == @sizeOf(u8)); }
 var internalBoard = Board.initial();
@@ -47,7 +48,7 @@ export fn playRandomMove() i32 {
 export fn playNextMove() i32 {
    // if (nextColour == .Black) return playRandomMove();
 
-   const move = moves.bestMove(&internalBoard, nextColour, true, false) catch |err| {
+   const move = moves.bestMove(&internalBoard, nextColour) catch |err| {
       switch (err) {
          error.OutOfMemory => return 1,
          error.GameOver => return if (nextColour == .White) 2 else 3,
@@ -111,8 +112,13 @@ export fn getMaterialEval() i32 {
 /// OUT: internalBoard, boardView, nextColour
 export fn playHumanMove(fromIndex: u32, toIndex: u32) i32 {
    if (fromIndex >= 64 or toIndex >= 64) return 1;
-   // TODO: promotion
-   const move: moves.Move  = .{ .from=@intCast(fromIndex), .to=@intCast(toIndex), .action=.none };
+   var move: Move  = .{ .from=@intCast(fromIndex), .to=@intCast(toIndex), .action=.none };
+   // TODO: ui should know when promoting so it can let you choose which piece to make. 
+   if (internalBoard.squares[fromIndex].kind == .Pawn) {
+      // TODO: factor out some canPromote function so magic numbers live in one place
+      const isPromote = (nextColour == .Black and toIndex <= 7) or (nextColour == .White and toIndex > (64-8));
+      if (isPromote) move.action = .{.promote = .Queen };
+   }
 
    // Check if this is a legal move by the current player. 
    const allMoves = moves.possibleMoves(&internalBoard, nextColour, alloc) catch return 1;

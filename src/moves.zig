@@ -11,32 +11,41 @@ var rng = notTheRng.random();
 const MoveErr = error { GameOver, OutOfMemory };
 const isWasm = @import("builtin").target.isWasm();
 
-pub fn bestMoveDepth1(game: *const Board, me: Colour, alloc: std.mem.Allocator) MoveErr!Move {
-    const moves = try possibleMoves(game, me, alloc);
-    defer alloc.free(moves);
-    if (moves.len == 0) return error.GameOver;
-    var bestMoves = try std.ArrayList(Move).initCapacity(alloc, 50);
-    defer bestMoves.deinit();
-    
-    var bestVal: i32 = -1000000;
-    for (moves) |move| {
-        var checkBoard = game.copyPlay(move);
-        const value = if (me == .White) simpleEval(&checkBoard) else -simpleEval(&checkBoard);
-        if (value > bestVal) {
-            bestVal = value;
-            bestMoves.clearRetainingCapacity();
-            try bestMoves.append(move);
-        } else if (value == bestVal) {
-            try bestMoves.append(move);
-        }
+// This is 4 bytes but, 
+// If I was more efficient for promotion targets because you know it's on the far rank, and there's only 4 promotion options,
+// this could fit in 3 bytes, [from: u6, action: u1, (to: u6) or (kind: u2, to: u3)] = u13. 
+// Or even 2 bytes because if you can check if its a pawn moving from second back rank so you don't need the action flag. 
+// But it's not worth dealing with yet. Might be worth it to store the opening book in half the space tho!
+pub const Move = struct {
+    from: u6,
+    to: u6,
+    action: union(enum) {
+        none,
+        promote: Kind,
+    },
+
+    // TODO: method that factors out bounds check from try methods then calls this? make sure not to do twice in slide loops.
+    fn irf(fromIndex: usize, toFile: usize, toRank: usize) Move {
+        std.debug.assert(fromIndex < 64 and toFile < 8 and toRank < 8);
+        return .{
+            .from=@truncate(fromIndex),
+            .to = @truncate(toRank*8 + toFile),
+            .action = .none,
+        };
     }
-    
-    assert(bestMoves.items.len > 0);
-    const choice = rng.uintLessThanBiased(usize,  bestMoves.items.len);
-    return bestMoves.items[choice];
+};
+
+pub fn Strategy(
+    comptime maxDepth: comptime_int,  // TODO: should be runtime param to bestMove so wasm can change without increasing code size. 
+    comptime doPruning: bool, 
+    comptime testingExpectOneBestMove: bool
+) type {
+    return struct {  // Start Strategy. 
+
+comptime { 
+    assert(@sizeOf(Piece) == @sizeOf(u8)); 
 }
 
-comptime { assert(@sizeOf(Piece) == @sizeOf(u8)); }
 const MemoMap = std.HashMap(Board, struct {
     eval: i32,
     remaining: u64
@@ -52,7 +61,6 @@ const MemoMap = std.HashMap(Board, struct {
     }
 }, FILL_PERCENT);  
 
-const MAX_DEPTH = 4;
 // TODO: this wont be exact because capacity goes to the next highest power of two. 
 const MEMO_MAX_MB = 20;  // TODO: make this configurable 
 const MEMO_CAPACITY = (MEMO_MAX_MB * 1024 * 1024) / @sizeOf(MemoMap.KV) * 100 / FILL_PERCENT;
@@ -65,7 +73,7 @@ var movesArena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 
 // This has its own loop because I actually need to know which move is best which walkEval doesn't return. 
 // Also means I can reset the temp allocator more often. 
-pub fn bestMove(game: *Board, me: Colour, comptime doPruning: bool, comptime testingExpectOneBestMove: bool) !Move {
+pub fn bestMove(game: *Board, me: Colour) !Move {
     var alloc = upperArena.allocator();
     defer _ = upperArena.reset(.retain_capacity);
     
@@ -87,7 +95,7 @@ pub fn bestMove(game: *Board, me: Colour, comptime doPruning: bool, comptime tes
     for (moves) |move| {
         const unMove = game.play(move);
         defer game.unplay(unMove);
-        const value = -try walkEval(game, me.other(), MAX_DEPTH, bestWhiteEval, bestBlackEval, movesArena.allocator(), &count, &memo, doPruning);  // TODO: need to catch
+        const value = -try walkEval(game, me.other(), maxDepth, bestWhiteEval, bestBlackEval, movesArena.allocator(), &count, &memo);  // TODO: need to catch
         if (value > bestVal) {
             bestVal = value;
             bestMoves.clearRetainingCapacity();
@@ -112,10 +120,9 @@ pub fn bestMove(game: *Board, me: Colour, comptime doPruning: bool, comptime tes
 }
 
 // https://en.wikipedia.org/wiki/Alpha%E2%80%93beta_pruning
-// TODO: I don't trust that I'm doing this right, need to test it against not pruning and make sure it likes the same moves (make sure to disable random). 
 // TODO: when hit depth, keep going but only look at captures
 // The alpha-beta values effect lower layers, not higher layers, so passed by value. 
-fn walkEval(game: *Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, count: *u64, memo: *MemoMap, comptime doPruning: bool) MoveErr!i32 {
+fn walkEval(game: *Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, count: *u64, memo: *MemoMap) MoveErr!i32 {
     // After alpha-beta, bigger starting cap, and not reallocating each move, this does make it faster. 
     // Makes Black move 4 end states go 16,000,000 -> 1,000,000
     // But now after better pruning it does almost nothing. 
@@ -142,7 +149,7 @@ fn walkEval(game: *Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32, best
             if (!isWasm) count.* += 1;
             break :e if (me == .White) simpleEval(game) else -simpleEval(game);
         } else r: {
-            const v = walkEval(game, me.other(), remaining - 1, bestWhiteEval, bestBlackEval, alloc, count, memo, doPruning) catch |err| {
+            const v = walkEval(game, me.other(), remaining - 1, bestWhiteEval, bestBlackEval, alloc, count, memo) catch |err| {
                 switch (err) {
                     error.OutOfMemory => return err,
                     error.GameOver => break :r 1000000,
@@ -204,43 +211,6 @@ pub fn simpleEval(game: *const Board) i32 {
     return result;
 }
 
-
-// This is 4 bytes but, 
-// If I was more efficient for promotion targets because you know it's on the far rank, and there's only 4 promotion options,
-// this could fit in 3 bytes, [from: u6, action: u1, (to: u6) or (kind: u2, to: u3)] = u13. 
-// Or even 2 bytes because if you can check if its a pawn moving from second back rank so you don't need the action flag. 
-// But it's not worth dealing with yet. Might be worth it to store the opening book in half the space tho!
-pub const Move = struct {
-    from: u6,
-    to: u6,
-    action: union(enum) {
-        none,
-        promote: Kind,
-    },
-
-    fn irf(fromIndex: usize, toFile: usize, toRank: usize) Move {
-        std.debug.assert(fromIndex < 64 and toFile < 8 and toRank < 8);
-        return .{
-            .from=@truncate(fromIndex),
-            .to = @truncate(toRank*8 + toFile),
-            .action = .none,
-        };
-    }
-
-    fn irfPawn(fromIndex: usize, toFile: usize, toRank: usize, colour: Colour) Move {
-        if ((colour == .Black and toRank == 0) or (colour == .White and toRank == 7)){
-            // Just assume making a queen is always the right choice. 
-            return .{
-                .from=@truncate(fromIndex),
-                .to = @truncate(toRank*8 + toFile),
-                .action = .{.promote = .Queen }
-            };
-        } else {
-            return irf(fromIndex, toFile, toRank);
-        }
-    }
-};
-
 fn toIndex(file: usize, rank: usize) u6  {
     return @truncate(rank*8 + file);
 }
@@ -275,7 +245,7 @@ pub fn possibleMoves(board: *const Board, me: Colour, alloc: std.mem.Allocator) 
     assert(me != .Empty);
     var moves = try std.ArrayList(Move).initCapacity(alloc, 50);
     for (board.squares, 0..) |piece, i| {
-        if (piece.colour != me) continue;
+        if (piece.colour != me) continue;  // bit board means fewer memory accesses 
         
         const file = i % 8;
         const rank = i / 8;
@@ -345,13 +315,31 @@ fn pawnMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: us
     };
 
     if (board.get(file, targetRank).empty()) {  // forward
-        try moves.append(Move.irfPawn(i, file, targetRank, piece.colour));
+        try maybePromote(moves, i, file, targetRank, piece.colour);
     }
     if (file < 7 and board.get(file + 1, targetRank).colour == piece.colour.other()) {  // right
-        try moves.append(Move.irfPawn(i, file + 1, targetRank, piece.colour));
+        try maybePromote(moves, i, file + 1, targetRank, piece.colour);
     }
     if (file > 0 and board.get(file - 1, targetRank).colour == piece.colour.other()) {  // left
-        try moves.append(Move.irfPawn(i, file - 1, targetRank, piece.colour));
+        try maybePromote(moves, i, file - 1, targetRank, piece.colour);
+    }
+}
+
+fn maybePromote(moves: *std.ArrayList(Move), fromIndex: usize, toFile: usize, toRank: usize, colour: Colour) !void {
+    if ((colour == .Black and toRank == 0) or (colour == .White and toRank == 7)){
+        // Trying all options does make it a bit slower. 
+        // TODO: insert in better order (queen at front of list, others at end of list).
+        const options = [_] Kind { .Queen, .Knight, .Rook, .Bishop }; 
+        for (options) |k| {
+            const move: Move =  .{
+                .from=@truncate(fromIndex),
+                .to = @truncate(toRank*8 + toFile),
+                .action = .{.promote = k }
+            };
+            try moves.append(move);
+        }
+    } else {
+        try moves.append(Move.irf(fromIndex, toFile, toRank));
     }
 }
 
@@ -369,6 +357,7 @@ fn trySlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, checkFil
             // Have this be a comptime param that gets passed down so I can easily benchmark. 
             // This is a capture, we like that, put it first. Capturing more valuable pieces is also good. 
             for (moves.items, 0..) |move, index| {
+                // if (move.action == .promote) continue;
                 const holding = board.squares[toPush.to].kind.material();
                 const lookingAt = board.squares[moves.items[index].to].kind.material();
                 if (holding == 0) break;
@@ -473,11 +462,18 @@ fn knightMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: 
     }
 }
 
+
+};} // End Strategy. 
+
+pub const default = Strategy(4, true, false);
+const testFast = Strategy(4, true, true);
+const testSlow = Strategy(4, false, true);
+
 var tst = std.testing.allocator;
 
 fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize) !usize {
     if (remainingDepth == 0) return 1;
-    const allMoves = try possibleMoves(game, me, tst);
+    const allMoves = try default.possibleMoves(game, me, tst);
     defer tst.free(allMoves);
     if (remainingDepth == 1) return allMoves.len;
 
@@ -501,8 +497,7 @@ test "count possible games" {
 
     var game = Board.initial();
     for (possibleGames, 1..) |expected, i| {
-        const start = std.time.nanoTimestamp();
-        _ = start;
+        // const start = std.time.nanoTimestamp();
         // These parameters are backwards because it can't infer type from a comptime_int. This seems dumb. 
         try std.testing.expectEqual(countPossibleGames(&game, .White, i), expected);
         // std.debug.print("Explored Depth {} in {}ms.\n", .{i, @divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms))});
@@ -511,8 +506,8 @@ test "count possible games" {
 
 fn testPruning(fen: [] const u8, me: Colour) !void {
     var game = try Board.fromFEN(fen);
-    const slow = try bestMove(&game, me, false, true);
-    const fast = try bestMove(&game, me, true, true);
+    const slow = try testSlow.bestMove(&game, me);
+    const fast = try testFast.bestMove(&game, me);
 
     if (!std.meta.eql(slow, fast)){
         // Leaks here don't really matter but freeing prevents error spam. 
@@ -539,6 +534,5 @@ test "simple compare pruning" {
     // TODO: it thinks a bunch of things, including hanging its queen, are eval 0. Also takes way too long to run without pruning. 
     // try testPruning("rn1q1bnr/1p2pkp1/2p2p1p/p2p1b2/1PP4P/3PQP2/P2KP1PB/RN3BNR", .White);
 
-    try testPruning("7K/7p/8/8/8/r1q5/1P5P/k7", .White); // multiple best moves for black. 
-    
+    try testPruning("7K/7p/8/8/8/r1q5/1P5P/k7", .White); // multiple best moves for black.     
 }

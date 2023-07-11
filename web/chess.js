@@ -1,6 +1,6 @@
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
-const minMoveTimeMs = 500;  // If the engine is faster than this, it will wait before playing again. 
+const minMoveTimeMs = 500;  // When computer vs computer, if the engine is faster than this, it will wait before playing again. 
 
 function tickGame() {
     const start = performance.now();
@@ -8,20 +8,18 @@ function tickGame() {
     const time = Math.round(performance.now() - start);
     console.log("Found move in " + time + "ms.");
     renderBoard();
-    let msg;
     switch (result) {
         case 0:
             // TODO: do this if computer vs computer.  
             // if (time < minMoveTimeMs) ticker = window.setTimeout(tickGame, minMoveTimeMs - time);
             // else ticker = window.setTimeout(tickGame, 1);
-            return;
+            break;
         default:
             reportEngineMsg(result);
+            document.getElementById("resume").disabled = true;
+            document.getElementById("pause").disabled = true;
             break;
     }
-    document.getElementById("resume").disabled = true;
-    document.getElementById("pause").disabled = true;
-    document.getElementById("letters").innerText += "\n" + msg;
 };
 
 function handleRestart() {
@@ -82,6 +80,7 @@ function handleCanvasClick(e) {
             case 0:
                 clicked = null;
                 renderBoard();
+                // TODO: only do this if other player is engine. 
                 setTimeout(tickGame, 25);  // Give it a chance to render.
                 break;
             case 4: // Invalid move. 
