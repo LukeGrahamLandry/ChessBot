@@ -34,6 +34,45 @@ sample <pid> -f zig-out/temp_profile_info.sample
 filtercalltree zig-out/temp_profile_info.sample
 ```
 
+## counting possible moves 
+
+After banning letting your king get taken in check, need to make the test faster. Tried writing it iteritivly instead of recusivly but all the speed up was just from using an arena allocator instead of freeing everything. so went back to recusive because that seems more elegant, uses unmove instead of copyMove so if I can make check detection gradual it will help. 
+
+Using ArenaAllocator(PageAllocator) was 9.5x as fast as TestingAllocator for depth 4 with dumb look ahead check detection.
+
+```
+// // var tempB = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    // // defer tempB.deinit();
+    // var me = Colour.White;
+    // const maxNeeded = possibleGames[possibleGames.len - 1];
+    // var thisLayer = try std.ArrayList(Board).initCapacity(tempA.allocator(), maxNeeded);
+    // try thisLayer.append(Board.initial());
+    // var nextLayer = try std.ArrayList(Board).initCapacity(tempA.allocator(), maxNeeded);
+    // // try MoveFilter.Any.get().possibleMoves(game, me, tst)
+    // for (possibleGames, 1..) |expected, i| {
+    //     const start = std.time.nanoTimestamp();
+    //     for (thisLayer.items) |game| {
+    //         const nextMoves = try MoveFilter.Any.get().possibleMoves(&game, me, tempA.allocator());
+
+    //         for (nextMoves) |move| {
+    //             const afterMove = game.copyPlay(move);
+    //             const nextCapKing = try genKingCapturesOnly.possibleMoves(&afterMove, me.other(), tempA.allocator());
+    //             if (nextCapKing.len == 0) try nextLayer.append(afterMove);  // legal
+    //         }
+    //     }
+
+    //     try std.testing.expectEqual(nextLayer.items.len, expected);
+    //     me = me.other();
+
+    //     thisLayer.clearRetainingCapacity();
+    //     std.mem.swap(std.ArrayList(Board), &thisLayer, &nextLayer);
+        
+    //     // These parameters are backwards because it can't infer type from a comptime_int. This seems dumb. 
+    //     // try std.testing.expectEqual(countPossibleGames(&game, .White, i), expected);
+    //     std.debug.print("Explored Depth {} in {}ms.\n", .{i, @divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms))});
+    // }
+```
+
 ## rng is slow
 
 It's 1.5x faster to not carefully pick a random move to make when there is only one possible move. Fair enough, that was a skill issue on my part. 

@@ -8,12 +8,20 @@ const Kind = @import("board.zig").Kind;
 const StratOpts = @import("moves.zig").StratOpts;
 const Move = @import("moves.zig").Move;
 
-pub fn MoveGenStrategy(comptime capturesOnly: bool) type {
+pub const MoveFilter = enum {
+    Any, CapturesOnly, KingCapturesOnly,
+
+    pub fn get(comptime self: MoveFilter) type {
+        return MoveGenStrategy(self);
+    }
+};
+
+pub fn MoveGenStrategy(comptime filter: MoveFilter) type {
     return struct {  // Start Strategy. 
 
 /// Positive means white is winning. 
 pub fn simpleEval(game: *const Board) i32 {
-    // TODO: Calls to this function are clearly not optimised away, idk what's doing on. 
+    // TODO: Calls to this function are clearly not optimised away, idk what's going on. 
     // assert(game.simpleEval == slowSimpleEval(game));
     return game.simpleEval;
 }
@@ -131,21 +139,21 @@ fn pawnMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: us
         // Asserts can't have a pawn at the end in real games because it would have promoted. 
         .White => w: {
             // assert(rank < 7);  
-            if (!capturesOnly and rank == 1 and board.emptyAt(file, 2) and board.emptyAt(file, 3)) {  // forward two
+            if (filter == .Any and rank == 1 and board.emptyAt(file, 2) and board.emptyAt(file, 3)) {  // forward two
                 try moves.append(Move.irf(i, file, 3));  // cant promote
             }
             break :w rank + 1;
         },
         .Black => b: {
             // assert(rank > 0);
-            if (!capturesOnly and rank == 6 and board.emptyAt(file, 5) and board.emptyAt(file, 4)) {  // forward two
+            if (filter == .Any and rank == 6 and board.emptyAt(file, 5) and board.emptyAt(file, 4)) {  // forward two
                 try moves.append(Move.irf(i, file, 4));  // cant promote
             }
             break :b rank - 1;
         }
     };
 
-    if (!capturesOnly and board.emptyAt(file, targetRank)) {  // forward
+    if (filter == .Any and board.emptyAt(file, targetRank)) {  // forward
         try maybePromote(moves, board, i, file, targetRank, piece.colour);
     }
     if (file < 7 and !board.emptyAt(file + 1, targetRank) and board.get(file + 1, targetRank).colour != piece.colour) {  // right
@@ -158,7 +166,11 @@ fn pawnMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: us
 
 fn maybePromote(moves: *std.ArrayList(Move), board: *const Board, fromIndex: usize, toFile: usize, toRank: usize, colour: Colour) !void {
     // TODO: including promotions on fast path should be seperate option
-    if (capturesOnly and board.emptyAt(toFile, toRank)) return;  
+    switch (filter) {
+        .Any => {},
+        .CapturesOnly => if (board.emptyAt(toFile, toRank)) return,
+        .KingCapturesOnly => if (board.get(toFile, toRank).kind != .King) return,
+    }
     
     if ((colour == .Black and toRank == 0) or (colour == .White and toRank == 7)){
         // Just pushing all options does make it a bit slower. 
@@ -209,8 +221,14 @@ fn maybePromote(moves: *std.ArrayList(Move), board: *const Board, fromIndex: usi
 fn trySlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, checkFile: usize, checkRank: usize, piece: Piece) !bool {
     const check = board.get(checkFile, checkRank);
     
+    switch (filter) {
+        .Any => {},
+        .CapturesOnly => if (check.empty()) return true,
+        .KingCapturesOnly => if (check.kind != .King) return !check.empty(),
+    }
+
     if (check.empty()) {
-        if (!capturesOnly) try moves.append(Move.irf(i, checkFile, checkRank));
+        try moves.append(Move.irf(i, checkFile, checkRank));
         return false;
     } else if (check.colour == piece.colour) { 
         return true;
@@ -297,8 +315,13 @@ fn kingMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: us
 
 fn tryHop(moves: *std.ArrayList(Move), board: *const Board, i: usize, checkFile: usize, checkRank: usize, piece: Piece) !void {
     const check = board.get(checkFile, checkRank);
+     switch (filter) {
+        .Any => {},
+        .CapturesOnly => if (check.empty()) return,
+        .KingCapturesOnly => if (check.kind != .King) return,
+    }
     
-    if ((!capturesOnly and check.empty()) or check.colour != piece.colour) {
+    if (check.empty() or check.colour != piece.colour) {
         try moves.append(Move.irf(i, checkFile, checkRank));
     } 
 }
@@ -328,17 +351,26 @@ fn knightMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: 
 
 var tst = std.testing.allocator;
 
-fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize) !usize {
+
+const genKingCapturesOnly = @import("movegen.zig").MoveFilter.KingCapturesOnly.get();
+fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, alloc: std.mem.Allocator) !usize {
     if (remainingDepth == 0) return 1;
-    const allMoves = try MoveGenStrategy(false).possibleMoves(game, me, tst);
-    defer tst.free(allMoves);
-    if (remainingDepth == 1) return allMoves.len;
+    const allMoves = try MoveFilter.Any.get().possibleMoves(game, me, alloc);
+    defer alloc.free(allMoves);
+    // if (remainingDepth == 1) return allMoves.len; // TODO: look at checks
 
     var total: usize = 0;
     for (allMoves) |move| {
         const unMove = game.play(move);
         defer game.unplay(unMove);
-        total += try countPossibleGames(game, me.other(), remainingDepth - 1);
+
+        {
+            const moves = try genKingCapturesOnly.possibleMoves(game, me.other(), alloc);
+            defer alloc.free(moves);
+            if (moves.len > 0) continue; // move illigal
+        }
+
+        total += try countPossibleGames(game, me.other(), remainingDepth - 1, alloc);
     }
 
     return total;
@@ -350,13 +382,15 @@ fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize) !usize {
 // Also exercises the Board.unplay function.
 test "count possible games" {
     // https://en.wikipedia.org/wiki/Shannon_number
-    const possibleGames = [_] usize { 20, 400, 8902	};  // , 197281
+    const possibleGames = [_] usize { 20, 400, 8902, 197281	}; // 4865609 (needs checkmate or castling?)
 
+    var tempA = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer tempA.deinit();
     var game = Board.initial();
     for (possibleGames, 1..) |expected, i| {
-        // const start = std.time.nanoTimestamp();
+        const start = std.time.nanoTimestamp();
         // These parameters are backwards because it can't infer type from a comptime_int. This seems dumb. 
-        try std.testing.expectEqual(countPossibleGames(&game, .White, i), expected);
-        // std.debug.print("Explored Depth {} in {}ms.\n", .{i, @divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms))});
+        try std.testing.expectEqual(countPossibleGames(&game, .White, i, tempA.allocator()), expected);
+        std.debug.print("Explored Depth {} in {}ms.\n", .{i, @divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms))});
     }
 }

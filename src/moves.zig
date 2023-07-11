@@ -47,8 +47,7 @@ pub const HashAlgo = enum {
 var notTheRng = std.rand.DefaultPrng.init(0);
 var rng = notTheRng.random();
 
-pub const genAllMoves = @import("movegen.zig").MoveGenStrategy(false);
-pub const genCapturesOnly = @import("movegen.zig").MoveGenStrategy(true);
+pub const genAllMoves = @import("movegen.zig").MoveFilter.Any.get();
 
 pub const StratOpts = struct {
     maxDepth: comptime_int = 4,  // TODO: should be runtime param to bestMove so wasm can change without increasing code size. 
@@ -57,6 +56,9 @@ pub const StratOpts = struct {
     memoMapSizeMB: usize = 20,  // Zero means don't use memo map at all. 
     memoMapFillPercent: usize = 60,  // Affects usable map capacity but not memory usage. 
     hashAlgo: HashAlgo = .CityHash64,
+    checkDetection: enum {
+        Ignore, LookAhead
+    } = .LookAhead,
 };
 
 // TODO: script that tests different variations (compare speed and run correctness tests). 
@@ -99,6 +101,18 @@ var upperArena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 // This gets reset after checking each top level move. 
 var movesArena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 
+const genKingCapturesOnly = @import("movegen.zig").MoveFilter.KingCapturesOnly.get();
+fn inCheck(game: *Board, me: Colour, alloc: std.mem.Allocator) !bool {
+    switch (opts.checkDetection) {
+        .Ignore => return false,
+        .LookAhead => {
+            const moves = try genKingCapturesOnly.possibleMoves(game, me.other(), alloc);
+            defer alloc.free(moves);
+            return moves.len > 0;
+        }
+    }
+}
+
 // This has its own loop because I actually need to know which move is best which walkEval doesn't return. 
 // Also means I can reset the temp allocator more often. 
 pub fn bestMove(game: *Board, me: Colour) !Move {
@@ -124,6 +138,7 @@ pub fn bestMove(game: *Board, me: Colour) !Move {
     for (moves) |move| {
         const unMove = game.play(move);
         defer game.unplay(unMove);
+        if (try inCheck(game, me, alloc)) continue;
         const value = -try walkEval(game, me.other(), opts.maxDepth, bestWhiteEval, bestBlackEval, movesArena.allocator(), &count, &memo);  // TODO: need to catch
         if (value > bestVal) {
             bestVal = value;
@@ -144,9 +159,6 @@ pub fn bestMove(game: *Board, me: Colour) !Move {
     if (!isWasm and !opts.beDeterministicForTest) {
         std.debug.print("- Checked {} end states. {} boards in memo table (max={}). {} moves with eval {}.\n", .{count, memo.count(), memo.capacity(), bestMoves.items.len, bestVal});
     }
-    // for (bestMoves.items, 0..) |move, i| {
-    //     std.debug.print("{}. \n{s}\n", .{i, try game.copyPlay(move).displayString(alloc)});
-    // }
     return bestMoves.items[choice];
 }
 
@@ -178,6 +190,7 @@ fn walkEval(game: *Board, me: Colour, remaining: i32, bestWhiteEvalIn: i32, best
     for (moves) |move| {
         const unMove = game.play(move);
         defer game.unplay(unMove);
+        if (try inCheck(game, me, alloc)) continue;
         const value = if (remaining == 0) e: {
             if (!isWasm) count.* += 1;
             break :e if (me == .White) genAllMoves.simpleEval(game) else -genAllMoves.simpleEval(game);
@@ -236,10 +249,8 @@ fn checkAlphaBeta(bestVal: i32, me: Colour, bestWhiteEval: *i32, bestBlackEval: 
 };} // End Strategy. 
 
 pub const default = Strategy(.{});
-const testFast = Strategy(.{ .beDeterministicForTest=true });
-const testSlow = Strategy(.{ .beDeterministicForTest=true, .doPruning=false });
-
-var tst = std.testing.allocator;
+const testFast = Strategy(.{ .beDeterministicForTest=true, .checkDetection=.Ignore});
+const testSlow = Strategy(.{ .beDeterministicForTest=true, .doPruning=false, .checkDetection=.Ignore});
 
 // TODO: this should be generic over a the strategies to compare. 
 fn testPruning(fen: [] const u8, me: Colour) !void {
@@ -249,6 +260,7 @@ fn testPruning(fen: [] const u8, me: Colour) !void {
 
     if (!std.meta.eql(slow, fast)){
         // Leaks here don't really matter but freeing prevents error spam. 
+        const tst = std.testing.allocator;
         const startBoard = try game.displayString(tst);
         defer tst.free(startBoard);
         const slowBoard = try game.copyPlay(slow).displayString(tst);
@@ -261,6 +273,7 @@ fn testPruning(fen: [] const u8, me: Colour) !void {
 }
 
 // Tests that alpha-beta pruning chooses the same best move as a raw search. 
+// Doesn't check if king is in danger to ignore move. 
 test "simple compare pruning" {
     // The initial position has many equal moves, this makes sure I'm not accidently making random choices while testing. 
     try testPruning("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR", .White);
