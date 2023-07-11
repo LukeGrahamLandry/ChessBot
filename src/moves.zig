@@ -193,8 +193,7 @@ fn checkAlphaBeta(bestVal: i32, me: Colour, bestWhiteEval: *i32, bestBlackEval: 
             if (bestVal >= -bestWhiteEval.*) {
                 return true;
             }
-        },
-        .Empty => unreachable,
+        }
     }
     return false;
 }
@@ -243,18 +242,17 @@ pub fn sortedMoves(board: *const Board, me: Colour, alloc: std.mem.Allocator) ![
 // TODO: castling, en-passant, check
 const one: u64 = 1;
 pub fn possibleMoves(board: *const Board, me: Colour, alloc: std.mem.Allocator) ![] Move {
-    assert(me != .Empty);
     var moves = try std.ArrayList(Move).initCapacity(alloc, 50);
     const mySquares = switch (me) {
             .White => board.whitePeicePositions,
             .Black => board.blackPeicePositions,
-            .Empty => unreachable,
         };
+    
+    var flag: u64 = 1;
     for (0..64) |i| {
-        // TODO: think this is actually slower
-        const flag = one << @as(u6, @intCast(i));
-        if (mySquares & flag == 0) {
-            // assert(board.squares[i].colour != me);
+        defer flag <<= 1; // shift the bit over at the end of each iteration. 
+        if ((mySquares & flag) == 0) {
+            // assert(board.squares[i].empty() or board.squares[i].colour != me);
             continue;  // bit board means fewer memory accesses 
         }
         // assert(board.squares[i].colour == me);
@@ -323,17 +321,16 @@ fn pawnMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: us
                 try moves.append(Move.irf(i, file, 4));  // cant promote
             }
             break :b rank - 1;
-        },
-        .Empty => unreachable,
+        }
     };
 
     if (board.emptyAt(file, targetRank)) {  // forward
         try maybePromote(moves, board, i, file, targetRank, piece.colour);
     }
-    if (file < 7 and board.get(file + 1, targetRank).colour == piece.colour.other()) {  // right
+    if (file < 7 and !board.emptyAt(file + 1, targetRank) and board.get(file + 1, targetRank).colour == piece.colour.other()) {  // right
         try maybePromote(moves, board, i, file + 1, targetRank, piece.colour);
     }
-    if (file > 0 and board.get(file - 1, targetRank).colour == piece.colour.other()) {  // left
+    if (file > 0 and !board.emptyAt(file - 1, targetRank) and board.get(file - 1, targetRank).colour == piece.colour.other()) {
         try maybePromote(moves, board, i, file - 1, targetRank, piece.colour);
     }
 }
@@ -388,30 +385,30 @@ fn maybePromote(moves: *std.ArrayList(Move), board: *const Board, fromIndex: usi
 // Returns true if this move was a capture or blocked by self so loop should break. 
 fn trySlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, checkFile: usize, checkRank: usize, piece: Piece) !bool {
     const check = board.get(checkFile, checkRank);
-    if (check.colour != piece.colour) {
-        // This was much faster than just doing them in order and sorting the list by material eval at the end. 
-        if (check.empty()){
-            try moves.append(Move.irf(i, checkFile, checkRank));
-        } else {
-            var toPush = Move.irf(i, checkFile, checkRank);
+    
+    if (check.empty()) {
+        try moves.append(Move.irf(i, checkFile, checkRank));
+        return false;
+    } else if (check.colour == piece.colour) { 
+        return true;
+    } else {
+        var toPush = Move.irf(i, checkFile, checkRank);
 
-            // Have this be a comptime param that gets passed down so I can easily benchmark. 
-            // This is a capture, we like that, put it first. Capturing more valuable pieces is also good. 
-            for (moves.items, 0..) |move, index| {
-                const holding = board.squares[toPush.to].kind.material();
-                const lookingAt = board.squares[move.to].kind.material();
-                if (holding == 0) break;
-                if (holding > lookingAt){
-                    moves.items[index] = toPush;
-                    toPush = move;
-                }
+        // Have this be a comptime param that gets passed down so I can easily benchmark. 
+        // This is a capture, we like that, put it first. Capturing more valuable pieces is also good. 
+        for (moves.items, 0..) |move, index| {
+            const holding = board.squares[toPush.to].kind.material();
+            const lookingAt = board.squares[move.to].kind.material();
+            if (holding == 0) break;
+            if (holding > lookingAt){
+                moves.items[index] = toPush;
+                toPush = move;
             }
-
-            try moves.append(toPush);
         }
 
-        return !check.empty();
-    } else return true;
+        try moves.append(toPush);
+        return true;
+    }
 }
 
 // TODO: This is suck!
@@ -477,7 +474,7 @@ fn kingMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: us
 
 fn tryHop(moves: *std.ArrayList(Move), board: *const Board, i: usize, checkFile: usize, checkRank: usize, piece: Piece) !void {
     const check = board.get(checkFile, checkRank);
-    if (check.colour != piece.colour) {
+    if (check.empty() or check.colour != piece.colour) {
         try moves.append(Move.irf(i, checkFile, checkRank));
     } 
 }

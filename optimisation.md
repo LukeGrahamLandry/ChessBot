@@ -21,6 +21,59 @@ sample <pid> -f zig-out/temp_profile_info.sample
 filtercalltree zig-out/temp_profile_info.sample
 ```
 
+## Bitboard tracking where each colour peieces are
+
+Just tracking made it a bit slower. I assume because of jump in set/unset bit switching over colour. 
+Using that in the move gen `for` loop to pick which squares have my pieces is slower than before. 
+
+Made Colour be a u1 instead of u2 and now empty is only stored in the Kind. That might let me update both black & white and just muliply by the colour bit so no jump. I thought it was much faster but I just messed it up and it was looking at fewer moves, its actaully the same speed.
+
+Tried writing it as bit ops, 
+
+```
+pub fn setBit(self: *Board, index: u6, colour: Colour) void {
+    const whiteBit: u64 = ~@intFromEnum(colour);
+    const blackBit: u64 = @intFromEnum(colour);
+    comptime assert(@intFromEnum(Colour.White) == 0 and @bitSizeOf(Colour) == 1);
+    self.whitePeicePositions |= (whiteBit << index);
+    self.blackPeicePositions |= (blackBit << index);
+}
+```
+
+```
+pub fn setBit(self: *Board, index: u6, colour: Colour) void {
+    switch (colour) {
+        .White => self.whitePeicePositions |= (one << index),
+        .Black => self.blackPeicePositions |= (one << index),
+    }
+}
+```
+
+Both work but the simple one is faster. I guess the optimiser knows best. 
+
+Tried using the bitboards for eval.
+
+```
+pub fn simpleEval(game: *const Board) i32 {
+    var result: i32 = 0;
+    var flag: u6 = 1;
+    for (0..64) |i| {
+        defer flag <<= 1;
+        const isEmpty = ((game.whitePeicePositions & flag) | (game.blackPeicePositions & flag)) == 0;   
+        if (isEmpty) continue;
+        const piece = game.squares[i];
+        switch (piece.colour) {
+            .White => result += piece.kind.material(),
+            .Black => result -= piece.kind.material(),
+        }
+    }
+    return result;
+}
+```
+
+But as expected that was slower because branching is really bad.  
+Maybe this whole thing was pointless because my 64 byte board fits in a cache line anyway so looping over it doing reads is really cheap. 
+
 ## Sorting moves. 
 
 

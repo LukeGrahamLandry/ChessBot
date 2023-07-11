@@ -19,24 +19,19 @@ pub const Kind = enum(u4) {
     }
 };
 
-// TODO: this could be one bit, the empty state is redundant. Is it helpful or does Piece need to be byte aligned in arrays anyway? 
-pub const Colour = enum(u2) { 
-    Empty = 0, Black = 1, White = 2, 
+pub const Colour = enum(u1) { 
+    White = 0, Black = 1, 
 
     pub fn other(self: Colour) Colour {
-        return switch (self) {
-            .White => .Black,
-            .Black => .White,
-            .Empty => unreachable,  // Must revisit all usages of this function if I make empty not a colour!
-        };
-    } 
+        return @enumFromInt(~@intFromEnum(self));
+    }
 };
 
 // This is packed with explicit padding so I can cast boards to byte arrays and pass to js. 
 pub const Piece = packed struct { 
     colour: Colour, 
     kind: Kind,
-    _pad: u2 = 0,
+    _pad: u3 = 0,
 
     pub fn fromChar(letter: u8) InvalidFenErr!Piece {
         return .{ 
@@ -67,7 +62,6 @@ pub const Piece = packed struct {
         return switch (self.colour) {
             .White => letter,
             .Black => std.ascii.toLower(letter),
-            .Empty => unreachable,
         };
     }
 
@@ -83,8 +77,7 @@ pub const Piece = packed struct {
         });
         return switch (self.colour) {
             .White => letter,
-            .Black => letter + 6,
-            .Empty => unreachable,
+            .Black => letter + 6
         };
     }
 
@@ -111,7 +104,7 @@ pub const Board = struct {
     blackPeicePositions: u64 = 0,
 
     pub fn set(self: *Board, file: u8, rank: u8, value: Piece) void {
-        const index: u64 = @intCast(rank*8 + file);
+        const index: u6 = @intCast(rank*8 + file);
         self.setBit(index, value.colour);
         self.squares[index] = value;
     }
@@ -130,7 +123,6 @@ pub const Board = struct {
         switch (colour) {
             .White => self.whitePeicePositions |= (one << index),
             .Black => self.blackPeicePositions |= (one << index),
-            .Empty => {},
         }
     }
 
@@ -138,7 +130,6 @@ pub const Board = struct {
         switch (colour) {
             .White => self.whitePeicePositions ^= (one << index),
             .Black => self.blackPeicePositions ^= (one << index),
-            .Empty => {},
         }
     }
 
@@ -146,24 +137,24 @@ pub const Board = struct {
         const index: u6 = @intCast(rank*8 + file);
         const flag = one << index;
         const isEmpty = ((self.whitePeicePositions & flag) | (self.blackPeicePositions & flag)) == 0;   
-        if (isEmpty) assert(self.get(file, rank).empty());
+        // assert(self.get(file, rank).empty() == isEmpty);
         return isEmpty;
     }
 
     pub fn play(self: *Board, move: Move) OldMove {
         const thisMove: OldMove = .{ .move = move, .taken = self.squares[move.to], .original = self.squares[move.from]};
         self.unsetBit(move.from, thisMove.original.colour);
-        self.unsetBit(move.to, thisMove.taken.colour);
+        if (!thisMove.taken.empty()) self.unsetBit(move.to, thisMove.taken.colour);
         self.setBit(move.to, thisMove.original.colour);
         
         switch (move.action) {
             .none => {
                 self.squares[move.to] = thisMove.original;
-                self.squares[move.from] = .{ .colour = .Empty, .kind = .Empty };
+                self.squares[move.from] = .{ .colour = undefined, .kind = .Empty };
             },
             .promote => |kind| {
                 self.squares[move.to] = .{ .colour = thisMove.original.colour, .kind = kind };
-                self.squares[move.from] = .{ .colour = .Empty, .kind = .Empty };
+                self.squares[move.from] = .{ .colour = undefined, .kind = .Empty };
             }
         }
         return thisMove;
@@ -175,7 +166,7 @@ pub const Board = struct {
         self.squares[move.move.from] = move.original;
         
         self.setBit(move.move.from, move.original.colour);
-        self.setBit(move.move.to, move.taken.colour);
+        if (!move.taken.empty()) self.setBit(move.move.to, move.taken.colour);
         self.unsetBit(move.move.to, move.original.colour);
     }
 

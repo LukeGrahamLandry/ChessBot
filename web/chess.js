@@ -130,14 +130,18 @@ function drawPiece(file, rank, pieceByte) {
     const offset = pieces[pieceByte];
     if (offset === undefined) {
         console.log("Engine gave invalid pieceByte (" + pieceByte + ")");
-        return;
+    } else {
+        const sX = offset * imgSquareSize;
+        let sY = 0;
+        if (pieceByte % 2 === 1){
+            sY = imgSquareSize;
+        }
+        ctx.drawImage(chessImg, sX, sY, imgSquareSize, imgSquareSize, file * squareSize, (7 - rank) * squareSize, squareSize, squareSize);
     }
-    const sX = offset * imgSquareSize;
-    let sY = 0;
-    if (pieceByte % 2 === 1){
-        sY = imgSquareSize;
-    }
-    ctx.drawImage(chessImg, sX, sY, imgSquareSize, imgSquareSize, file * squareSize, (7 - rank) * squareSize, squareSize, squareSize);
+    
+    // ctx.font = "12px Arial";
+    // ctx.fillStyle = "red";
+    // ctx.fillText(pieceByte, (file + 0.5) * squareSize, (7 - rank + 0.5) * squareSize);
 }
 
 function frToIndex(file, rank) {
@@ -190,18 +194,18 @@ const pieces = pieceArray();
 function pieceArray() {
     // These are the indexes of each type of piece in the pieces.svg image.
     const piecesMap = {
-        5: 5,
-        6: 5,
-        9: 2,
-        10: 2,
-        13: 3,
-        14: 3,
-        17: 4,
-        18: 4,
-        21: 1,
-        22: 1,
-        25: 0,
-        26: 0,
+        6: 3,
+        7: 3,
+        8: 4,
+        9: 4,
+        4: 2,
+        5: 2,
+        2: 5,
+        3: 5,
+        12: 0,
+        13: 0,
+        10: 1,
+        11: 1,
     };
     const pieces = new Array(26);  // TODO: Why does making this a Uint8Array hide the kings? that's offset zero
     for (let i = 0; i<27;i++) {
