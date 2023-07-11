@@ -106,9 +106,14 @@ const OldMove = struct {
 // TODO: flag for castling rights. Track en passant target squares. Count moves for draw. 
 pub const Board = struct {
     squares: [64] Piece = std.mem.zeroes([64] Piece),
+    // Just these being here makes it slower
+    whitePeicePositions: u64 = 0,
+    blackPeicePositions: u64 = 0,
 
     pub fn set(self: *Board, file: u8, rank: u8, value: Piece) void {
-        self.squares[rank*8 + file] = value;
+        const index: u64 = @intCast(rank*8 + file);
+        self.setBit(index, value.colour);
+        self.squares[index] = value;
     }
 
     pub fn get(self: *const Board, file: usize, rank: usize) Piece {
@@ -120,16 +125,44 @@ pub const Board = struct {
         return comptime try fromFEN(INIT_FEN);
     }
 
+    const one: u64 = 1;
+    pub fn setBit(self: *Board, index: u6, colour: Colour) void {
+        switch (colour) {
+            .White => self.whitePeicePositions |= (one << index),
+            .Black => self.blackPeicePositions |= (one << index),
+            .Empty => {},
+        }
+    }
+
+    pub fn unsetBit(self: *Board, index: u6, colour: Colour) void {
+        switch (colour) {
+            .White => self.whitePeicePositions ^= (one << index),
+            .Black => self.blackPeicePositions ^= (one << index),
+            .Empty => {},
+        }
+    }
+
+    pub fn emptyAt(self: *const Board, file: usize, rank: usize) bool {
+        const index: u6 = @intCast(rank*8 + file);
+        const flag = one << index;
+        const isEmpty = ((self.whitePeicePositions & flag) | (self.blackPeicePositions & flag)) == 0;   
+        if (isEmpty) assert(self.get(file, rank).empty());
+        return isEmpty;
+    }
+
     pub fn play(self: *Board, move: Move) OldMove {
         const thisMove: OldMove = .{ .move = move, .taken = self.squares[move.to], .original = self.squares[move.from]};
+        self.unsetBit(move.from, thisMove.original.colour);
+        self.unsetBit(move.to, thisMove.taken.colour);
+        self.setBit(move.to, thisMove.original.colour);
+        
         switch (move.action) {
             .none => {
                 self.squares[move.to] = thisMove.original;
                 self.squares[move.from] = .{ .colour = .Empty, .kind = .Empty };
             },
             .promote => |kind| {
-                const c = thisMove.original.colour;
-                self.squares[move.to] = .{ .colour = c, .kind = kind };
+                self.squares[move.to] = .{ .colour = thisMove.original.colour, .kind = kind };
                 self.squares[move.from] = .{ .colour = .Empty, .kind = .Empty };
             }
         }
@@ -140,8 +173,11 @@ pub const Board = struct {
     pub fn unplay(self: *Board, move: OldMove) void {
         self.squares[move.move.to] = move.taken;
         self.squares[move.move.from] = move.original;
+        
+        self.setBit(move.move.from, move.original.colour);
+        self.setBit(move.move.to, move.taken.colour);
+        self.unsetBit(move.move.to, move.original.colour);
     }
-    
 
     pub fn copyPlay(self: *const Board, move: Move) Board {
         var board = self.*;

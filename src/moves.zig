@@ -241,12 +241,25 @@ pub fn sortedMoves(board: *const Board, me: Colour, alloc: std.mem.Allocator) ![
 }
 
 // TODO: castling, en-passant, check
+const one: u64 = 1;
 pub fn possibleMoves(board: *const Board, me: Colour, alloc: std.mem.Allocator) ![] Move {
     assert(me != .Empty);
     var moves = try std.ArrayList(Move).initCapacity(alloc, 50);
-    for (board.squares, 0..) |piece, i| {
-        if (piece.colour != me) continue;  // bit board means fewer memory accesses 
-        
+    const mySquares = switch (me) {
+            .White => board.whitePeicePositions,
+            .Black => board.blackPeicePositions,
+            .Empty => unreachable,
+        };
+    for (0..64) |i| {
+        // TODO: think this is actually slower
+        const flag = one << @as(u6, @intCast(i));
+        if (mySquares & flag == 0) {
+            // assert(board.squares[i].colour != me);
+            continue;  // bit board means fewer memory accesses 
+        }
+        // assert(board.squares[i].colour == me);
+
+        const piece = board.squares[i];
         const file = i % 8;
         const rank = i / 8;
         switch (piece.kind) {
@@ -299,14 +312,14 @@ fn pawnMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: us
         // Asserts can't have a pawn at the end in real games because it would have promoted. 
         .White => w: {
             assert(rank < 7);  
-            if (rank == 1 and board.get(file, 2).empty() and board.get(file, 3).empty()) {  // forward two
+            if (rank == 1 and board.emptyAt(file, 2) and board.emptyAt(file, 3)) {  // forward two
                 try moves.append(Move.irf(i, file, 3));  // cant promote
             }
             break :w rank + 1;
         },
         .Black => b: {
             assert(rank > 0);
-            if (rank == 6 and board.get(file, 5).empty() and board.get(file, 4).empty()) {  // forward two
+            if (rank == 6 and board.emptyAt(file, 5) and board.emptyAt(file, 4)) {  // forward two
                 try moves.append(Move.irf(i, file, 4));  // cant promote
             }
             break :b rank - 1;
@@ -314,7 +327,7 @@ fn pawnMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: us
         .Empty => unreachable,
     };
 
-    if (board.get(file, targetRank).empty()) {  // forward
+    if (board.emptyAt(file, targetRank)) {  // forward
         try maybePromote(moves, board, i, file, targetRank, piece.colour);
     }
     if (file < 7 and board.get(file + 1, targetRank).colour == piece.colour.other()) {  // right
