@@ -26,7 +26,7 @@ pub const Move = struct {
 
     // TODO: method that factors out bounds check from try methods then calls this? make sure not to do twice in slide loops.
     fn irf(fromIndex: usize, toFile: usize, toRank: usize) Move {
-        std.debug.assert(fromIndex < 64 and toFile < 8 and toRank < 8);
+        // std.debug.assert(fromIndex < 64 and toFile < 8 and toRank < 8);
         return .{
             .from=@truncate(fromIndex),
             .to = @truncate(toRank*8 + toFile),
@@ -107,7 +107,7 @@ pub fn bestMove(game: *Board, me: Colour) !Move {
         _ = movesArena.reset(.retain_capacity);
     }
 
-    assert(bestMoves.items.len > 0 and bestMoves.items.len <= moves.len);
+    // assert(bestMoves.items.len > 0 and bestMoves.items.len <= moves.len);
     // You can't just pick a deterministic random because pruning might end up with a shorter list of equal moves. 
     // Always choosing the first should be fine because pruning just cuts off the search early.
     const choice = if (beDeterministicForTest) 0 else rng.uintLessThanBiased(usize,  bestMoves.items.len);
@@ -126,12 +126,12 @@ fn walkEval(game: *Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32, best
     // After alpha-beta, bigger starting cap, and not reallocating each move, this does make it faster. 
     // Makes Black move 4 end states go 16,000,000 -> 1,000,000
     // But now after better pruning it does almost nothing. 
-    if (memo.get(game.*)) |cached| {
-        if (cached.remaining >= remaining){
-            return if (me == .White) cached.eval else -cached.eval;
-        }
-        // TODO: should save the best move from that position at the old low depth and use it as the start for the search 
-    }
+    // if (memo.get(game.*)) |cached| {
+    //     if (cached.remaining >= remaining){
+    //         return if (me == .White) cached.eval else -cached.eval;
+    //     }
+    //     // TODO: should save the best move from that position at the old low depth and use it as the start for the search 
+    // }
 
     // Want to mutate values from parameters. 
     var bestWhiteEval = bestWhiteEvalIn;
@@ -167,13 +167,13 @@ fn walkEval(game: *Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32, best
     // TODO: I want to not reset the table between moves but then when it runs out of space it would be full of positions we don't need anymore.
     //       need to get rid of old ones somehow. maybe my own hash map that just overwrites on collissions? 
     // Don't need to check `and memo.capacity() > MEMO_CAPACITY` because we allocate the desired capacity up front.
-    const memoFull = memo.unmanaged.available == 0;
-    if (!memoFull) {
-        try memo.put(game.*, .{
-            .eval = if (me == .White) bestVal else -bestVal,
-            .remaining = remaining,
-        });
-    }
+    // const memoFull = memo.unmanaged.available == 0;
+    // if (!memoFull) {
+    //     try memo.put(game.*, .{
+    //         .eval = if (me == .White) bestVal else -bestVal,
+    //         .remaining = remaining,
+    //     });
+    // }
     
     return bestVal;
 }
@@ -200,6 +200,12 @@ fn checkAlphaBeta(bestVal: i32, me: Colour, bestWhiteEval: *i32, bestBlackEval: 
 
 /// Positive means white is winning. 
 pub fn simpleEval(game: *const Board) i32 {
+    // TODO: Calls to this function are clearly not optimised away, idk what's doing on. 
+    // assert(game.simpleEval == slowSimpleEval(game));
+    return game.simpleEval;
+}
+
+pub fn slowSimpleEval(game: *const Board) i32 {
     var result: i32 = 0;
     for (game.squares) |piece| {
         switch (piece.colour) {
@@ -309,14 +315,14 @@ fn pawnMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: us
     const targetRank = switch (piece.colour) {
         // Asserts can't have a pawn at the end in real games because it would have promoted. 
         .White => w: {
-            assert(rank < 7);  
+            // assert(rank < 7);  
             if (rank == 1 and board.emptyAt(file, 2) and board.emptyAt(file, 3)) {  // forward two
                 try moves.append(Move.irf(i, file, 3));  // cant promote
             }
             break :w rank + 1;
         },
         .Black => b: {
-            assert(rank > 0);
+            // assert(rank > 0);
             if (rank == 6 and board.emptyAt(file, 5) and board.emptyAt(file, 4)) {  // forward two
                 try moves.append(Move.irf(i, file, 4));  // cant promote
             }

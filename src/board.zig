@@ -33,6 +33,13 @@ pub const Piece = packed struct {
     kind: Kind,
     _pad: u3 = 0,
 
+    pub fn eval(self: Piece) i32 {
+        return switch (self.colour) {
+            .White => self.kind.material(),
+            .Black => -self.kind.material(),
+        };
+    }
+
     pub fn fromChar(letter: u8) InvalidFenErr!Piece {
         return .{ 
             .colour = if (std.ascii.isUpper(letter)) Colour.White else Colour.Black, 
@@ -102,11 +109,14 @@ pub const Board = struct {
     // Just these being here makes it slower
     whitePeicePositions: u64 = 0,
     blackPeicePositions: u64 = 0,
+    simpleEval: i32 = 0,
 
     pub fn set(self: *Board, file: u8, rank: u8, value: Piece) void {
         const index: u6 = @intCast(rank*8 + file);
         self.setBit(index, value.colour);
+        self.simpleEval -= self.squares[index].eval();
         self.squares[index] = value;
+        self.simpleEval += value.eval();
     }
 
     pub fn get(self: *const Board, file: usize, rank: usize) Piece {
@@ -143,6 +153,7 @@ pub const Board = struct {
 
     pub fn play(self: *Board, move: Move) OldMove {
         const thisMove: OldMove = .{ .move = move, .taken = self.squares[move.to], .original = self.squares[move.from]};
+        self.simpleEval -= thisMove.taken.eval();
         self.unsetBit(move.from, thisMove.original.colour);
         if (!thisMove.taken.empty()) self.unsetBit(move.to, thisMove.taken.colour);
         self.setBit(move.to, thisMove.original.colour);
@@ -153,7 +164,9 @@ pub const Board = struct {
                 self.squares[move.from] = .{ .colour = undefined, .kind = .Empty };
             },
             .promote => |kind| {
+                self.simpleEval -= thisMove.original.eval();
                 self.squares[move.to] = .{ .colour = thisMove.original.colour, .kind = kind };
+                self.simpleEval += self.squares[move.to].eval();
                 self.squares[move.from] = .{ .colour = undefined, .kind = .Empty };
             }
         }
@@ -162,9 +175,18 @@ pub const Board = struct {
 
     // Thought this would be faster because less copying but almost no difference. 
     pub fn unplay(self: *Board, move: OldMove) void {
+        self.simpleEval += move.taken.eval();
+        switch (move.move.action) {
+            .none => {},
+            .promote => |_| {
+                self.simpleEval -= self.squares[move.move.to].eval();
+                self.simpleEval += move.original.eval();
+            }
+        }
+        
         self.squares[move.move.to] = move.taken;
         self.squares[move.move.from] = move.original;
-        
+
         self.setBit(move.move.from, move.original.colour);
         if (!move.taken.empty()) self.setBit(move.move.to, move.taken.colour);
         self.unsetBit(move.move.to, move.original.colour);

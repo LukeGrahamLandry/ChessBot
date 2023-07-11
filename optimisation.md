@@ -21,6 +21,10 @@ sample <pid> -f zig-out/temp_profile_info.sample
 filtercalltree zig-out/temp_profile_info.sample
 ```
 
+## Incremental eval
+
+For leaf nodes, need to calculate the board's material eval. Instead of doing that again each time, incrementally update it each time you play or unplay a move. That's ~1.5x as fast. Which is enough that the memo table doesn't help anymore. 
+
 ## Bitboard tracking where each colour peieces are
 
 Just tracking made it a bit slower. I assume because of jump in set/unset bit switching over colour. 
