@@ -4,6 +4,7 @@ const Colour = @import("board.zig").Colour;
 const Board = @import("board.zig").Board;
 const Piece = @import("board.zig").Piece;
 const moves = @import("moves.zig").default;
+const genAllMoves = @import("moves.zig").genAllMoves;
 const Move = @import("moves.zig").Move;
 
 comptime { assert(@sizeOf(Piece) == @sizeOf(u8)); }
@@ -27,7 +28,7 @@ export fn restartGame() void {
 /// IN: internalBoard, boardView, nextColour
 /// OUT: internalBoard, boardView, nextColour
 export fn playRandomMove() i32 {
-   const allMoves = moves.possibleMoves(&internalBoard, nextColour, alloc) catch return 1;
+   const allMoves = genAllMoves.possibleMoves(&internalBoard, nextColour, alloc) catch return 1;
    defer alloc.free(allMoves);
    if (allMoves.len == 0) {
       return if (nextColour == .White) 2 else 3;
@@ -68,7 +69,7 @@ export fn getPossibleMoves(from: i32) u64 {
    const piece = internalBoard.squares[@intCast(from)];
    if (piece.empty()) return 0;
    var result: u64 = 0;
-   const allMoves = moves.possibleMoves(&internalBoard, piece.colour, alloc) catch return 1;
+   const allMoves = genAllMoves.possibleMoves(&internalBoard, piece.colour, alloc) catch return 1;
    defer alloc.free(allMoves);
    for (allMoves) |move| {
       if (@as(i32, move.from) == from) {
@@ -103,7 +104,7 @@ export fn getFen() u32 {
 
 /// IN: internalBoard
 export fn getMaterialEval() i32 {
-   return moves.simpleEval(&internalBoard);
+   return genAllMoves.simpleEval(&internalBoard);
 }
 
 // TODO: return win/lose
@@ -121,7 +122,7 @@ export fn playHumanMove(fromIndex: u32, toIndex: u32) i32 {
    }
 
    // Check if this is a legal move by the current player. 
-   const allMoves = moves.possibleMoves(&internalBoard, nextColour, alloc) catch return 1;
+   const allMoves = genAllMoves.possibleMoves(&internalBoard, nextColour, alloc) catch return 1;
    defer alloc.free(allMoves);
    for (allMoves) |m| {
       if (std.meta.eql(move, m)) break;

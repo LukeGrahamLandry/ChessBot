@@ -34,6 +34,10 @@ sample <pid> -f zig-out/temp_profile_info.sample
 filtercalltree zig-out/temp_profile_info.sample
 ```
 
+## rng is slow
+
+It's 1.5x faster to not carefully pick a random move to make when there is only one possible move. Fair enough, that was a skill issue on my part. 
+
 ## Incremental eval
 
 For leaf nodes, need to calculate the board's material eval. Instead of doing that again each time, incrementally update it each time you play or unplay a move. That's ~1.5x as fast. Which is enough that the memo table doesn't help anymore unless you increase the number of rounds played. So farther in to the game, the more the memo helps, which makes sense (1.6x for 50 moves but 1x for 10 moves). And that's resetting it after each full search, so farther in game is about getting more interesting positions not about precomputing stuff.  

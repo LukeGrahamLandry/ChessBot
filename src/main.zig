@@ -1,6 +1,6 @@
 const std = @import("std");
 const board = @import("board.zig");
-const moves = @import("moves.zig").default;
+const moves = @import("moves.zig");
 var allocatorT = std.heap.GeneralPurposeAllocator(.{}){};
 var alloc = allocatorT.allocator();
 
@@ -19,7 +19,7 @@ pub fn main() !void {
     const ss = try game.displayString(alloc);
     try stdout.print("{s}\n", .{ss});
     const start = std.time.nanoTimestamp();
-    for (0..15) |i| {
+    for (0..15) |i| {  // TODO: this number is half the one in bench.zig
         if (!try debugPlayOne(&game, i, .White, &rng, stdout)) {
             break;
         }
@@ -45,7 +45,7 @@ pub fn main() !void {
 fn debugPlayOne(game: *board.Board, i: usize, colour: board.Colour, rng: *std.rand.Random, stdout: anytype) !bool {
     _ = rng;
     try stdout.print("_________________\n", .{});
-    const allMoves = try moves.possibleMoves(game, colour, alloc);
+    const allMoves = try moves.genAllMoves.possibleMoves(game, colour, alloc);
     try stdout.print("{} has {} legal moves. \n", .{colour, allMoves.len});
     defer alloc.free(allMoves);
     if (allMoves.len == 0) {
@@ -53,7 +53,7 @@ fn debugPlayOne(game: *board.Board, i: usize, colour: board.Colour, rng: *std.ra
     }
 
     const start = std.time.nanoTimestamp();
-    const move = try moves.bestMove(game, colour);
+    const move = try moves.default.bestMove(game, colour);
     try stdout.print("Found move in {}ms\n", .{@divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms))});
     try stdout.print("{} move {} is {}\n", .{colour, i, move});
     _ = game.play(move);
@@ -71,6 +71,6 @@ fn debugPlayOne(game: *board.Board, i: usize, colour: board.Colour, rng: *std.ra
 }
 
 test {
-    // Runs tests in other files if the whole file is @import-ed somewhere in this file. 
-    std.testing.refAllDecls(@This());
+    // Runs tests in other files if there's a chain through @import-s somewhere in this file. 
+    std.testing.refAllDeclsRecursive(@This());
 }

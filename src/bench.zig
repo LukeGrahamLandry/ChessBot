@@ -5,6 +5,7 @@ var allocatorT = std.heap.GeneralPurposeAllocator(.{}){};
 var alloc = allocatorT.allocator();
 
 pub fn main() !void {
+    const total = Timer.start();
     const count = 30;
 
     std.debug.print("Warmup...", .{});
@@ -26,12 +27,14 @@ pub fn main() !void {
     const noMemo = comptime moves.Strategy(.{ .memoMapSizeMB=0, .beDeterministicForTest=true });
     const time = try checkGameTime(noMemo, count);
     var multiplier: f64 = @as(f64, @floatFromInt(first)) / @as(f64, @floatFromInt(time)); 
-    std.debug.print("- [   ]({d:.2}x) null finished in {}ms.\n", .{multiplier, time});
+    std.debug.print("- [   ]({d:.2}x) moves.HashAlgo.None finished in {}ms.\n", .{multiplier, time});
+
+    std.debug.print("Ran full bench in {}ms.\n", .{total.end()});
 }
 
 fn checkGameTime(comptime strategy: type, comptime moveCount: comptime_int) !i128 {
     var game = board.Board.initial();
-    const start = std.time.nanoTimestamp();
+    const t = Timer.start();
     var player = board.Colour.White;
     for (0..moveCount) |_| {
         const move = try strategy.bestMove(&game, player);
@@ -39,5 +42,17 @@ fn checkGameTime(comptime strategy: type, comptime moveCount: comptime_int) !i12
         player = player.other();
     }
     
-    return @divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms));
+    return t.end();
 }
+
+const Timer = struct {
+    t: i128,
+
+    fn start() Timer {
+        return .{ .t=std.time.nanoTimestamp() };
+    }
+
+    fn end(self: Timer) i128 {
+        return @divFloor((std.time.nanoTimestamp() - self.t), @as(i128, std.time.ns_per_ms));
+    }
+};
