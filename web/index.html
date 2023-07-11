@@ -6,7 +6,7 @@
   </head>
   <body style="background-color: gray;">
     <div style="text-align: center;">
-        <canvas id="board" style="background:url(assets/board.svg); width: 30%;"> why do you no are have canvas?! </canvas>
+        <canvas id="board" style="background:url(assets/board.svg); width: 30%;"> Your browser doesn't support canvas. Apperently it's 2004 where you live. </canvas>
         <div id="controls">
             <button onclick="handleRestart()"> Reset Board </button>
             <button onclick="handlePause()" id="pause" disabled> Pause </button>
@@ -31,15 +31,19 @@
     }
 
     var Engine;
-    var ticker = null;
     function handleWasmLoaded(wasm) {
         Engine = wasm.instance.exports;
         Engine.restartGame();
         wasmReady = true;
         window.startChessIfReady();
     }
-    WebAssembly.instantiateStreaming(fetch("main.wasm"), {}).then(handleWasmLoaded);
-
+    if (typeof WebAssembly === "object") {
+        WebAssembly.instantiateStreaming(fetch("main.wasm"), {}).then(handleWasmLoaded);
+    } else {
+        document.getElementById("controls").style.display = "none";
+        document.getElementById("loading").innerText = "Your browser doesn't support WASM. Apperently it's 2015 where you live.";
+    }
+    
     const chessImg = new Image();
     chessImg.src = "assets/pieces.svg";
     chessImg.onload = window.startChessIfReady;
@@ -47,9 +51,7 @@
 
     {
         let boardWidth = document.getElementById("board").width;
-        if (document.getElementById("board").height != boardWidth){
-            document.getElementById("board").height = boardWidth;
-        }
+        document.getElementById("board").height = boardWidth;
     }
 
     // TODO: put this in build.zig

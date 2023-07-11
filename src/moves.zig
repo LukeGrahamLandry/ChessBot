@@ -38,7 +38,7 @@ pub const Move = struct {
 pub fn Strategy(
     comptime maxDepth: comptime_int,  // TODO: should be runtime param to bestMove so wasm can change without increasing code size. 
     comptime doPruning: bool, 
-    comptime testingExpectOneBestMove: bool
+    comptime beDeterministicForTest: bool
 ) type {
     return struct {  // Start Strategy. 
 
@@ -108,10 +108,10 @@ pub fn bestMove(game: *Board, me: Colour) !Move {
     }
 
     assert(bestMoves.items.len > 0 and bestMoves.items.len <= moves.len);
-    // TODO: might crash on something that would be fine as I change the selection algorithim. 
-    if (testingExpectOneBestMove and bestMoves.items.len != 1) std.debug.panic("There were {} best moves, so one would be picked randomly. Bad test position.", .{bestMoves.items.len});
-    const choice = rng.uintLessThanBiased(usize,  bestMoves.items.len);
-    if (!isWasm and !testingExpectOneBestMove) std.debug.print("Checked {} end states. {} boards in memo table. {} moves with eval {}.\n", .{count, memo.count(), bestMoves.items.len, bestVal});
+    // You can't just pick a deterministic random because pruning might end up with a shorter list of equal moves. 
+    // Always choosing the first should be fine because pruning just cuts off the search early.
+    const choice = if (beDeterministicForTest) 0 else rng.uintLessThanBiased(usize,  bestMoves.items.len);
+    if (!isWasm and !beDeterministicForTest) std.debug.print("Checked {} end states. {} boards in memo table. {} moves with eval {}.\n", .{count, memo.count(), bestMoves.items.len, bestVal});
     // for (bestMoves.items, 0..) |move, i| {
     //     std.debug.print("{}. \n{s}\n", .{i, try game.copyPlay(move).displayString(alloc)});
     // } 
@@ -315,27 +315,56 @@ fn pawnMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: us
     };
 
     if (board.get(file, targetRank).empty()) {  // forward
-        try maybePromote(moves, i, file, targetRank, piece.colour);
+        try maybePromote(moves, board, i, file, targetRank, piece.colour);
     }
     if (file < 7 and board.get(file + 1, targetRank).colour == piece.colour.other()) {  // right
-        try maybePromote(moves, i, file + 1, targetRank, piece.colour);
+        try maybePromote(moves, board, i, file + 1, targetRank, piece.colour);
     }
     if (file > 0 and board.get(file - 1, targetRank).colour == piece.colour.other()) {  // left
-        try maybePromote(moves, i, file - 1, targetRank, piece.colour);
+        try maybePromote(moves, board, i, file - 1, targetRank, piece.colour);
     }
 }
 
-fn maybePromote(moves: *std.ArrayList(Move), fromIndex: usize, toFile: usize, toRank: usize, colour: Colour) !void {
+fn maybePromote(moves: *std.ArrayList(Move), board: *const Board, fromIndex: usize, toFile: usize, toRank: usize, colour: Colour) !void {
+    _ = board;
     if ((colour == .Black and toRank == 0) or (colour == .White and toRank == 7)){
-        // Trying all options does make it a bit slower. 
-        // TODO: insert in better order (queen at front of list, others at end of list).
-        const options = [_] Kind { .Queen, .Knight, .Rook, .Bishop }; 
+        // Just pushing all options does make it a bit slower. 
+        // This is even slower:
+        // var toPush: Move = base;
+        // for (moves.items, 0..) |move, index| {
+        //     const holding = switch (toPush.action) {
+        //         .none => board.squares[toPush.to].kind.material(),
+        //         .promote => |kind| kind.material(),
+        //     };
+        //     const lookingAt = switch (move.action) {
+        //         .none => board.squares[move.to].kind.material(),
+        //         .promote => |kind| kind.material(),
+        //     };
+        //     if (holding == 0) break;
+        //     if (holding > lookingAt){
+        //         moves.items[index] = toPush;
+        //         toPush = move;
+        //     }
+        // }
+
+        var move: Move = .{
+            .from=@truncate(fromIndex),
+            .to = @truncate(toRank*8 + toFile),
+            .action = .{.promote = .Queen }
+        };
+        // Queen promotions are so good that we don't even care about preserving order of the old stuff. 
+        // TODO: that's wrong cause mate
+        if (moves.items.len > 0) {
+            try moves.append(moves.items[0]);
+            moves.items[0] = move;
+        } else {
+            try moves.append(move);
+        }
+
+        // Technically you might want a knight but why ever anything else? For correctness (avoiding draws?) still want to consider everything.
+        const options = [_] Kind { .Knight, .Rook, .Bishop }; 
         for (options) |k| {
-            const move: Move =  .{
-                .from=@truncate(fromIndex),
-                .to = @truncate(toRank*8 + toFile),
-                .action = .{.promote = k }
-            };
+            move.action = .{.promote = k };
             try moves.append(move);
         }
     } else {
@@ -351,15 +380,13 @@ fn trySlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, checkFil
         if (check.empty()){
             try moves.append(Move.irf(i, checkFile, checkRank));
         } else {
-            // TODO: same for pawn promotions
             var toPush = Move.irf(i, checkFile, checkRank);
 
             // Have this be a comptime param that gets passed down so I can easily benchmark. 
             // This is a capture, we like that, put it first. Capturing more valuable pieces is also good. 
             for (moves.items, 0..) |move, index| {
-                // if (move.action == .promote) continue;
                 const holding = board.squares[toPush.to].kind.material();
-                const lookingAt = board.squares[moves.items[index].to].kind.material();
+                const lookingAt = board.squares[move.to].kind.material();
                 if (holding == 0) break;
                 if (holding > lookingAt){
                     moves.items[index] = toPush;
@@ -528,8 +555,7 @@ test "simple compare pruning" {
     try testPruning("8/p7/8/8/8/4b3/P2P4/8", .Black);
 
     try testPruning("7K/8/7B/8/8/8/Pq6/kN6", .White);
-    // TODO: this doesnt work because it thinks taking your king now or later are equally good? 
-    // try testPruning("7K/8/7B/8/8/8/Pq6/kN6", .Black);
+    try testPruning("7K/8/7B/8/8/8/Pq6/kN6", .Black);
 
     // TODO: it thinks a bunch of things, including hanging its queen, are eval 0. Also takes way too long to run without pruning. 
     // try testPruning("rn1q1bnr/1p2pkp1/2p2p1p/p2p1b2/1PP4P/3PQP2/P2KP1PB/RN3BNR", .White);

@@ -2,6 +2,7 @@ const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 const minMoveTimeMs = 500;  // When computer vs computer, if the engine is faster than this, it will wait before playing again. 
 
+let ticker = null;
 function tickGame() {
     const start = performance.now();
     const result = Engine.playNextMove();
@@ -145,6 +146,7 @@ function frToIndex(file, rank) {
 
 function renderBoard() {
     // TODO: doing this all the time is unnessary because you don't care most of the time and it makes typing one in annoying. 
+    //       but it will be helpful to add history.
     const fen = getFenFromEngine();
     document.getElementById("fen").value = fen;
     document.getElementById("mEval").innerText = Engine.getMaterialEval();
