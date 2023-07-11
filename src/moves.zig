@@ -36,6 +36,7 @@ pub fn bestMoveDepth1(game: *const Board, me: Colour, alloc: std.mem.Allocator) 
     return bestMoves.items[choice];
 }
 
+comptime { assert(@sizeOf(Piece) == @sizeOf(u8)); }
 const MemoMap = std.HashMap(Board, struct {
     eval: i32,
     remaining: u64
@@ -62,7 +63,9 @@ var upperArena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 // This gets reset after checking each top level move. 
 var movesArena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 
-pub fn bestMove(game: *const Board, me: Colour, comptime doPruning: bool, comptime expectOneBestMove: bool) !Move {
+// This has its own loop because I actually need to know which move is best which walkEval doesn't return. 
+// Also means I can reset the temp allocator more often. 
+pub fn bestMove(game: *Board, me: Colour, comptime doPruning: bool, comptime testingExpectOneBestMove: bool) !Move {
     var alloc = upperArena.allocator();
     defer _ = upperArena.reset(.retain_capacity);
     
@@ -82,8 +85,9 @@ pub fn bestMove(game: *const Board, me: Colour, comptime doPruning: bool, compti
     var bestVal: i32 = -1000000;
     var count: u64 = 0;
     for (moves) |move| {
-        var checkBoard = game.copyPlay(move);
-        const value = -try walkEval(&checkBoard, me.other(), MAX_DEPTH, bestWhiteEval, bestBlackEval, movesArena.allocator(), &count, &memo, doPruning);  // TODO: need to catch
+        const unMove = game.play(move);
+        defer game.unplay(unMove);
+        const value = -try walkEval(game, me.other(), MAX_DEPTH, bestWhiteEval, bestBlackEval, movesArena.allocator(), &count, &memo, doPruning);  // TODO: need to catch
         if (value > bestVal) {
             bestVal = value;
             bestMoves.clearRetainingCapacity();
@@ -97,9 +101,9 @@ pub fn bestMove(game: *const Board, me: Colour, comptime doPruning: bool, compti
 
     assert(bestMoves.items.len > 0 and bestMoves.items.len <= moves.len);
     // TODO: might crash on something that would be fine as I change the selection algorithim. 
-    if (expectOneBestMove and bestMoves.items.len != 1) std.debug.panic("There were {} best moves, so one would be picked randomly.", .{bestMoves.items.len});
+    if (testingExpectOneBestMove and bestMoves.items.len != 1) std.debug.panic("There were {} best moves, so one would be picked randomly. Bad test position.", .{bestMoves.items.len});
     const choice = rng.uintLessThanBiased(usize,  bestMoves.items.len);
-    if (!isWasm and !expectOneBestMove) std.debug.print("Checked {} end states. {} boards in memo table. {} moves with eval {}.\n", .{count, memo.count(), bestMoves.items.len, bestVal});
+    if (!isWasm and !testingExpectOneBestMove) std.debug.print("Checked {} end states. {} boards in memo table. {} moves with eval {}.\n", .{count, memo.count(), bestMoves.items.len, bestVal});
     // for (bestMoves.items, 0..) |move, i| {
     //     std.debug.print("{}. \n{s}\n", .{i, try game.copyPlay(move).displayString(alloc)});
     // } 
@@ -111,9 +115,10 @@ pub fn bestMove(game: *const Board, me: Colour, comptime doPruning: bool, compti
 // TODO: I don't trust that I'm doing this right, need to test it against not pruning and make sure it likes the same moves (make sure to disable random). 
 // TODO: when hit depth, keep going but only look at captures
 // The alpha-beta values effect lower layers, not higher layers, so passed by value. 
-fn walkEval(game: *const Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, count: *u64, memo: *MemoMap, comptime doPruning: bool) MoveErr!i32 {
+fn walkEval(game: *Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, count: *u64, memo: *MemoMap, comptime doPruning: bool) MoveErr!i32 {
     // After alpha-beta, bigger starting cap, and not reallocating each move, this does make it faster. 
     // Makes Black move 4 end states go 16,000,000 -> 1,000,000
+    // But now after better pruning it does almost nothing. 
     if (memo.get(game.*)) |cached| {
         if (cached.remaining >= remaining){
             return if (me == .White) cached.eval else -cached.eval;
@@ -131,12 +136,13 @@ fn walkEval(game: *const Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32
     
     var bestVal: i32 = -1000000;
     for (moves) |move| {
-        var checkBoard = game.copyPlay(move);
+        const unMove = game.play(move);
+        defer game.unplay(unMove);
         const value = if (remaining == 0) e: {
             if (!isWasm) count.* += 1;
-            break :e if (me == .White) simpleEval(&checkBoard) else -simpleEval(&checkBoard);
+            break :e if (me == .White) simpleEval(game) else -simpleEval(game);
         } else r: {
-            const v = walkEval(&checkBoard, me.other(), remaining - 1, bestWhiteEval, bestBlackEval, alloc, count, memo, doPruning) catch |err| {
+            const v = walkEval(game, me.other(), remaining - 1, bestWhiteEval, bestBlackEval, alloc, count, memo, doPruning) catch |err| {
                 switch (err) {
                     error.OutOfMemory => return err,
                     error.GameOver => break :r 1000000,
@@ -239,10 +245,10 @@ fn toIndex(file: usize, rank: usize) u6  {
     return @truncate(rank*8 + file);
 }
 
-const MoveSortContext = struct { 
-    me: Colour,
-    board: Board,
-};
+// const MoveSortContext = struct { 
+//     me: Colour,
+//     board: Board,
+// };
 
 // This is used as a lessThan function but is flipped because std sorts in ascending order. 
 // fn bestMovesFirst(ctx: MoveSortContext, a: Move, b: Move) bool {
@@ -360,6 +366,7 @@ fn trySlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, checkFil
             // TODO: same for pawn promotions
             var toPush = Move.irf(i, checkFile, checkRank);
 
+            // Have this be a comptime param that gets passed down so I can easily benchmark. 
             // This is a capture, we like that, put it first. Capturing more valuable pieces is also good. 
             for (moves.items, 0..) |move, index| {
                 const holding = board.squares[toPush.to].kind.material();
@@ -466,15 +473,40 @@ fn knightMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: 
     }
 }
 
-// TODO: test that reads move data base and makes sure every move seems valid to me. 
 var tst = std.testing.allocator;
 
-test "count starting moves" {
-    var game = Board.initial();
-    const allMoves = try possibleMoves(&game, .White, tst);
+fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize) !usize {
+    if (remainingDepth == 0) return 1;
+    const allMoves = try possibleMoves(game, me, tst);
     defer tst.free(allMoves);
-    // These parameters are backwards because it can't infer type from a comptime_int. This seems dumb. 
-    try std.testing.expectEqual(allMoves.len, 20);
+    if (remainingDepth == 1) return allMoves.len;
+
+    var total: usize = 0;
+    for (allMoves) |move| {
+        const unMove = game.play(move);
+        defer game.unplay(unMove);
+        total += try countPossibleGames(game, me.other(), remainingDepth - 1);
+    }
+
+    return total;
+}
+
+// TODO: Super slow. memo or count as you go down instead of redoing work all the time. 
+// TODO: can't go farther until it knows about checkmate
+// Tests that the move generation gets the right number of nodes at each depth. 
+// Also exercises the Board.unplay function.
+test "count possible games" {
+    // https://en.wikipedia.org/wiki/Shannon_number
+    const possibleGames = [_] usize { 20, 400, 8902	};
+
+    var game = Board.initial();
+    for (possibleGames, 1..) |expected, i| {
+        const start = std.time.nanoTimestamp();
+        _ = start;
+        // These parameters are backwards because it can't infer type from a comptime_int. This seems dumb. 
+        try std.testing.expectEqual(countPossibleGames(&game, .White, i), expected);
+        // std.debug.print("Explored Depth {} in {}ms.\n", .{i, @divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms))});
+    }
 }
 
 fn testPruning(fen: [] const u8, me: Colour) !void {
@@ -483,13 +515,19 @@ fn testPruning(fen: [] const u8, me: Colour) !void {
     const fast = try bestMove(&game, me, true, true);
 
     if (!std.meta.eql(slow, fast)){
+        // Leaks here don't really matter but freeing prevents error spam. 
         const startBoard = try game.displayString(tst);
+        defer tst.free(startBoard);
         const slowBoard = try game.copyPlay(slow).displayString(tst);
+        defer tst.free(slowBoard);
         const fastBoard = try game.copyPlay(fast).displayString(tst);
-        std.debug.panic("Moves did not match.\nInitial ({} to move):\n{s}\n\nWithout pruning: \n{s}\nWith pruning: \n{s}", .{me, startBoard, slowBoard, fastBoard});
+        defer tst.free(fastBoard);
+        std.debug.print("Moves did not match.\nInitial ({} to move):\n{s}\n\nWithout pruning: \n{s}\nWith pruning: \n{s}", .{me, startBoard, slowBoard, fastBoard});
+        return error.TestFailed;
     }
 }
 
+// Tests that alpha-beta pruning chooses the same best move as a raw search. 
 test "simple compare pruning" {
     try testPruning("8/p7/8/8/8/4b3/P2P4/8", .White);
     try testPruning("8/p7/8/8/8/4b3/P2P4/8", .Black);
@@ -504,26 +542,3 @@ test "simple compare pruning" {
     try testPruning("7K/7p/8/8/8/r1q5/1P5P/k7", .White); // multiple best moves for black. 
     
 }
-
-// https://www.chess.com/forum/view/fun-with-chess/what-chess-position-has-the-most-number-of-possible-moves?page=2
-
-// test "many moves some promotions" {
-//     var game = try Board.fromFEN("R6R/3Q4/1Q4Q1/4Q3/2Q4Q/Q4Q2/pp1Q4/kBNNK1B1");
-//     const allMoves = try possibleMoves(&game, .White, tst);
-//     defer tst.free(allMoves);
-//     try std.testing.expectEqual(allMoves.len, 218);
-// }
-
-// test "many moves many promotions" {
-//     var game = try Board.fromFEN("1nnrrbbq/PPPPPPPP/1R6/6K1/Q7/2BNNB2/7R/6k1");
-//     const allMoves = try possibleMoves(&game, .White, tst);
-//     defer tst.free(allMoves);
-//     try std.testing.expectEqual(allMoves.len, 139);
-// }
-
-// test "many moves" {
-//     var game = try Board.fromFEN("r6R/2pbpBk1/1P1B1N2/6q1/4Q3/2nn1p2/1PK1NbP1/R6r");
-//     const allMoves = try possibleMoves(&game, .White, tst);
-//     defer tst.free(allMoves);
-//     try std.testing.expectEqual(allMoves.len, 181);
-// }

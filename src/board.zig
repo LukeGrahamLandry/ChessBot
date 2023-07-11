@@ -93,13 +93,15 @@ pub const Piece = packed struct {
     }
 };
 
-comptime {
-    assert(@bitSizeOf(Piece) == 8);  // For js
-}
-
 const ASCII_ZERO_CHAR: u8 = 48;
 pub const INIT_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
 const InvalidFenErr = error { InvalidFen };
+
+const OldMove = struct {
+    move: Move,
+    taken: Piece,
+    original: Piece,
+};
 
 // TODO: flag for castling rights. Track en passant target squares. Count moves for draw. 
 pub const Board = struct {
@@ -118,24 +120,32 @@ pub const Board = struct {
         return comptime try fromFEN(INIT_FEN);
     }
 
-    pub fn play(self: *Board, move: Move) void {
+    pub fn play(self: *Board, move: Move) OldMove {
+        const thisMove: OldMove = .{ .move = move, .taken = self.squares[move.to], .original = self.squares[move.from]};
         switch (move.action) {
             .none => {
-                self.squares[move.to] = self.squares[move.from];
+                self.squares[move.to] = thisMove.original;
                 self.squares[move.from] = .{ .colour = .Empty, .kind = .Empty };
             },
             .promote => |kind| {
-                const c = self.squares[move.from].colour;
+                const c = thisMove.original.colour;
                 self.squares[move.to] = .{ .colour = c, .kind = kind };
                 self.squares[move.from] = .{ .colour = .Empty, .kind = .Empty };
             }
         }
+        return thisMove;
     }
 
-    // TODO: have an unplay instead of copying all the time. memcpy(64) is cheap but then surely swapping bytes is basically free. play can return the extra info you need 
+    // Thought this would be faster because less copying but almost no difference. 
+    pub fn unplay(self: *Board, move: OldMove) void {
+        self.squares[move.move.to] = move.taken;
+        self.squares[move.move.from] = move.original;
+    }
+    
+
     pub fn copyPlay(self: *const Board, move: Move) Board {
         var board = self.*;
-        board.play(move);
+        _ = board.play(move);
         return board;
     }
 

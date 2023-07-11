@@ -11,21 +11,12 @@ function tickGame() {
     let msg;
     switch (result) {
         case 0:
-            if (time < minMoveTimeMs) ticker = window.setTimeout(tickGame, minMoveTimeMs - time);
-            else ticker = window.setTimeout(tickGame, 1);
+            // TODO: do this if computer vs computer.  
+            // if (time < minMoveTimeMs) ticker = window.setTimeout(tickGame, minMoveTimeMs - time);
+            // else ticker = window.setTimeout(tickGame, 1);
             return;
-        case 1:
-            // TODO: give zig a way to return the type of error and don't resuming the game in a broken state. 
-            msg = "Engine reported error.";
-            break;
-        case 2:
-            msg = "White cannot move.";
-            break;
-        case 3:
-            msg = "Black cannot move.";
-            break;
         default:
-            msg = "Invalid engine response: " + result;
+            reportEngineMsg(result);
             break;
     }
     document.getElementById("resume").disabled = true;
@@ -46,7 +37,7 @@ function handlePause(){
 }
 
 function handleResume(){
-    tickGame();
+    // tickGame();
     document.getElementById("resume").disabled = true;
     document.getElementById("pause").disabled = false;
 }
@@ -65,7 +56,7 @@ function handleSetFromFen(){
 function getFenFromEngine() {
     const length = Engine.getFen();
     if (length === 0) {
-        alert("Engine Error.");
+        reportEngineMsg(1);
         return;
     }
     const fenBuffer = new Uint8Array(Engine.memory.buffer, Engine.fenView, length);
@@ -73,25 +64,75 @@ function getFenFromEngine() {
     return fenString;
 }
 
+let clicked = null;
 function handleCanvasClick(e) {
-    let squareSize = ctx.canvas.getBoundingClientRect().width / 8;
-    let file = Math.floor(e.offsetX / squareSize);
-    let rank = 7 - Math.floor(e.offsetY / squareSize);
-    clicked = [file, rank];  // TODO: dont like this. use index
-    renderBoard();
+    const squareSize = ctx.canvas.getBoundingClientRect().width / 8;
+    const file = Math.floor(e.offsetX / squareSize);
+    const rank = 7 - Math.floor(e.offsetY / squareSize);
+    if (clicked === null){
+        clicked = [file, rank];  // TODO: dont like this. use index or be object
+        renderBoard();
+    } else {
+        const fromIndex = frToIndex(clicked[0], clicked[1]);
+        const toIndex = frToIndex(file, rank);
+
+        // TODO: make sure trying to move while the engine is thinking doesn't let you use the wrong colour. 
+        const result = Engine.playHumanMove(fromIndex, toIndex);
+        switch (result) {
+            case 0:
+                clicked = null;
+                renderBoard();
+                setTimeout(tickGame, 25);  // Give it a chance to render.
+                break;
+            case 4: // Invalid move. 
+                clicked = [file, rank];
+                renderBoard();
+                break;
+            default:
+                reportEngineMsg(result);
+                break;
+        }
+    }
+}
+
+function reportEngineMsg(result) {
+    switch (result) {
+        case 0:
+            msg = "Ok (???)";
+            break;
+        case 1:
+            // TODO: give zig a way to return the type of error. 
+            msg = "Engine error.";
+            clearInterval(ticker);
+            document.getElementById("controls").style.display = "none";
+            break;
+        case 2:
+            msg = "White cannot move.";
+            break;
+        case 3:
+            msg = "Black cannot move.";
+            break;
+        case 4: 
+            msg = "Invalid move (???)";
+            break;
+        default:
+            msg = "Invalid engine response: " + result;
+            break;
+    }
+    document.getElementById("letters").innerText += "\n" + msg;
 }
 
 function drawPiece(file, rank, pieceByte) {
     if (pieceByte === 0) return;
 
-    let squareSize = document.getElementById("board").width / 8;
-    let imgSquareSize = chessImg.width / 6;
-    let offset = pieces[pieceByte];
+    const squareSize = document.getElementById("board").width / 8;
+    const imgSquareSize = chessImg.width / 6;
+    const offset = pieces[pieceByte];
     if (offset === undefined) {
         console.log("Engine gave invalid pieceByte (" + pieceByte + ")");
         return;
     }
-    let sX = offset * imgSquareSize;
+    const sX = offset * imgSquareSize;
     let sY = 0;
     if (pieceByte % 2 === 1){
         sY = imgSquareSize;
@@ -99,13 +140,17 @@ function drawPiece(file, rank, pieceByte) {
     ctx.drawImage(chessImg, sX, sY, imgSquareSize, imgSquareSize, file * squareSize, (7 - rank) * squareSize, squareSize, squareSize);
 }
 
+function frToIndex(file, rank) {
+    return rank*8 + file;
+}
+
 function renderBoard() {
     // TODO: doing this all the time is unnessary because you don't care most of the time and it makes typing one in annoying. 
-    let fen = getFenFromEngine();
+    const fen = getFenFromEngine();
     document.getElementById("fen").value = fen;
     document.getElementById("mEval").innerText = Engine.getMaterialEval();
     // TODO: If you go back to a previous state and then resume, it makes different moves because the rng state changed. idk if that's good or bad 
-    let history = document.getElementById("history");
+    const history = document.getElementById("history");
     history.value += "\n" + fen;
     history.scrollTop = history.scrollHeight;
 
@@ -114,9 +159,9 @@ function renderBoard() {
     if (clicked != null) {
         fillSquare(clicked[0], clicked[1], "yellow");
         // The 'n' suffix makes it use BigInt instead of doubles so I can use it as a u64 bit flag. 
-        let targetSquaresFlag = Engine.getPossibleMoves(clicked[1]*8 + clicked[0]);
+        const targetSquaresFlag = Engine.getPossibleMoves(frToIndex(clicked[0], clicked[1]));
         for (let i=0n;i<64n;i++) {
-            let flag = 1n << i;
+            const flag = 1n << i;
             if (targetSquaresFlag & flag) {
                 fillSquare(Number(i % 8n), Number(i / 8n), "lightblue");
             }
@@ -124,7 +169,7 @@ function renderBoard() {
     }
 
     // TODO: why do I need to remake this slice every time?
-    let board = new Uint8Array(Engine.memory.buffer, Engine.boardView);
+    const board = new Uint8Array(Engine.memory.buffer, Engine.boardView);
     for (let rank=0;rank<8;rank++){
         for (let file=0;file<8;file++){
             const p = board[rank*8 + file];
@@ -134,7 +179,7 @@ function renderBoard() {
 }
 
 function fillSquare(file, rank, colour) {
-    let squareSize = document.getElementById("board").width / 8;
+    const squareSize = document.getElementById("board").width / 8;
     ctx.fillStyle = colour;
     ctx.fillRect(file*squareSize, (7-rank)*squareSize, squareSize, squareSize);
 }
@@ -159,7 +204,7 @@ function pieceArray() {
     };
     const pieces = new Array(26);  // TODO: Why does making this a Uint8Array hide the kings? that's offset zero
     for (let i = 0; i<27;i++) {
-        let c = piecesMap[i];
+        const c = piecesMap[i];
         if (c !== undefined) {
             pieces[i] = c;
         }

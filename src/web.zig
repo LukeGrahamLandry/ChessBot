@@ -2,8 +2,10 @@ const std = @import("std");
 const assert = std.debug.assert;
 const Colour = @import("board.zig").Colour;
 const Board = @import("board.zig").Board;
+const Piece = @import("board.zig").Piece;
 const moves = @import("moves.zig");
 
+comptime { assert(@sizeOf(Piece) == @sizeOf(u8)); }
 var internalBoard = Board.initial();
 export var boardView: [64] u8 = @bitCast(Board.initial().squares);
 var nextColour: Colour = .White;
@@ -32,7 +34,7 @@ export fn playRandomMove() i32 {
 
    const choice = rng.uintLessThanBiased(usize, allMoves.len);
    const move = allMoves[choice];
-   internalBoard.play(move);
+   _ = internalBoard.play(move);
 
    boardView = @bitCast(internalBoard.squares);
    nextColour = nextColour.other();
@@ -52,7 +54,7 @@ export fn playNextMove() i32 {
       }
    };
 
-   internalBoard.play(move);
+   _ = internalBoard.play(move);
    boardView = @bitCast(internalBoard.squares);
    nextColour = nextColour.other();
    return 0;
@@ -86,7 +88,7 @@ export fn setFromFen(length: u32) bool {
    return true;
 }
 
-// Returns the length of the string or 0 if error. 
+/// Returns the length of the string or 0 if error. 
 /// IN: internalBoard
 /// OUT: fenView
 // TODO: unnecessary allocation just to memcpy. 
@@ -101,4 +103,28 @@ export fn getFen() u32 {
 /// IN: internalBoard
 export fn getMaterialEval() i32 {
    return moves.simpleEval(&internalBoard);
+}
+
+// TODO: return win/lose
+/// Returns 0->continue, 1->error, 2->black wins, 3->white wins, 4->invalid move. 
+/// IN: internalBoard, boardView, nextColour
+/// OUT: internalBoard, boardView, nextColour
+export fn playHumanMove(fromIndex: u32, toIndex: u32) i32 {
+   if (fromIndex >= 64 or toIndex >= 64) return 1;
+   // TODO: promotion
+   const move: moves.Move  = .{ .from=@intCast(fromIndex), .to=@intCast(toIndex), .action=.none };
+
+   // Check if this is a legal move by the current player. 
+   const allMoves = moves.possibleMoves(&internalBoard, nextColour, alloc) catch return 1;
+   defer alloc.free(allMoves);
+   for (allMoves) |m| {
+      if (std.meta.eql(move, m)) break;
+   } else {
+      return 4;
+   }
+
+   _ = internalBoard.play(move);
+   boardView = @bitCast(internalBoard.squares);
+   nextColour = nextColour.other();
+   return 0;
 }

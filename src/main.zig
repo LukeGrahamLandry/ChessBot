@@ -87,7 +87,7 @@ fn debugPlayOne(game: *board.Board, i: usize, colour: board.Colour, rng: *std.ra
     const move = try moves.bestMove(game, colour, true, false);
     try stdout.print("Found move in {}ms\n", .{@divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms))});
     try stdout.print("{} move {} is {}\n", .{colour, i, move});
-    game.play(move);
+    _ = game.play(move);
 
 
     const ss = try game.toFEN(alloc);
@@ -102,6 +102,6 @@ fn debugPlayOne(game: *board.Board, i: usize, colour: board.Colour, rng: *std.ra
 }
 
 test {
-    _ = @import("board.zig");
-    _ = @import("moves.zig");
+    // Runs tests in other files if the whole file is @import-ed somewhere in this file. 
+    std.testing.refAllDecls(@This());
 }
