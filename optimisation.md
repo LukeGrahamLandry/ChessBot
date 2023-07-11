@@ -1,14 +1,27 @@
+## Ideas
+
+- Know about check, mate, castling, en-passant, and draws!
+- Support extra fen string info. 
+- Be able to run tests in parrallel. Write custom test runner that just uses seperate processes? 
+- Have the UI show lines for debugging
+- Give yourself extra depth only looking at captures because it thinks hanging pieces on move n+1 is fine. 
+- Opening book. Maybe order by board hash and binary search because normal hashmap wastes space to avoid collissions. Only bother with lookup in first x moves. 
+- Endgame book. ^
+- Partial heap sort for move ordering. Then I can have a more complex eval function? 
+- Use n-1 depth for move ordering of n search. Then you can cancel at anytime and use previous results. 
+- Run engine on another thread so it doesn't hang the UI and can be canceled when it goes to long. Put a flag somewhere that it checks to break out of the recursion. 
+
 ## Methods note
 
 "~2x as fast" means `old_time/new_time == 2`. 
 
 - Not very scientific because I just run a few times then take one number. The improvements are so large/consistant that it feels trustworthy. Should make something that runs it multiple times and averages (throw away outliers?) eventually. 
-- Getting numbers by running 5 moves each playing against itself. Which means I'm measuring the beginning of the game where not a lot of captures and should probably be openings book anyway. So should revise that to more interesting position. But depth 4 from move 5 is probably like a real game state. 
+- Was originally getting numbers by running 5 moves each playing against itself. Which means I'm measuring the beginning of the game where not a lot of captures and should probably be openings book anyway. So should revise that to more interesting position. But depth 4 from move 5 is probably like a real game state.  
 - Currently benchmarking on native (m1), should do in wasm if that's what I care about. 
 - I've been increasing depth as it gets faster which might bias it but at the very least means absolute ms numbers can't be compared accoss runs.
 - Make sure logging doesn't become a bottle neck.  
 
-Interesting that the first run of a new executable is often a bit slower (time does not include compile!), something caching it?  
+Interesting that the first run of a new executable is often a bit slower (time does not include compile!), something caching it? 
 
 ### Profiling 
 
@@ -23,7 +36,11 @@ filtercalltree zig-out/temp_profile_info.sample
 
 ## Incremental eval
 
-For leaf nodes, need to calculate the board's material eval. Instead of doing that again each time, incrementally update it each time you play or unplay a move. That's ~1.5x as fast. Which is enough that the memo table doesn't help anymore. 
+For leaf nodes, need to calculate the board's material eval. Instead of doing that again each time, incrementally update it each time you play or unplay a move. That's ~1.5x as fast. Which is enough that the memo table doesn't help anymore unless you increase the number of rounds played. So farther in to the game, the more the memo helps, which makes sense (1.6x for 50 moves but 1x for 10 moves). And that's resetting it after each full search, so farther in game is about getting more interesting positions not about precomputing stuff.  
+
+And after that, the bitboards seem slightly faster instead of slightly slower. I think the bitboard punishes the hash table (I checked that hash funcs aren't using the whole struct, just squares array so more data isnt hurting it directly). 
+
+Thought that might make the full sort good now that simpleEval is faster but no. 
 
 ## Bitboard tracking where each colour peieces are
 

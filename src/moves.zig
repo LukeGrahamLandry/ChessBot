@@ -6,8 +6,6 @@ const Colour = @import("board.zig").Colour;
 const Piece = @import("board.zig").Piece;
 const Kind = @import("board.zig").Kind;
 
-var notTheRng = std.rand.DefaultPrng.init(0);
-var rng = notTheRng.random();
 const MoveErr = error { GameOver, OutOfMemory };
 const isWasm = @import("builtin").target.isWasm();
 
@@ -35,36 +33,64 @@ pub const Move = struct {
     }
 };
 
-pub fn Strategy(
-    comptime maxDepth: comptime_int,  // TODO: should be runtime param to bestMove so wasm can change without increasing code size. 
-    comptime doPruning: bool, 
-    comptime beDeterministicForTest: bool
-) type {
+pub const HashAlgo = enum {
+    // Slower because it does individual struct parts?
+    StdAuto,
+    // These all operate on the byte array of squares.
+    Wyhash, // same algo as auto
+    Fnv1a_64,
+    XxHash64,
+    Murmur2_64,
+    CityHash64,
+};
+
+pub const StratOpts = struct {
+    maxDepth: comptime_int = 4,  // TODO: should be runtime param to bestMove so wasm can change without increasing code size. 
+    doPruning: bool = true, 
+    beDeterministicForTest: bool = false,  // Interesting that it's much faster with this off. Rng/printing is slow? 
+    memoMapSizeMB: usize = 20,  // Zero means don't use memo map at all. 
+    memoMapFillPercent: usize = 60,  // Affects usable map capacity but not memory usage. 
+    hashAlgo: HashAlgo = .CityHash64,
+};
+
+// TODO: script that tests different variations (compare speed and run correctness tests). 
+pub fn Strategy(comptime opts: StratOpts) type {
     return struct {  // Start Strategy. 
 
 comptime { 
     assert(@sizeOf(Piece) == @sizeOf(u8)); 
+    assert(opts.memoMapFillPercent <= 100);
 }
+
+// Putting these in the struct with a fixed seed means benchmarks trying different strategies will play the same game.
+var notTheRng = std.rand.DefaultPrng.init(0);
+var rng = notTheRng.random();
 
 const MemoMap = std.HashMap(Board, struct {
     eval: i32,
-    remaining: u64
+    remaining: u32
 }, struct {
-    // TODO: auto test different algos, don't include padding bytes, try Zobrist. 
-    pub fn hash(_: @This(), key: Board) u64 {
+    // TODO: don't include padding bytes, try Zobrist. 
+    pub fn hash(ctx: @This(), key: Board) u64 {
         const data = std.mem.asBytes(&key.squares);  
-        return std.hash.CityHash64.hash(data); 
+        return switch (comptime opts.hashAlgo) {
+            .StdAuto => (comptime std.hash_map.getAutoHashFn(Board, @This()))(ctx, key), 
+            .Wyhash => std.hash.Wyhash.hash(0, data),
+            .Fnv1a_64 => std.hash.Fnv1a_64.hash(data),
+            .XxHash64 => std.hash.XxHash64.hash(0, data),
+            .Murmur2_64 => std.hash.Murmur2_64.hash(data),
+            .CityHash64 => std.hash.CityHash64.hash(data),
+        };
     }
     
     pub fn eql(_: @This(), a: Board, b: Board) bool {
         return std.mem.eql(u8, std.mem.asBytes(&a.squares), std.mem.asBytes(&b.squares));
     }
-}, FILL_PERCENT);  
+}, opts.memoMapFillPercent);  
 
+const useMemoMap = opts.memoMapSizeMB > 0 and opts.memoMapFillPercent > 0;
 // TODO: this wont be exact because capacity goes to the next highest power of two. 
-const MEMO_MAX_MB = 20;  // TODO: make this configurable 
-const MEMO_CAPACITY = (MEMO_MAX_MB * 1024 * 1024) / @sizeOf(MemoMap.KV) * 100 / FILL_PERCENT;
-const FILL_PERCENT = 60;  // TODO: script to test different values 
+const MEMO_CAPACITY = if (useMemoMap) (opts.memoMapSizeMB * 1024 * 1024) / @sizeOf(MemoMap.KV) * 100 / opts.memoMapFillPercent else 0;
 
 // This gets reset after each whole decision is done.
 var upperArena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -84,23 +110,24 @@ pub fn bestMove(game: *Board, me: Colour) !Move {
     defer bestMoves.deinit();
 
     var memo = MemoMap.init(alloc);
-    try memo.ensureTotalCapacity(MEMO_CAPACITY);
+    if (useMemoMap) try memo.ensureTotalCapacity(MEMO_CAPACITY);
     defer memo.deinit();
 
     var bestWhiteEval: i32 = -99999999;
     var bestBlackEval: i32 = -99999999;
     
+    // TODO: use memo at top level? once it persists longer it must be helpful
     var bestVal: i32 = -1000000;
     var count: u64 = 0;
     for (moves) |move| {
         const unMove = game.play(move);
         defer game.unplay(unMove);
-        const value = -try walkEval(game, me.other(), maxDepth, bestWhiteEval, bestBlackEval, movesArena.allocator(), &count, &memo);  // TODO: need to catch
+        const value = -try walkEval(game, me.other(), opts.maxDepth, bestWhiteEval, bestBlackEval, movesArena.allocator(), &count, &memo);  // TODO: need to catch
         if (value > bestVal) {
             bestVal = value;
             bestMoves.clearRetainingCapacity();
             try bestMoves.append(move);
-            if (doPruning and checkAlphaBeta(bestVal, me, &bestWhiteEval, &bestBlackEval)) break;
+            if (opts.doPruning and checkAlphaBeta(bestVal, me, &bestWhiteEval, &bestBlackEval)) break;
         } else if (value == bestVal) {
             try bestMoves.append(move);
         }
@@ -110,12 +137,13 @@ pub fn bestMove(game: *Board, me: Colour) !Move {
     // assert(bestMoves.items.len > 0 and bestMoves.items.len <= moves.len);
     // You can't just pick a deterministic random because pruning might end up with a shorter list of equal moves. 
     // Always choosing the first should be fine because pruning just cuts off the search early.
-    const choice = if (beDeterministicForTest) 0 else rng.uintLessThanBiased(usize,  bestMoves.items.len);
-    if (!isWasm and !beDeterministicForTest) std.debug.print("Checked {} end states. {} boards in memo table. {} moves with eval {}.\n", .{count, memo.count(), bestMoves.items.len, bestVal});
+    const choice = if (opts.beDeterministicForTest) 0 else rng.uintLessThanBiased(usize,  bestMoves.items.len);
+    if (!isWasm and !opts.beDeterministicForTest) {
+        std.debug.print("- Checked {} end states. {} boards in memo table (max={}). {} moves with eval {}.\n", .{count, memo.count(), memo.capacity(), bestMoves.items.len, bestVal});
+    }
     // for (bestMoves.items, 0..) |move, i| {
     //     std.debug.print("{}. \n{s}\n", .{i, try game.copyPlay(move).displayString(alloc)});
-    // } 
-    
+    // }
     return bestMoves.items[choice];
 }
 
@@ -126,12 +154,14 @@ fn walkEval(game: *Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32, best
     // After alpha-beta, bigger starting cap, and not reallocating each move, this does make it faster. 
     // Makes Black move 4 end states go 16,000,000 -> 1,000,000
     // But now after better pruning it does almost nothing. 
-    // if (memo.get(game.*)) |cached| {
-    //     if (cached.remaining >= remaining){
-    //         return if (me == .White) cached.eval else -cached.eval;
-    //     }
-    //     // TODO: should save the best move from that position at the old low depth and use it as the start for the search 
-    // }
+    if (useMemoMap) {
+        if (memo.get(game.*)) |cached| {
+            if (cached.remaining >= remaining){
+                return if (me == .White) cached.eval else -cached.eval;
+            }
+            // TODO: should save the best move from that position at the old low depth and use it as the start for the search 
+        }
+    }
 
     // Want to mutate values from parameters. 
     var bestWhiteEval = bestWhiteEvalIn;
@@ -160,20 +190,22 @@ fn walkEval(game: *Board, me: Colour, remaining: u32, bestWhiteEvalIn: i32, best
 
         if (value > bestVal) {
             bestVal = value;
-            if (doPruning and checkAlphaBeta(bestVal, me, &bestWhiteEval, &bestBlackEval)) break;
+            if (opts.doPruning and checkAlphaBeta(bestVal, me, &bestWhiteEval, &bestBlackEval)) break;
         }
     }
 
     // TODO: I want to not reset the table between moves but then when it runs out of space it would be full of positions we don't need anymore.
     //       need to get rid of old ones somehow. maybe my own hash map that just overwrites on collissions? 
     // Don't need to check `and memo.capacity() > MEMO_CAPACITY` because we allocate the desired capacity up front.
-    // const memoFull = memo.unmanaged.available == 0;
-    // if (!memoFull) {
-    //     try memo.put(game.*, .{
-    //         .eval = if (me == .White) bestVal else -bestVal,
-    //         .remaining = remaining,
-    //     });
-    // }
+    if (useMemoMap){
+        const memoFull = memo.unmanaged.available == 0;
+        if (!memoFull) {
+            try memo.put(game.*, .{
+                .eval = if (me == .White) bestVal else -bestVal,
+                .remaining = remaining,
+            });
+        }
+    }
     
     return bestVal;
 }
@@ -240,6 +272,7 @@ pub fn sortedMoves(board: *const Board, me: Colour, alloc: std.mem.Allocator) ![
     var moves = try possibleMoves(board, me, alloc);
     // This was much slower than the simple prefer captures in trySlide. 
     // TODO: maybe check again if I do the iterative deepening thing then remove this. even doubling speed of simpleEval didn't help. 
+    // TODO: try heap sort so you can bail out after best x moves or whatever
     // const ctx: MoveSortContext = .{ .me=me, .board=board.* };
     // std.sort.insertion(Move, moves, ctx, bestMovesFirst);
     return moves;
@@ -247,6 +280,7 @@ pub fn sortedMoves(board: *const Board, me: Colour, alloc: std.mem.Allocator) ![
 
 // TODO: castling, en-passant, check
 const one: u64 = 1;
+// Caller owns the returned slice.
 pub fn possibleMoves(board: *const Board, me: Colour, alloc: std.mem.Allocator) ![] Move {
     var moves = try std.ArrayList(Move).initCapacity(alloc, 50);
     const mySquares = switch (me) {
@@ -508,9 +542,9 @@ fn knightMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: 
 
 };} // End Strategy. 
 
-pub const default = Strategy(4, true, false);
-const testFast = Strategy(4, true, true);
-const testSlow = Strategy(4, false, true);
+pub const default = Strategy(.{});
+const testFast = Strategy(.{ .beDeterministicForTest=true });
+const testSlow = Strategy(.{ .beDeterministicForTest=true, .doPruning=false });
 
 var tst = std.testing.allocator;
 
@@ -530,13 +564,13 @@ fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize) !usize {
     return total;
 }
 
-// TODO: Super slow. memo or count as you go down instead of redoing work all the time. 
+// TODO: Super slow. memo or count as you go down instead of redoing work all the time, could do it iteritivly that way and just store the whole next layer in an array. 
 // TODO: can't go farther until it knows about checkmate
 // Tests that the move generation gets the right number of nodes at each depth. 
 // Also exercises the Board.unplay function.
 test "count possible games" {
     // https://en.wikipedia.org/wiki/Shannon_number
-    const possibleGames = [_] usize { 20, 400, 8902	};
+    const possibleGames = [_] usize { 20, 400, 8902	};  // , 197281
 
     var game = Board.initial();
     for (possibleGames, 1..) |expected, i| {
@@ -547,6 +581,7 @@ test "count possible games" {
     }
 }
 
+// TODO: this should be generic over a the strategies to compare. 
 fn testPruning(fen: [] const u8, me: Colour) !void {
     var game = try Board.fromFEN(fen);
     const slow = try testSlow.bestMove(&game, me);
@@ -567,6 +602,10 @@ fn testPruning(fen: [] const u8, me: Colour) !void {
 
 // Tests that alpha-beta pruning chooses the same best move as a raw search. 
 test "simple compare pruning" {
+    // The initial position has many equal moves, this makes sure I'm not accidently making random choices while testing. 
+    try testPruning("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR", .White);
+    try testPruning("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR", .Black);
+
     try testPruning("8/p7/8/8/8/4b3/P2P4/8", .White);
     try testPruning("8/p7/8/8/8/4b3/P2P4/8", .Black);
 
@@ -576,5 +615,5 @@ test "simple compare pruning" {
     // TODO: it thinks a bunch of things, including hanging its queen, are eval 0. Also takes way too long to run without pruning. 
     // try testPruning("rn1q1bnr/1p2pkp1/2p2p1p/p2p1b2/1PP4P/3PQP2/P2KP1PB/RN3BNR", .White);
 
-    try testPruning("7K/7p/8/8/8/r1q5/1P5P/k7", .White); // multiple best moves for black.     
+    try testPruning("7K/7p/8/8/8/r1q5/1P5P/k7", .White); // TODO: check and multiple best moves for black.    
 }

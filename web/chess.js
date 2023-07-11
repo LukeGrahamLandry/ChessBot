@@ -240,5 +240,7 @@ if (window.startChessIfReady !== undefined) window.startChessIfReady();
 // - Anything the tempts an object literal could be better written in try @keyWord(comptime Lang);
 // - '==' takes 70% more lines of spec to describe than '===';
 // - Explicitly prefixing global variables with 'window' makes them almost as ugly to read as they are to think about; 
+//   Global variables being in a hashmap shared between scripts also means some minifiers assume names can't be changed; 
 // - Typed arrays are real arrays;
+// - Why minify when you can maxify with sarcastic comments;
 //////////
