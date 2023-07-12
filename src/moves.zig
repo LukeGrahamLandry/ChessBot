@@ -57,8 +57,8 @@ pub const StratOpts = struct {
     memoMapFillPercent: usize = 60,  // Affects usable map capacity but not memory usage. 
     hashAlgo: HashAlgo = .CityHash64,
     checkDetection: enum {
-        Ignore, LookAhead
-    } = .Ignore,
+        Ignore, LookAhead, ReverseFromKing
+    } = .ReverseFromKing,
 };
 
 // TODO: script that tests different variations (compare speed and run correctness tests). 
@@ -102,13 +102,66 @@ var upperArena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 var movesArena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 
 const genKingCapturesOnly = @import("movegen.zig").MoveFilter.KingCapturesOnly.get();
-fn inCheck(game: *Board, me: Colour, alloc: std.mem.Allocator) !bool {
+const one: u64 = 1;
+pub fn inCheck(game: *Board, me: Colour, alloc: std.mem.Allocator) !bool {
     switch (opts.checkDetection) {
         .Ignore => return false,
         .LookAhead => {
             const moves = try genKingCapturesOnly.possibleMoves(game, me.other(), alloc);
             defer alloc.free(moves);
             return moves.len > 0;
+        },
+        .ReverseFromKing => {
+            const i = if (me == .Black) (game.blackKingIndex) else (game.whiteKingIndex);
+            const file = i % 8;
+            const rank = i / 8;
+
+            const isInCheck = check: {
+                // Move like a rook
+                if (file < 7) {
+                    for ((file + 1)..8) |checkFile| {
+                        if (!game.emptyAt(checkFile, rank)) {
+                            const p = game.get(checkFile, rank);
+                            if (p.colour == me) break;
+                            if (p.kind == .Queen or p.kind == .Rook) break :check true;
+                        }
+                    }
+                }
+                
+                if (file > 0) {
+                    for (1..(file+1)) |checkFile| {
+                        if (!game.emptyAt(file - checkFile, rank)) {
+                            const p = game.get(file - checkFile, rank);
+                            if (p.colour == me) break;
+                            if (p.kind == .Queen or p.kind == .Rook) break :check true;
+                        }
+                    }
+                }
+
+                if (rank < 7) {
+                    for ((rank + 1)..8) |checkRank| {
+                        if (!game.emptyAt(file, checkRank)) {
+                            const p = game.get(file, checkRank);
+                            if (p.colour == me) break;
+                            if (p.kind == .Queen or p.kind == .Rook) break :check true;
+                        }
+                    }
+                }
+                
+                if (rank > 0) {
+                    for (1..(rank+1)) |checkRank| {
+                        if (!game.emptyAt(file, rank-checkRank)) {
+                            const p = game.get(file, rank-checkRank);
+                            if (p.colour == me) break;
+                            if (p.kind == .Queen or p.kind == .Rook) break :check true;
+                        }
+                    }
+                }
+
+                break :check false;
+            };
+            
+            return isInCheck;
         }
     }
 }

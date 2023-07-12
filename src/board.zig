@@ -139,18 +139,18 @@ const BoardState = struct {
 pub const Board = struct {
     squares: [64] Piece = std.mem.zeroes([64] Piece),
     peicePositions: BitBoardPair = .{},
-    kingPositions: BitBoardPair = .{},
     simpleEval: i32 = 0,
-    stateStack: std.ArrayList(BoardState),
+    blackKingIndex: u6 = 0,
+    whiteKingIndex: u6 = 0,
 
     pub fn init(alloc: std.mem.Allocator) !Board {
-        var self: Board = .{ .stateStack=std.ArrayList(BoardState).init(alloc)};
-        try self.stateStack.append(.{});
+        _ = alloc;
+        var self: Board = .{ };
         return self;
     }
 
     pub fn deinit(self: *Board) void {
-        self.stateStack.deinit();
+        _ = self;
     }
 
     pub fn set(self: *Board, file: u8, rank: u8, value: Piece) void {
@@ -160,7 +160,10 @@ pub const Board = struct {
         self.simpleEval -= self.squares[index].eval();
         self.squares[index] = value;
         self.simpleEval += value.eval();
-        if (value.kind == .King) self.kingPositions.setBit(index, value.colour);
+        if (value.kind == .King) switch (value.colour) {
+            .White => self.whiteKingIndex = index,
+            .Black => self.blackKingIndex = index, 
+        };
     }
 
     pub fn get(self: *const Board, file: usize, rank: usize) Piece {
@@ -184,18 +187,16 @@ pub const Board = struct {
     const genAnyMove = @import("movegen.zig").MoveFilter.Any.get();
     pub fn play(self: *Board, move: Move) !OldMove {
         const thisMove: OldMove = .{ .move = move, .taken = self.squares[move.to], .original = self.squares[move.from]};
-        var thisState = self.stateStack.items[self.stateStack.items.len - 1];
-        try self.stateStack.append(thisState);
-
         self.simpleEval -= thisMove.taken.eval();
         
         self.peicePositions.unsetBit(move.from, thisMove.original.colour);
         if (!thisMove.taken.empty()) self.peicePositions.unsetBit(move.to, thisMove.taken.colour);
         self.peicePositions.setBit(move.to, thisMove.original.colour);
         if (thisMove.original.kind == .King) {
-            self.kingPositions.unsetBit(move.from, thisMove.original.colour);
-            if (!thisMove.taken.empty()) self.kingPositions.unsetBit(move.to, thisMove.taken.colour);
-            self.kingPositions.setBit(move.to, thisMove.original.colour);
+            switch (thisMove.original.colour) {
+                .Black => self.blackKingIndex = move.to,
+                .White => self.whiteKingIndex = move.to,
+            }
         }
         
         switch (move.action) {
@@ -211,21 +212,11 @@ pub const Board = struct {
             }
         }
 
-        // TODO: This means you're not allowed to look at targetedPositions in collectOnePieceMoves?!
-        var allNextMoves = std.ArrayList(Move).init(self.stateStack.allocator);
-        defer allNextMoves.deinit();
-        try genAnyMove.collectOnePieceMoves(&allNextMoves, self, move.to, move.to % 8, move.to / 8);
-        for (allNextMoves.items) |check| {
-            self.stateStack.items[self.stateStack.items.len - 1].targetedPositions.setBit(check.to, thisMove.original.colour);
-        }
-
         return thisMove;
     }
 
     // Thought this would be faster because less copying but almost no difference. 
     pub fn unplay(self: *Board, move: OldMove) void {
-        _ = self.stateStack.pop();
-
         self.simpleEval += move.taken.eval();
         switch (move.move.action) {
             .none => {},
@@ -242,9 +233,10 @@ pub const Board = struct {
         if (!move.taken.empty()) self.peicePositions.setBit(move.move.to, move.taken.colour);
         self.peicePositions.unsetBit(move.move.to, move.original.colour);
         if (move.original.kind == .King) {
-            self.kingPositions.setBit(move.move.from, move.original.colour);
-            if (!move.taken.empty()) self.kingPositions.setBit(move.move.to, move.taken.colour);
-            self.kingPositions.unsetBit(move.move.to, move.original.colour);
+            switch (move.original.colour) {
+                .Black => self.blackKingIndex = move.move.from,
+                .White => self.whiteKingIndex = move.move.from,
+            }
         }
     }
 

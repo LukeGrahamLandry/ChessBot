@@ -77,6 +77,11 @@ export fn getPossibleMoves(from: i32) u64 {
    defer alloc.free(allMoves);
    for (allMoves) |move| {
       if (@as(i32, move.from) == from) {
+         const unMove = internalBoard.?.play(move) catch return 1;
+         if (moves.inCheck(&internalBoard.?, piece.colour, alloc) catch return 1) {
+            internalBoard.?.unplay(unMove);
+            continue;
+         }
          result |= @as(u64, 1) << @intCast(move.to);
       }
    }
@@ -130,6 +135,8 @@ export fn playHumanMove(fromIndex: u32, toIndex: u32) i32 {
       if (isPromote) move.action = .{.promote = .Queen };
    }
 
+   if (internalBoard.?.squares[fromIndex].colour != nextColour) return 4;
+
    // Check if this is a legal move by the current player. 
    const allMoves = genAllMoves.possibleMoves(&internalBoard.?, nextColour, alloc) catch return 1;
    defer alloc.free(allMoves);
@@ -139,18 +146,23 @@ export fn playHumanMove(fromIndex: u32, toIndex: u32) i32 {
       return 4;
    }
 
-   _ = internalBoard.?.play(move) catch return 1;
+   const unMove = internalBoard.?.play(move) catch return 1;
+   if (moves.inCheck(&internalBoard.?, nextColour, alloc) catch return 1) {
+      internalBoard.?.unplay(unMove);
+      return 4;
+   }
+
    boardView = @bitCast(internalBoard.?.squares);
    nextColour = nextColour.other();
    return 0;
 }
 
+const one: u64 = 1;
 export fn getBitBoard(magicEngineIndex: u32, colourIndex: u32) u64 {
    const colour: Colour = if (colourIndex == 0) .White else .Black;
    return switch (magicEngineIndex) {
       0 => internalBoard.?.peicePositions.getFlag(colour),
-      1 => internalBoard.?.kingPositions.getFlag(colour),
-      2 => internalBoard.?.stateStack.items[internalBoard.?.stateStack.items.len - 1].targetedPositions.getFlag(colour),
+      1 => if (colour == .Black) (one << internalBoard.?.blackKingIndex) else  (one << internalBoard.?.whiteKingIndex),
       else => 0,
    };
 }

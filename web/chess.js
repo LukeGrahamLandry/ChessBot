@@ -82,7 +82,7 @@ function handleCanvasClick(e) {
                 clicked = null;
                 renderBoard();
                 // TODO: only do this if other player is engine. 
-                setTimeout(tickGame, 25);  // Give it a chance to render.
+                // setTimeout(tickGame, 25);  // Give it a chance to render.
                 break;
             case 4: // Invalid move. 
                 clicked = [file, rank];
@@ -200,7 +200,7 @@ function renderBoard() {
         case "all": 
             drawBitBoardPair(0);
             break;
-        case "kings": 
+        case "king": 
             drawBitBoardPair(1);
             break;
         case "targets": 
