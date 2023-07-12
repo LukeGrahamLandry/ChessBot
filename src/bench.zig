@@ -45,14 +45,14 @@ fn checkGameTime(comptime strategy: type, comptime moveCount: comptime_int) !i12
     return t.end();
 }
 
-const Timer = struct {
+pub const Timer = struct {
     t: i128,
 
-    fn start() Timer {
+    pub fn start() Timer {
         return .{ .t=std.time.nanoTimestamp() };
     }
 
-    fn end(self: Timer) i128 {
+    pub fn end(self: Timer) i128 {
         return @divFloor((std.time.nanoTimestamp() - self.t), @as(i128, std.time.ns_per_ms));
     }
 };

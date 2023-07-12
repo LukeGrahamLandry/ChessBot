@@ -58,7 +58,7 @@ pub const StratOpts = struct {
     hashAlgo: HashAlgo = .CityHash64,
     checkDetection: enum {
         Ignore, LookAhead
-    } = .LookAhead,
+    } = .Ignore,
 };
 
 // TODO: script that tests different variations (compare speed and run correctness tests). 
@@ -136,7 +136,7 @@ pub fn bestMove(game: *Board, me: Colour) !Move {
     var bestVal: i32 = -1000000;
     var count: u64 = 0;
     for (moves) |move| {
-        const unMove = game.play(move);
+        const unMove = try game.play(move);
         defer game.unplay(unMove);
         if (try inCheck(game, me, alloc)) continue;
         const value = -try walkEval(game, me.other(), opts.maxDepth, bestWhiteEval, bestBlackEval, movesArena.allocator(), &count, &memo);  // TODO: need to catch
@@ -188,7 +188,7 @@ fn walkEval(game: *Board, me: Colour, remaining: i32, bestWhiteEvalIn: i32, best
     
     var bestVal: i32 = -1000000;
     for (moves) |move| {
-        const unMove = game.play(move);
+        const unMove = try game.play(move);
         defer game.unplay(unMove);
         if (try inCheck(game, me, alloc)) continue;
         const value = if (remaining == 0) e: {
@@ -251,16 +251,22 @@ fn checkAlphaBeta(bestVal: i32, me: Colour, bestWhiteEval: *i32, bestBlackEval: 
 pub const default = Strategy(.{});
 const testFast = Strategy(.{ .beDeterministicForTest=true, .checkDetection=.Ignore});
 const testSlow = Strategy(.{ .beDeterministicForTest=true, .doPruning=false, .checkDetection=.Ignore});
+const Timer = @import("bench.zig").Timer;
 
 // TODO: this should be generic over a the strategies to compare. 
 fn testPruning(fen: [] const u8, me: Colour) !void {
-    var game = try Board.fromFEN(fen);
+    const tst = std.testing.allocator;
+    var game = try Board.fromFEN(fen, tst);
+    defer game.deinit();
+    var t = Timer.start();
     const slow = try testSlow.bestMove(&game, me);
+    const t1 = t.end();
+    t = Timer.start();
     const fast = try testFast.bestMove(&game, me);
+    const t2 = t.end();
 
     if (!std.meta.eql(slow, fast)){
         // Leaks here don't really matter but freeing prevents error spam. 
-        const tst = std.testing.allocator;
         const startBoard = try game.displayString(tst);
         defer tst.free(startBoard);
         const slowBoard = try game.copyPlay(slow).displayString(tst);
@@ -270,6 +276,7 @@ fn testPruning(fen: [] const u8, me: Colour) !void {
         std.debug.print("Moves did not match.\nInitial ({} to move):\n{s}\n\nWithout pruning: \n{s}\nWith pruning: \n{s}", .{me, startBoard, slowBoard, fastBoard});
         return error.TestFailed;
     }
+    std.debug.print("\n- testPruning (slow: {}ms, fast: {}ms) {s}", .{t1, t2, fen});
 }
 
 // Tests that alpha-beta pruning chooses the same best move as a raw search. 

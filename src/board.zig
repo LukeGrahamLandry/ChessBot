@@ -97,66 +97,106 @@ const ASCII_ZERO_CHAR: u8 = 48;
 pub const INIT_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
 const InvalidFenErr = error { InvalidFen };
 
+const BitBoardPair = packed struct {
+    white: u64 = 0,
+    black: u64 = 0,
+
+    const one: u64 = 1;
+
+    pub fn setBit(self: *BitBoardPair, index: u6, colour: Colour) void {
+        switch (colour) {
+            .White => self.white |= (one << index),
+            .Black => self.black |= (one << index),
+        }
+    }
+
+    pub fn unsetBit(self: *BitBoardPair, index: u6, colour: Colour) void {
+        switch (colour) {
+            .White => self.white ^= (one << index),
+            .Black => self.black ^= (one << index),
+        }
+    }
+
+    pub fn getFlag(self: *BitBoardPair, colour: Colour) u64 {
+        return switch (colour) {
+            .White => self.white,
+            .Black => self.black
+        };
+    }
+};
+
 const OldMove = struct {
     move: Move,
     taken: Piece,
     original: Piece,
 };
 
+const BoardState = struct {
+    targetedPositions: BitBoardPair = .{},
+};
+
 // TODO: flag for castling rights. Track en passant target squares. Count moves for draw. 
 pub const Board = struct {
     squares: [64] Piece = std.mem.zeroes([64] Piece),
-    // Just these being here makes it slower
-    whitePeicePositions: u64 = 0,
-    blackPeicePositions: u64 = 0,
+    peicePositions: BitBoardPair = .{},
+    kingPositions: BitBoardPair = .{},
     simpleEval: i32 = 0,
+    stateStack: std.ArrayList(BoardState),
+
+    pub fn init(alloc: std.mem.Allocator) !Board {
+        var self: Board = .{ .stateStack=std.ArrayList(BoardState).init(alloc)};
+        try self.stateStack.append(.{});
+        return self;
+    }
+
+    pub fn deinit(self: *Board) void {
+        self.stateStack.deinit();
+    }
 
     pub fn set(self: *Board, file: u8, rank: u8, value: Piece) void {
+        assert(self.emptyAt(file, rank));
         const index: u6 = @intCast(rank*8 + file);
-        self.setBit(index, value.colour);
+        self.peicePositions.setBit(index, value.colour);
         self.simpleEval -= self.squares[index].eval();
         self.squares[index] = value;
         self.simpleEval += value.eval();
+        if (value.kind == .King) self.kingPositions.setBit(index, value.colour);
     }
 
     pub fn get(self: *const Board, file: usize, rank: usize) Piece {
         return self.squares[rank*8 + file];
     }
 
-    pub fn initial() Board {
-        // This is kinda cool. It's a compile error if this fails to parse, so this function doesn't return an error union.
-        return comptime try fromFEN(INIT_FEN);
+    pub fn initial(alloc: std.mem.Allocator) Board {
+        // TODO: I want this to be comptime but it needs an allocator
+        return fromFEN(INIT_FEN, alloc) catch @panic("INIT_FEN is invalid.");
     }
 
     const one: u64 = 1;
-    pub fn setBit(self: *Board, index: u6, colour: Colour) void {
-        switch (colour) {
-            .White => self.whitePeicePositions |= (one << index),
-            .Black => self.blackPeicePositions |= (one << index),
-        }
-    }
-
-    pub fn unsetBit(self: *Board, index: u6, colour: Colour) void {
-        switch (colour) {
-            .White => self.whitePeicePositions ^= (one << index),
-            .Black => self.blackPeicePositions ^= (one << index),
-        }
-    }
-
     pub fn emptyAt(self: *const Board, file: usize, rank: usize) bool {
         const index: u6 = @intCast(rank*8 + file);
         const flag = one << index;
-        const isEmpty = ((self.whitePeicePositions & flag) | (self.blackPeicePositions & flag)) == 0;   
+        const isEmpty = ((self.peicePositions.white & flag) | (self.peicePositions.black & flag)) == 0;   
         // assert(self.get(file, rank).empty() == isEmpty);
         return isEmpty;
     }
 
-    pub fn play(self: *Board, move: Move) OldMove {
+    const genAnyMove = @import("movegen.zig").MoveFilter.Any.get();
+    pub fn play(self: *Board, move: Move) !OldMove {
         const thisMove: OldMove = .{ .move = move, .taken = self.squares[move.to], .original = self.squares[move.from]};
+        var thisState = self.stateStack.items[self.stateStack.items.len - 1];
+        try self.stateStack.append(thisState);
+
         self.simpleEval -= thisMove.taken.eval();
-        self.unsetBit(move.from, thisMove.original.colour);
-        if (!thisMove.taken.empty()) self.unsetBit(move.to, thisMove.taken.colour);
-        self.setBit(move.to, thisMove.original.colour);
+        
+        self.peicePositions.unsetBit(move.from, thisMove.original.colour);
+        if (!thisMove.taken.empty()) self.peicePositions.unsetBit(move.to, thisMove.taken.colour);
+        self.peicePositions.setBit(move.to, thisMove.original.colour);
+        if (thisMove.original.kind == .King) {
+            self.kingPositions.unsetBit(move.from, thisMove.original.colour);
+            if (!thisMove.taken.empty()) self.kingPositions.unsetBit(move.to, thisMove.taken.colour);
+            self.kingPositions.setBit(move.to, thisMove.original.colour);
+        }
         
         switch (move.action) {
             .none => {
@@ -170,11 +210,22 @@ pub const Board = struct {
                 self.squares[move.from] = .{ .colour = undefined, .kind = .Empty };
             }
         }
+
+        // TODO: This means you're not allowed to look at targetedPositions in collectOnePieceMoves?!
+        var allNextMoves = std.ArrayList(Move).init(self.stateStack.allocator);
+        defer allNextMoves.deinit();
+        try genAnyMove.collectOnePieceMoves(&allNextMoves, self, move.to, move.to % 8, move.to / 8);
+        for (allNextMoves.items) |check| {
+            self.stateStack.items[self.stateStack.items.len - 1].targetedPositions.setBit(check.to, thisMove.original.colour);
+        }
+
         return thisMove;
     }
 
     // Thought this would be faster because less copying but almost no difference. 
     pub fn unplay(self: *Board, move: OldMove) void {
+        _ = self.stateStack.pop();
+
         self.simpleEval += move.taken.eval();
         switch (move.move.action) {
             .none => {},
@@ -187,20 +238,29 @@ pub const Board = struct {
         self.squares[move.move.to] = move.taken;
         self.squares[move.move.from] = move.original;
 
-        self.setBit(move.move.from, move.original.colour);
-        if (!move.taken.empty()) self.setBit(move.move.to, move.taken.colour);
-        self.unsetBit(move.move.to, move.original.colour);
+        self.peicePositions.setBit(move.move.from, move.original.colour);
+        if (!move.taken.empty()) self.peicePositions.setBit(move.move.to, move.taken.colour);
+        self.peicePositions.unsetBit(move.move.to, move.original.colour);
+        if (move.original.kind == .King) {
+            self.kingPositions.setBit(move.move.from, move.original.colour);
+            if (!move.taken.empty()) self.kingPositions.setBit(move.move.to, move.taken.colour);
+            self.kingPositions.unsetBit(move.move.to, move.original.colour);
+        }
     }
 
+    // TODO: !!! this will break everything because aliased arraylist
     pub fn copyPlay(self: *const Board, move: Move) Board {
-        var board = self.*;
-        _ = board.play(move);
-        return board;
+        _ = move;
+        _ = self;
+        @panic("TODO");
+        // var board = self.*;
+        // _ = board.play(move);
+        // return board;
     }
 
     // TODO: this rejects the extra data at the end because I can't store it yet. 
-    pub fn fromFEN(fen: [] const u8) InvalidFenErr!Board {
-        var self = Board {};
+    pub fn fromFEN(fen: [] const u8, alloc: std.mem.Allocator) !Board {
+        var self = try Board.init(alloc);
         var file: u8 = 0;
         var rank: u8 = 7;
         for (fen) |letter| {
@@ -280,7 +340,8 @@ pub const Board = struct {
 var tstAlloc = std.testing.allocator;
 
 test "write fen" {
-    const b = Board.initial();
+    var b = Board.initial(tstAlloc);
+    defer b.deinit();
     const fen = try b.toFEN(tstAlloc);
     defer tstAlloc.free(fen);
     try std.testing.expect(std.mem.eql(u8, fen, INIT_FEN));

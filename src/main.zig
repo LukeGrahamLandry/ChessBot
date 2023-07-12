@@ -9,7 +9,8 @@ pub fn main() !void {
     var bw = std.io.bufferedWriter(stdout_file);
     const stdout = bw.writer();
 
-    var game = board.Board.initial();
+    var game = board.Board.initial(alloc);
+    defer game.deinit();
 
     // TODO: this is always the same sequence because I'm not seeding it. 
     // try std.os.getrandom(buffer: []u8)
@@ -56,7 +57,7 @@ fn debugPlayOne(game: *board.Board, i: usize, colour: board.Colour, rng: *std.ra
     const move = try moves.default.bestMove(game, colour);
     try stdout.print("Found move in {}ms\n", .{@divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms))});
     try stdout.print("{} move {} is {}\n", .{colour, i, move});
-    _ = game.play(move);
+    _ = try game.play(move);
 
 
     const ss = try game.toFEN(alloc);

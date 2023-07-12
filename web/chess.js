@@ -148,6 +148,38 @@ function frToIndex(file, rank) {
     return rank*8 + file;
 }
 
+let bitBoardInfo = "none";
+function handleBitboardSelect() {
+    const value = document.getElementById("bitboard").value;
+    bitBoardInfo = value;
+    renderBoard();
+}
+
+function drawBitBoard(targetSquaresFlag, colour) {
+    // The 'n' suffix makes it use BigInt instead of doubles so I can use it as a u64 bit flag. 
+    for (let i=0n;i<64n;i++) {
+        const flag = 1n << i;
+        if (targetSquaresFlag & flag) {
+            fillSquare(Number(i % 8n), Number(i / 8n), colour, true);
+        }
+    }
+}
+
+function drawBitBoardPair(magicEngineIndex) {
+    const a = Engine.getBitBoard(magicEngineIndex, 0);
+    const b = Engine.getBitBoard(magicEngineIndex, 1);
+    for (let i=0n;i<64n;i++) {
+        const flag = 1n << i;
+        if (a & b & flag) {
+            fillSquare(Number(i % 8n), Number(i / 8n), "purple", false);
+        } else if (a & flag) {
+            fillSquare(Number(i % 8n), Number(i / 8n), "red", false);
+        } else if (b & flag) {
+            fillSquare(Number(i % 8n), Number(i / 8n), "blue", false);
+        }
+    }
+}
+
 function renderBoard() {
     // TODO: doing this all the time is unnessary because you don't care most of the time and it makes typing one in annoying. 
     //       but it will be helpful to add history.
@@ -161,18 +193,29 @@ function renderBoard() {
 
     // TODO: If I really cared I could just render the diff instead of clearing the board
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-    if (clicked != null) {
-        fillSquare(clicked[0], clicked[1], "yellow");
-        // The 'n' suffix makes it use BigInt instead of doubles so I can use it as a u64 bit flag. 
-        const targetSquaresFlag = Engine.getPossibleMoves(frToIndex(clicked[0], clicked[1]));
-        for (let i=0n;i<64n;i++) {
-            const flag = 1n << i;
-            if (targetSquaresFlag & flag) {
-                fillSquare(Number(i % 8n), Number(i / 8n), "lightblue");
-            }
-        }
+
+    switch (bitBoardInfo) {
+        case "none":
+            break;
+        case "all": 
+            drawBitBoardPair(0);
+            break;
+        case "kings": 
+            drawBitBoardPair(1);
+            break;
+        case "targets": 
+            drawBitBoardPair(2);
+            break;
+        default: 
+            console.log("Invalid bitBoardInfo string.");
     }
 
+    if (clicked != null) {
+        fillSquare(clicked[0], clicked[1], "yellow", true);
+        const targetSquaresFlag = Engine.getPossibleMoves(frToIndex(clicked[0], clicked[1]));
+        drawBitBoard(targetSquaresFlag, "lightblue");
+    }
+    
     // TODO: why do I need to remake this slice every time?
     const board = new Uint8Array(Engine.memory.buffer, Engine.boardView);
     for (let rank=0;rank<8;rank++){
@@ -183,10 +226,14 @@ function renderBoard() {
     }
 }
 
-function fillSquare(file, rank, colour) {
+function fillSquare(file, rank, colour, isSmall) {
     const squareSize = document.getElementById("board").width / 8;
     ctx.fillStyle = colour;
-    ctx.fillRect(file*squareSize, (7-rank)*squareSize, squareSize, squareSize);
+    if (isSmall) {
+        ctx.fillRect(file*squareSize + 10, (7-rank)*squareSize + 10, squareSize - 20, squareSize - 20);
+    } else {
+        ctx.fillRect(file*squareSize, (7-rank)*squareSize, squareSize, squareSize);
+    }
 }
 
 // TODO: these should be done in drawPiece with (b & flag)

@@ -73,8 +73,8 @@ const one: u64 = 1;
 pub fn possibleMoves(board: *const Board, me: Colour, alloc: std.mem.Allocator) ![] Move {
     var moves = try std.ArrayList(Move).initCapacity(alloc, 50);
     const mySquares = switch (me) {
-            .White => board.whitePeicePositions,
-            .Black => board.blackPeicePositions,
+            .White => board.peicePositions.white,
+            .Black => board.peicePositions.black,
         };
     
     var flag: u64 = 1;
@@ -86,25 +86,30 @@ pub fn possibleMoves(board: *const Board, me: Colour, alloc: std.mem.Allocator) 
         }
         // assert(board.squares[i].colour == me);
 
-        const piece = board.squares[i];
         const file = i % 8;
         const rank = i / 8;
-        switch (piece.kind) {
-            .Pawn => try pawnMove(&moves, board, i, file, rank, piece),
-            .Bishop => try bishopSlide(&moves, board, i, file, rank, piece),
-            .Knight => try knightMove(&moves, board, i, file, rank, piece),
-            .Rook => try rookSlide(&moves, board, i, file, rank, piece),
-            .King => try kingMove(&moves, board, i, file, rank, piece),
-            .Queen => {
-                try rookSlide(&moves, board, i, file, rank, piece);
-                try bishopSlide(&moves, board, i, file, rank, piece);
-            },
-            .Empty => unreachable,
-        }
+        try collectOnePieceMoves(&moves, board, i, file, rank);
+        
     }
 
     // TODO: make sure this isn't reallocating 
     return try moves.toOwnedSlice();
+}
+
+pub fn collectOnePieceMoves(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: usize, rank: usize) !void {
+    const piece = board.squares[i];
+    switch (piece.kind) {
+        .Pawn => try pawnMove(moves, board, i, file, rank, piece),
+        .Bishop => try bishopSlide(moves, board, i, file, rank, piece),
+        .Knight => try knightMove(moves, board, i, file, rank, piece),
+        .Rook => try rookSlide(moves, board, i, file, rank, piece),
+        .King => try kingMove(moves, board, i, file, rank, piece),
+        .Queen => {
+            try rookSlide(moves, board, i, file, rank, piece);
+            try bishopSlide(moves, board, i, file, rank, piece);
+        },
+        .Empty => unreachable,
+    }
 }
 
 fn rookSlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
@@ -361,7 +366,7 @@ fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, alloc: st
 
     var total: usize = 0;
     for (allMoves) |move| {
-        const unMove = game.play(move);
+        const unMove = try game.play(move);
         defer game.unplay(unMove);
 
         {
@@ -386,7 +391,8 @@ test "count possible games" {
 
     var tempA = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer tempA.deinit();
-    var game = Board.initial();
+    var game = Board.initial(tst);
+    defer game.deinit();
     for (possibleGames, 1..) |expected, i| {
         const start = std.time.nanoTimestamp();
         // These parameters are backwards because it can't infer type from a comptime_int. This seems dumb. 
