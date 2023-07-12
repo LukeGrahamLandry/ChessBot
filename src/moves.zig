@@ -34,24 +34,25 @@ pub const Move = struct {
 };
 
 pub const HashAlgo = enum {
-    // Slower because it does individual struct parts?
-    StdAuto,
     // These all operate on the byte array of squares.
     Wyhash, // same algo as auto
     Fnv1a_64,
     XxHash64,
     Murmur2_64,
     CityHash64,
+    // Slower because it does individual struct parts?
+    StdAuto,
 };
 
 pub const CheckAlgo = enum {
-    Ignore, LookAhead, ReverseFromKing
+    Ignore, ReverseFromKing, LookAhead
 };
 
 var notTheRng = std.rand.DefaultPrng.init(0);
 var rng = notTheRng.random();
 
-pub const genAllMoves = @import("movegen.zig").MoveFilter.Any.get();
+const movegen = @import("movegen.zig");
+pub const genAllMoves = movegen.MoveFilter.Any.get();
 
 pub const StratOpts = struct {
     maxDepth: comptime_int = 4,  // TODO: should be runtime param to bestMove so wasm can change without increasing code size. 
@@ -114,113 +115,7 @@ pub fn inCheck(game: *Board, me: Colour, alloc: std.mem.Allocator) !bool {
             return moves.len > 0;
         },
         .ReverseFromKing => {
-            const i = if (me == .Black) (game.blackKingIndex) else (game.whiteKingIndex);
-            const file = i % 8;
-            const rank = i / 8;
-
-            const isInCheck = check: {
-                // Move like a rook
-                if (file < 7) {
-                    for ((file + 1)..8) |checkFile| {
-                        if (!game.emptyAt(checkFile, rank)) {
-                            const p = game.get(checkFile, rank);
-                            if (p.colour == me) break;
-                            if (p.kind == .Queen or p.kind == .Rook) break :check true;
-                        }
-                    }
-                }
-                
-                if (file > 0) {
-                    for (1..(file+1)) |checkFile| {
-                        if (!game.emptyAt(file - checkFile, rank)) {
-                            const p = game.get(file - checkFile, rank);
-                            if (p.colour == me) break;
-                            if (p.kind == .Queen or p.kind == .Rook) break :check true;
-                        }
-                    }
-                }
-
-                if (rank < 7) {
-                    for ((rank + 1)..8) |checkRank| {
-                        if (!game.emptyAt(file, checkRank)) {
-                            const p = game.get(file, checkRank);
-                            if (p.colour == me) break;
-                            if (p.kind == .Queen or p.kind == .Rook) break :check true;
-                        }
-                    }
-                }
-                
-                if (rank > 0) {
-                    for (1..(rank+1)) |checkRank| {
-                        if (!game.emptyAt(file, rank-checkRank)) {
-                            const p = game.get(file, rank-checkRank);
-                            if (p.colour == me) break;
-                            if (p.kind == .Queen or p.kind == .Rook) break :check true;
-                        }
-                    }
-                }
-
-                // Move like a bishop
-                {
-                    var checkFile = file;
-                    var checkRank = rank;
-                    while (checkFile < 7 and checkRank < 7) {
-                        checkFile += 1;
-                        checkRank += 1;
-                        if (!game.emptyAt(checkFile, checkRank)) {
-                            const p = game.get(checkFile, checkRank);
-                            if (p.colour == me) break;
-                            if (p.kind == .Queen or p.kind == .Bishop) break :check true;
-                        }
-                    }
-                }
-
-                {
-                    var checkFile = file;
-                    var checkRank = rank;
-                    while (checkFile > 0 and checkRank < 7) {
-                        checkFile -= 1;
-                        checkRank += 1;
-                        if (!game.emptyAt(checkFile, checkRank)) {
-                            const p = game.get(checkFile, checkRank);
-                            if (p.colour == me) break;
-                            if (p.kind == .Queen or p.kind == .Bishop) break :check true;
-                        }
-                    }
-                }
-
-                {
-                    var checkFile = file;
-                    var checkRank = rank;
-                    while (checkFile < 7 and checkRank > 0) {
-                        checkFile += 1;
-                        checkRank -= 1;
-                        if (!game.emptyAt(checkFile, checkRank)) {
-                            const p = game.get(checkFile, checkRank);
-                            if (p.colour == me) break;
-                            if (p.kind == .Queen or p.kind == .Bishop) break :check true;
-                        }
-                    }
-                }
-
-                {
-                    var checkFile = file;
-                    var checkRank = rank;
-                    while (checkFile > 0 and checkRank > 0) {
-                        checkFile -= 1;
-                        checkRank -= 1;
-                        if (!game.emptyAt(checkFile, checkRank)) {
-                            const p = game.get(checkFile, checkRank);
-                            if (p.colour == me) break;
-                            if (p.kind == .Queen or p.kind == .Bishop) break :check true;
-                        }
-                    }
-                }
-
-                break :check false;
-            };
-            
-            return isInCheck;
+            return try movegen.reverseFromKingIsInCheck(game, me);
         }
     }
 }
@@ -361,8 +256,8 @@ fn checkAlphaBeta(bestVal: i32, me: Colour, bestWhiteEval: *i32, bestBlackEval: 
 };} // End Strategy. 
 
 pub const default = Strategy(.{});
-const testFast = Strategy(.{ .beDeterministicForTest=true, .checkDetection=.Ignore});
-const testSlow = Strategy(.{ .beDeterministicForTest=true, .doPruning=false, .checkDetection=.Ignore});
+const testFast = Strategy(.{ .beDeterministicForTest=true});
+const testSlow = Strategy(.{ .beDeterministicForTest=true, .doPruning=false });
 const Timer = @import("bench.zig").Timer;
 
 // TODO: this should be generic over a the strategies to compare. 
@@ -409,3 +304,4 @@ test "simple compare pruning" {
 
     try testPruning("7K/7p/8/8/8/r1q5/1P5P/k7", .White); // TODO: check and multiple best moves for black.    
 }
+

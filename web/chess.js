@@ -207,6 +207,7 @@ function renderBoard() {
             console.log("Invalid bitBoardInfo string.");
     }
 
+    // TODO: different colour square when its not that colour's turn because currently it's confusing 
     if (clicked != null) {
         fillSquare(clicked[0], clicked[1], "yellow", true);
         const targetSquaresFlag = Engine.getPossibleMoves(frToIndex(clicked[0], clicked[1]));

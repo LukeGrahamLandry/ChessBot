@@ -14,22 +14,22 @@ pub fn main() !void {
     const first = try checkGameTime(moves.Strategy(.{ .beDeterministicForTest=true }), count);
     std.debug.print("- [   ] (1.00x) default finished in {}ms.\n", .{first});
 
-    // std.debug.print("Comparing hash functions...\n", .{});
-    // const algos = comptime std.enums.values(moves.HashAlgo);
-    // inline for (algos, 0..) |hashAlgo, i| {
-    //     const strategy = comptime moves.Strategy(.{ .hashAlgo=hashAlgo, .beDeterministicForTest=true });
-    //     const time = try checkGameTime(strategy, count);
-    //     var multiplier: f64 = @as(f64, @floatFromInt(first)) / @as(f64, @floatFromInt(time)); 
-    //     std.debug.print("- [{}/{}] ({d:.2}x) {} finished in {}ms.\n", .{i+1, algos.len, multiplier, hashAlgo, time});
-    // }
+    std.debug.print("Comparing hash functions...\n", .{});
+    const algos = comptime std.enums.values(moves.HashAlgo);
+    inline for (algos, 0..) |hashAlgo, i| {
+        const strategy = comptime moves.Strategy(.{ .hashAlgo=hashAlgo, .beDeterministicForTest=true });
+        const time = try checkGameTime(strategy, count);
+        var multiplier: f64 = @as(f64, @floatFromInt(first)) / @as(f64, @floatFromInt(time)); 
+        std.debug.print("- [{}/{}] ({d:.2}x) {} finished in {}ms.\n", .{i+1, algos.len, multiplier, hashAlgo, time});
+    }
 
-    // {
-    //     std.debug.print("Trying without memo table...\n", .{});
-    //     const noMemo = comptime moves.Strategy(.{ .memoMapSizeMB=0, .beDeterministicForTest=true });
-    //     const time = try checkGameTime(noMemo, count);
-    //     var multiplier: f64 = @as(f64, @floatFromInt(first)) / @as(f64, @floatFromInt(time)); 
-    //     std.debug.print("- [   ]({d:.2}x) moves.HashAlgo.None finished in {}ms.\n", .{multiplier, time});
-    // }
+    {
+        std.debug.print("Trying without memo table...\n", .{});
+        const noMemo = comptime moves.Strategy(.{ .memoMapSizeMB=0, .beDeterministicForTest=true });
+        const time = try checkGameTime(noMemo, count);
+        var multiplier: f64 = @as(f64, @floatFromInt(first)) / @as(f64, @floatFromInt(time)); 
+        std.debug.print("- [   ]({d:.2}x) moves.HashAlgo.None finished in {}ms.\n", .{multiplier, time});
+    }
 
     std.debug.print("Comparing check detection...\n", .{});
     const algos2 = comptime std.enums.values(moves.CheckAlgo);

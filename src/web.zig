@@ -155,6 +155,7 @@ export fn playHumanMove(fromIndex: u32, toIndex: u32) i32 {
    return 0;
 }
 
+// TODO: one for illigal moves (because check)
 const one: u64 = 1;
 export fn getBitBoard(magicEngineIndex: u32, colourIndex: u32) u64 {
    const colour: Colour = if (colourIndex == 0) .White else .Black;

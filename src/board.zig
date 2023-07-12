@@ -242,7 +242,7 @@ pub const Board = struct {
 
     pub fn copyPlay(self: *const Board, move: Move) Board {
         var board = self.*;
-        _ = board.play(move);
+        _ = try board.play(move);
         return board;
     }
 

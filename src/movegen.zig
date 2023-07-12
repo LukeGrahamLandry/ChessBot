@@ -399,3 +399,212 @@ test "count possible games" {
         std.debug.print("Explored Depth {} in {}ms.\n", .{i, @divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms))});
     }
 }
+
+// TODO: this is bascilly a copy paste from the other one 
+pub fn reverseFromKingIsInCheck(game: *Board, me: Colour) !bool {
+    const i = if (me == .Black) (game.blackKingIndex) else (game.whiteKingIndex);
+    const file = i % 8;
+    const rank = i / 8;
+
+    const isInCheck = check: {
+        // Move like a rook
+        if (file < 7) {
+            for ((file + 1)..8) |checkFile| {
+                if (!game.emptyAt(checkFile, rank)) {
+                    const p = game.get(checkFile, rank);
+                    if (p.colour == me) break;
+                    if (p.kind == .Queen or p.kind == .Rook) {
+                        break :check true;
+                    } 
+                    else break;
+                }
+            }
+        }
+        
+        if (file > 0) {
+            for (1..(file+1)) |checkFile| {
+                if (!game.emptyAt(file - checkFile, rank)) {
+                    const p = game.get(file - checkFile, rank);
+                    if (p.colour == me) break;
+                    if (p.kind == .Queen or p.kind == .Rook){
+                        break :check true;
+                    } 
+                    else break;
+                }
+            }
+        }
+
+        if (rank < 7) {
+            for ((rank + 1)..8) |checkRank| {
+                if (!game.emptyAt(file, checkRank)) {
+                    const p = game.get(file, checkRank);
+                    if (p.colour == me) break;
+                    if (p.kind == .Queen or p.kind == .Rook) {
+                        break :check true;
+                    } 
+                    else break;
+                }
+            }
+        }
+    
+        if (rank > 0) {
+            for (1..(rank+1)) |checkRank| {
+                if (!game.emptyAt(file, rank-checkRank)) {
+                    const p = game.get(file, rank-checkRank);
+                    if (p.colour == me) break;
+                    if (p.kind == .Queen or p.kind == .Rook) {
+                        break :check true;
+                    } 
+                    else break;
+                }
+            }
+        }
+
+        // Move like a bishop
+        {
+            var checkFile = file;
+            var checkRank = rank;
+            while (checkFile < 7 and checkRank < 7) {
+                checkFile += 1;
+                checkRank += 1;
+                if (!game.emptyAt(checkFile, checkRank)) {
+                    const p = game.get(checkFile, checkRank);
+                    if (p.colour == me) break;
+                    if (p.kind == .Queen or p.kind == .Bishop){
+                        break :check true;
+                    } 
+                    else break;
+                }
+            }
+        }
+
+        {
+            var checkFile = file;
+            var checkRank = rank;
+            while (checkFile > 0 and checkRank < 7) {
+                checkFile -= 1;
+                checkRank += 1;
+                if (!game.emptyAt(checkFile, checkRank)) {
+                    const p = game.get(checkFile, checkRank);
+                    if (p.colour == me) break;
+                    if (p.kind == .Queen or p.kind == .Bishop){
+                        break :check true;
+                    } 
+                    else break;
+                }
+            }
+        }
+
+        {
+            var checkFile = file;
+            var checkRank = rank;
+            while (checkFile < 7 and checkRank > 0) {
+                checkFile += 1;
+                checkRank -= 1;
+                if (!game.emptyAt(checkFile, checkRank)) {
+                    const p = game.get(checkFile, checkRank);
+                    if (p.colour == me) break;
+                    if (p.kind == .Queen or p.kind == .Bishop){
+                        break :check true;
+                    } 
+                    else break;
+                }
+            }
+        }
+
+        {
+            var checkFile = file;
+            var checkRank = rank;
+            while (checkFile > 0 and checkRank > 0) {
+                checkFile -= 1;
+                checkRank -= 1;
+                if (!game.emptyAt(checkFile, checkRank)) {
+                    const p = game.get(checkFile, checkRank);
+                    if (p.colour == me) break;  // my piece is safe and blocks
+                    if (p.kind == .Queen or p.kind == .Bishop) {  // your slider can attack me
+                        break :check true;
+                    } 
+                    else break;  // your non-slider keeps me safe from other sliders 
+                }
+            }
+        }
+
+        // The other king
+        const iOther = if (me == .Black) (game.whiteKingIndex) else (game.blackKingIndex);
+        const fileOther = iOther % 8;
+        const rankOther = iOther / 8;
+        const fileDiff = @as(i32, @intCast(file)) - @as(i32, @intCast(fileOther));
+        const rankDiff = @as(i32, @intCast(rank)) - @as(i32, @intCast(rankOther));
+        if (fileDiff*fileDiff <= 1 and rankDiff*rankDiff <= 1) break :check true;
+
+
+        // Pawns
+        // Dont care about forward moves becasue they can't take. 
+        const targetRank = switch (me) {
+            .White => w: {
+                break :w rank + 1;
+            },
+            .Black => b: {
+                break :b rank - 1;
+            }
+        };
+
+        if (file < 7 and game.get(file + 1, targetRank).kind == .Pawn and game.get(file + 1, targetRank).colour != me) {  // right
+            break :check true;
+        }
+        if (file > 0 and game.get(file - 1, targetRank).kind == .Pawn and game.get(file - 1, targetRank).colour != me) {
+            break :check true;
+        }
+
+        // Knights!
+
+        if (rank < 6){
+            if (file < 7) {
+                const p = game.get(file + 1, rank + 2);
+                if (p.kind == .Knight and p.colour != me) break :check true; 
+            }
+
+            if (file > 0) {
+                const p = game.get(file - 1, rank + 2);
+                if (p.kind == .Knight and p.colour != me) break :check true; 
+            }
+        }
+        if (rank > 1){
+            if (file < 7) {
+                const p = game.get(file + 1, rank - 2);
+                if (p.kind == .Knight and p.colour != me) break :check true; 
+            }
+
+            if (file > 0) {
+                const p = game.get(file - 1, rank - 2);
+                if (p.kind == .Knight and p.colour != me) break :check true; 
+            }
+        }
+
+        if (file < 6){
+            if (rank < 7) {
+                const p = game.get(file + 2, rank + 1);
+                if (p.kind == .Knight and p.colour != me) break :check true; 
+            }
+
+            if (rank > 0) {
+                const p = game.get(file + 2, rank - 1);
+                if (p.kind == .Knight and p.colour != me) break :check true; 
+            }
+        }
+        if (file > 1){
+            if (rank < 7) {
+                const p = game.get(file - 2, rank + 1);
+                if (p.kind == .Knight and p.colour != me) break :check true; 
+            }
+
+            if (rank > 0) {
+                const p = game.get(file - 2, rank - 1);
+                if (p.kind == .Knight and p.colour != me) break :check true; 
+            }
+        }
+
+        break :check false;
+    };
+    return isInCheck;
+}
