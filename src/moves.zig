@@ -31,6 +31,15 @@ pub const Move = struct {
             .action = .none,
         };
     }
+
+    pub fn ii(fromIndex: u6, toIndex: u6) Move {
+        // std.debug.assert(fromIndex < 64 and toFile < 8 and toRank < 8);
+        return .{
+            .from=fromIndex,
+            .to = toIndex,
+            .action = .none,
+        };
+    }
 };
 
 pub const HashAlgo = enum {
@@ -256,8 +265,8 @@ fn checkAlphaBeta(bestVal: i32, me: Colour, bestWhiteEval: *i32, bestBlackEval: 
 };} // End Strategy. 
 
 pub const default = Strategy(.{});
-const testFast = Strategy(.{ .beDeterministicForTest=true});
-const testSlow = Strategy(.{ .beDeterministicForTest=true, .doPruning=false });
+const testFast = Strategy(.{ .beDeterministicForTest=true, .checkDetection=.Ignore });
+const testSlow = Strategy(.{ .beDeterministicForTest=true, .checkDetection=.Ignore, .doPruning=false });
 const Timer = @import("bench.zig").Timer;
 
 // TODO: this should be generic over a the strategies to compare. 

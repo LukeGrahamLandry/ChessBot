@@ -111,7 +111,81 @@ pub fn collectOnePieceMoves(moves: *std.ArrayList(Move), board: *const Board, i:
     }
 }
 
+const Sq = @Vector(2, i32);
 fn rookSlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
+    // _ = _rank;
+    // _ = _file;
+    // const up: i32 = 8;
+    // const down: i32 = -8;
+    // const left: i32 = -1;
+    // const right: i32 = 1;
+    // const directions = comptime [_] i32 { up, down, left, right };
+    // inline for (directions) |dir| {
+    //     var pos: i32 = @intCast(i);
+    //     for (0..8) |_| {
+    //         pos += dir;
+    //         if (pos < 0 or pos > 63) break;
+    //         if (try trySlide2(moves, board, @intCast(i), @intCast(pos), piece)) break;
+    //     }
+    // }
+
+
+    // const start: Sq = [_] i32 { @intCast(_file), @intCast(_rank) };
+
+    // const up: Sq = comptime [_] i32 { 0, 1 };
+    // const down: Sq = comptime [_] i32 { 0, -1 };
+    // const left: Sq = comptime [_] i32 { -1, 0 };
+    // const right: Sq = comptime [_] i32 { 1, 0 };
+    // const directions = comptime [_] Sq { up, down, left, right };
+
+    // const _flag: i32 = 63;
+    // const flag: Sq = @splat(2, ~_flag);
+
+    // inline for (directions, 0..) |dir, dirIndex| {
+    //     _ = dirIndex;
+    //     var pos = start;
+    //     for (0..8) |_| {
+    //         pos += dir;
+    //         if (@reduce(.Or, pos & flag != @splat(2, @as(i32, 0)))) break;
+    //         if (try trySlide(moves, board, i, @intCast(pos[0]), @intCast(pos[1]), piece)) break;
+    //     }
+    // }
+
+    // const distances = comptime calc: {
+    //     @setEvalBranchQuota(4*64*8);
+    //     var byDirection: [4] [64] usize = std.mem.zeroes([4] [64] usize);
+    //     for (directions, 0..) |dir, dirIndex| {
+    //         for (0..64) |sqIndex| {
+    //             var pos: Sq = [_] i32 { @rem(sqIndex, 8), @divFloor(sqIndex, 8) };
+    //             for (0..8) |_| {
+    //                 pos += dir;
+    //                 if (pos[0] < 0 or pos[1] < 0 or pos[0] > 7 or pos[1] > 7) break;
+    //                 byDirection[dirIndex][sqIndex] += 1;
+    //             }
+    //         }
+    //     }
+    //     break :calc byDirection;
+    // };
+
+    // inline for (directions, 0..) |dir, dirIndex| {
+    //     var pos = start;
+    //     for (0..distances[dirIndex][i]) |_| {
+    //         pos += dir;
+    //         if (try trySlide(moves, board, i, @intCast(pos[0]), @intCast(pos[1]), piece)) break;
+    //     }
+    // }
+
+    // const zero: Sq = @splat(2, @as(i32, 0));
+    // const seven: Sq = @splat(2, @as(i32, 7));
+    // inline for (directions) |dir| {
+    //     var pos = start;
+    //     for (0..8) |_| {
+    //         pos += dir;
+    //         if (@reduce(.Or, pos < zero) or @reduce(.Or, pos > seven)) break;
+    //         if (try trySlide(moves, board, i, @intCast(pos[0]), @intCast(pos[1]), piece)) break;
+    //     }
+    // }
+
     // TODO: this does not spark joy. Feels like there should be some way to express it as a mask that you bit shift around. 
     if (file < 7) {
         for ((file + 1)..8) |checkFile| {
@@ -238,6 +312,40 @@ fn trySlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, checkFil
         return true;
     } else {
         var toPush = Move.irf(i, checkFile, checkRank);
+
+        // Have this be a comptime param that gets passed down so I can easily benchmark. 
+        // This is a capture, we like that, put it first. Capturing more valuable pieces is also good. 
+        for (moves.items, 0..) |move, index| {
+            const holding = board.squares[toPush.to].kind.material();
+            const lookingAt = board.squares[move.to].kind.material();
+            if (holding == 0) break;
+            if (holding > lookingAt){
+                moves.items[index] = toPush;
+                toPush = move;
+            }
+        }
+
+        try moves.append(toPush);
+        return true;
+    }
+}
+
+fn trySlide2(moves: *std.ArrayList(Move), board: *const Board, fromIndex: u6, toIndexx: u6, piece: Piece) !bool {
+    const check = board.squares[toIndexx];
+    
+    switch (filter) {
+        .Any => {},
+        .CapturesOnly => if (check.empty()) return true,
+        .KingCapturesOnly => if (check.kind != .King) return !check.empty(),
+    }
+
+    if (check.empty()) {
+        try moves.append(Move.ii(fromIndex, toIndexx));
+        return false;
+    } else if (check.colour == piece.colour) { 
+        return true;
+    } else {
+        var toPush = Move.ii(fromIndex, toIndexx);
 
         // Have this be a comptime param that gets passed down so I can easily benchmark. 
         // This is a capture, we like that, put it first. Capturing more valuable pieces is also good. 
