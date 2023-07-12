@@ -240,14 +240,10 @@ pub const Board = struct {
         }
     }
 
-    // TODO: !!! this will break everything because aliased arraylist
     pub fn copyPlay(self: *const Board, move: Move) Board {
-        _ = move;
-        _ = self;
-        @panic("TODO");
-        // var board = self.*;
-        // _ = board.play(move);
-        // return board;
+        var board = self.*;
+        _ = board.play(move);
+        return board;
     }
 
     // TODO: this rejects the extra data at the end because I can't store it yet. 

@@ -203,9 +203,6 @@ function renderBoard() {
         case "king": 
             drawBitBoardPair(1);
             break;
-        case "targets": 
-            drawBitBoardPair(2);
-            break;
         default: 
             console.log("Invalid bitBoardInfo string.");
     }

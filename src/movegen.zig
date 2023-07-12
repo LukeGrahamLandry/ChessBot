@@ -89,7 +89,6 @@ pub fn possibleMoves(board: *const Board, me: Colour, alloc: std.mem.Allocator) 
         const file = i % 8;
         const rank = i / 8;
         try collectOnePieceMoves(&moves, board, i, file, rank);
-        
     }
 
     // TODO: make sure this isn't reallocating 

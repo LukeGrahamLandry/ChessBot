@@ -44,6 +44,10 @@ pub const HashAlgo = enum {
     CityHash64,
 };
 
+pub const CheckAlgo = enum {
+    Ignore, LookAhead, ReverseFromKing
+};
+
 var notTheRng = std.rand.DefaultPrng.init(0);
 var rng = notTheRng.random();
 
@@ -56,9 +60,7 @@ pub const StratOpts = struct {
     memoMapSizeMB: usize = 20,  // Zero means don't use memo map at all. 
     memoMapFillPercent: usize = 60,  // Affects usable map capacity but not memory usage. 
     hashAlgo: HashAlgo = .CityHash64,
-    checkDetection: enum {
-        Ignore, LookAhead, ReverseFromKing
-    } = .ReverseFromKing,
+    checkDetection: CheckAlgo = .ReverseFromKing,
 };
 
 // TODO: script that tests different variations (compare speed and run correctness tests). 
@@ -154,6 +156,63 @@ pub fn inCheck(game: *Board, me: Colour, alloc: std.mem.Allocator) !bool {
                             const p = game.get(file, rank-checkRank);
                             if (p.colour == me) break;
                             if (p.kind == .Queen or p.kind == .Rook) break :check true;
+                        }
+                    }
+                }
+
+                // Move like a bishop
+                {
+                    var checkFile = file;
+                    var checkRank = rank;
+                    while (checkFile < 7 and checkRank < 7) {
+                        checkFile += 1;
+                        checkRank += 1;
+                        if (!game.emptyAt(checkFile, checkRank)) {
+                            const p = game.get(checkFile, checkRank);
+                            if (p.colour == me) break;
+                            if (p.kind == .Queen or p.kind == .Bishop) break :check true;
+                        }
+                    }
+                }
+
+                {
+                    var checkFile = file;
+                    var checkRank = rank;
+                    while (checkFile > 0 and checkRank < 7) {
+                        checkFile -= 1;
+                        checkRank += 1;
+                        if (!game.emptyAt(checkFile, checkRank)) {
+                            const p = game.get(checkFile, checkRank);
+                            if (p.colour == me) break;
+                            if (p.kind == .Queen or p.kind == .Bishop) break :check true;
+                        }
+                    }
+                }
+
+                {
+                    var checkFile = file;
+                    var checkRank = rank;
+                    while (checkFile < 7 and checkRank > 0) {
+                        checkFile += 1;
+                        checkRank -= 1;
+                        if (!game.emptyAt(checkFile, checkRank)) {
+                            const p = game.get(checkFile, checkRank);
+                            if (p.colour == me) break;
+                            if (p.kind == .Queen or p.kind == .Bishop) break :check true;
+                        }
+                    }
+                }
+
+                {
+                    var checkFile = file;
+                    var checkRank = rank;
+                    while (checkFile > 0 and checkRank > 0) {
+                        checkFile -= 1;
+                        checkRank -= 1;
+                        if (!game.emptyAt(checkFile, checkRank)) {
+                            const p = game.get(checkFile, checkRank);
+                            if (p.colour == me) break;
+                            if (p.kind == .Queen or p.kind == .Bishop) break :check true;
                         }
                     }
                 }

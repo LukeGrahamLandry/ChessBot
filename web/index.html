@@ -16,9 +16,8 @@
             Material Eval: <span id="mEval"></span> <br>
             <select id="bitboard" onchange="handleBitboardSelect()">
                 <option value="none">None</option>
-                <option value="all">All Piece Positions</option>
+                <option value="all" selected>All Piece Positions</option>
                 <option value="king">King Position</option>
-                <option value="targets">Target Positions</option>
             </select>
             <textarea id="history" rows="3" cols="60"></textarea>
         </div>
@@ -33,6 +32,7 @@
 
         document.getElementById("loading").style.display = "none";
         ctx.canvas.addEventListener("click", handleCanvasClick);
+        handleBitboardSelect();
         renderBoard();
     }
 

@@ -78,10 +78,8 @@ export fn getPossibleMoves(from: i32) u64 {
    for (allMoves) |move| {
       if (@as(i32, move.from) == from) {
          const unMove = internalBoard.?.play(move) catch return 1;
-         if (moves.inCheck(&internalBoard.?, piece.colour, alloc) catch return 1) {
-            internalBoard.?.unplay(unMove);
-            continue;
-         }
+         defer internalBoard.?.unplay(unMove);
+         if (moves.inCheck(&internalBoard.?, piece.colour, alloc) catch return 1) continue;
          result |= @as(u64, 1) << @intCast(move.to);
       }
    }
