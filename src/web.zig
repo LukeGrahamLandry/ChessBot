@@ -47,8 +47,6 @@ export fn playRandomMove() i32 {
 /// IN: internalBoard, boardView, nextColour
 /// OUT: internalBoard, boardView, nextColour
 export fn playNextMove() i32 {
-   // if (nextColour == .Black) return playRandomMove();
-
    const move = moves.bestMove(&internalBoard, nextColour) catch |err| {
       switch (err) {
          error.OutOfMemory => return 1,
@@ -90,7 +88,7 @@ export fn setFromFen(length: u32) bool {
    const temp = Board.fromFEN(fenSlice) catch return false;
    internalBoard = temp;
    boardView = @bitCast(internalBoard.squares);
-   nextColour = .White;
+   nextColour = .Black;  // TODO
    return true;
 }
 

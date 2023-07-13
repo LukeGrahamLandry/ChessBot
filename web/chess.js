@@ -50,6 +50,7 @@ function handleSetFromFen(){
     const success = Engine.setFromFen(length);
     if (!success) alert("Invalid FEN.");
     renderBoard();
+    tickGame();
 }
 
 function getFenFromEngine() {

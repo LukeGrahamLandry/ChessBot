@@ -69,7 +69,7 @@ pub const genAllMoves = movegen.MoveFilter.Any.get();
 pub const StratOpts = struct {
     maxDepth: comptime_int = 3,  // TODO: should be runtime param to bestMove so wasm can change without increasing code size. 
     doPruning: bool = true, 
-    beDeterministicForTest: bool = false,  // Interesting that it's much faster with this =true. Rng is slow!
+    beDeterministicForTest: bool = true,  // Interesting that it's much faster with this =true. Rng is slow!
     memoMapSizeMB: usize = 20,  // Zero means don't use memo map at all. 
     memoMapFillPercent: usize = 60,  // Affects usable map capacity but not memory usage. 
     hashAlgo: HashAlgo = .CityHash64,
@@ -138,12 +138,24 @@ pub fn inCheck(game: *Board, me: Colour, alloc: std.mem.Allocator) !bool {
 pub fn bestMove(game: *Board, me: Colour) !Move {
     var alloc = upperArena.allocator();
     defer assert(upperArena.reset(.retain_capacity));
-    
+    const bestMoves = try allEqualBestMoves(game, me, alloc);
+    defer bestMoves.deinit();
+
+    // assert(bestMoves.items.len > 0 and bestMoves.items.len <= moves.len);
+    // You can't just pick a deterministic random because pruning might end up with a shorter list of equal moves. 
+    // Always choosing the first should be fine because pruning just cuts off the search early.
+    // Generating random numbers is quite slow, so don't do it if theres only 1 option anyway. 
+    const choice = if (opts.beDeterministicForTest or bestMoves.items.len == 1) 0 else rng.uintLessThanBiased(usize, bestMoves.items.len);
+    return bestMoves.items[choice];
+}
+
+pub fn allEqualBestMoves(game: *Board, me: Colour, alloc: std.mem.Allocator) !std.ArrayList(Move) {
     const moves = try genAllMoves.possibleMoves(game, me, alloc);
     defer alloc.free(moves);
     if (moves.len == 0) return error.GameOver;
+
+    // No deinit because returned
     var bestMoves = try std.ArrayList(Move).initCapacity(alloc, 50);
-    defer bestMoves.deinit();
 
     var memo = MemoMap.init(alloc);
     if (useMemoMap) try memo.ensureTotalCapacity(MEMO_CAPACITY);
@@ -160,26 +172,25 @@ pub fn bestMove(game: *Board, me: Colour) !Move {
         defer game.unplay(unMove);
         if (try inCheck(game, me, alloc)) continue;
         const value = -try walkEval(game, me.other(), opts.maxDepth, opts.followCaptureDepth, bestWhiteEval, bestBlackEval, movesArena.allocator(), &count, &memo, false);  // TODO: need to catch
+        // std.debug.print("{} count: {} \n", .{ value, bestMoves.items.len });
         if (value > bestVal) {
             bestVal = value;
             bestMoves.clearRetainingCapacity();
+            // std.debug.print("just cleared count: {} \n", .{ bestMoves.items.len });
             try bestMoves.append(move);
-            if (opts.doPruning and checkAlphaBeta(bestVal, me, &bestWhiteEval, &bestBlackEval)) break;
+            // std.debug.print("before {} {}\n", .{value, bestVal});
+            // if (opts.doPruning and checkAlphaBeta(bestVal, me, &bestWhiteEval, &bestBlackEval)){
+            //     std.debug.print("prune!", .{});
+            //     break;
+            // } 
+            // std.debug.print("after {} {}\n", .{value, bestVal});
         } else if (value == bestVal) {
+            // std.debug.print("{} {} pre equal: {} \n", .{ value, bestVal, bestMoves.items.len });
             try bestMoves.append(move);
         }
-        assert(movesArena.reset(.retain_capacity));
     }
 
-    // assert(bestMoves.items.len > 0 and bestMoves.items.len <= moves.len);
-    // You can't just pick a deterministic random because pruning might end up with a shorter list of equal moves. 
-    // Always choosing the first should be fine because pruning just cuts off the search early.
-    // Generating random numbers is quite slow, so don't do it if theres only 1 option anyway. 
-    const choice = if (opts.beDeterministicForTest or bestMoves.items.len == 1) 0 else rng.uintLessThanBiased(usize,  bestMoves.items.len);
-    if (!isWasm and !opts.beDeterministicForTest) {
-        std.debug.print("- Checked {} end states. {} boards in memo table (max={}). {} moves with eval {}.\n", .{count, memo.count(), memo.capacity(), bestMoves.items.len, bestVal});
-    }
-    return bestMoves.items[choice];
+    return bestMoves;
 }
 
 // https://en.wikipedia.org/wiki/Alpha%E2%80%93beta_pruning

@@ -56,15 +56,19 @@ fn debugPrintAllMoves(fen: [] const u8, colour: board.Colour) !void {
     const start = try game.displayString(alloc);
     defer alloc.free(start);
     std.debug.print("Initial Position:\n{s}\n", .{start});
-    // TODO: check
-    const allMoves = try moves.genAllMoves.possibleMoves(&game, colour, alloc);
-    std.debug.print("{} has {} possible moves.\n", .{colour, allMoves.len});
     const strat = moves.Strategy(.{ .beDeterministicForTest=true });
-    defer alloc.free(allMoves);
+    // TODO: check
+    // const allMoves = try moves.genAllMoves.possibleMoves(&game, colour, alloc);
+    // std.debug.print("{} has {} possible moves.\n", .{colour, allMoves.len});
+    const allMoves = try strat.allEqualBestMoves(&game, colour, alloc);
+    // defer allMoves.deinit();
+    std.debug.print("{} has {} best moves.\n", .{colour, allMoves.items.len});
+    
+    defer allMoves.deinit();
     var memo = strat.MemoMap.init(alloc);
     try memo.ensureTotalCapacity(10000);
     defer memo.deinit();
-    for (allMoves, 1..) |move, i| {
+    for (allMoves.items, 1..) |move, i| {
         const unMove = try game.play(move);
         defer game.unplay(unMove);
         const s = try game.displayString(alloc);
