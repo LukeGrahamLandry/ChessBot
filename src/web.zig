@@ -88,7 +88,7 @@ export fn setFromFen(length: u32) bool {
    const temp = Board.fromFEN(fenSlice) catch return false;
    internalBoard = temp;
    boardView = @bitCast(internalBoard.squares);
-   nextColour = .Black;  // TODO
+   nextColour = .White;  // TODO
    return true;
 }
 
@@ -155,4 +155,8 @@ export fn getBitBoard(magicEngineIndex: u32, colourIndex: u32) u64 {
       1 => if (colour == .Black) (one << internalBoard.blackKingIndex) else  (one << internalBoard.whiteKingIndex),
       else => 0,
    };
+}
+
+export fn isWhiteTurn() bool {
+   return nextColour == .White;
 }

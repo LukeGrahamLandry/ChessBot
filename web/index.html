@@ -13,13 +13,12 @@
             <button onclick="handleResume()" id="resume"> Resume </button>
             <br> <br>
             FEN: <input type="text" id="fen" style="width: 350px;"> <button onclick="handleSetFromFen()">Set Board</button> <br>
-            Material Eval: <span id="mEval"></span> <br>
+            <span id="player"></span>'s Turn. Material Eval: <span id="mEval"></span> <br>
             <select id="bitboard" onchange="handleBitboardSelect()">
                 <option value="none" selected>None</option>
                 <option value="all">All Piece Positions</option>
                 <option value="king">King Position</option>
             </select>
-            <textarea id="history" rows="3" cols="60"></textarea>
         </div>
         <div id="loading"> Loading... </div>
     </div>
@@ -32,6 +31,7 @@
 
         document.getElementById("loading").style.display = "none";
         ctx.canvas.addEventListener("click", handleCanvasClick);
+        handleRestart();
         handleBitboardSelect();
         renderBoard();
     }
@@ -39,7 +39,6 @@
     var Engine;
     function handleWasmLoaded(wasm) {
         Engine = wasm.instance.exports;
-        Engine.restartGame();
         wasmReady = true;
         window.startChessIfReady();
     }

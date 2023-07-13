@@ -217,6 +217,7 @@ pub fn walkEval(game: *Board, me: Colour, remaining: i32, bigRemaining: i32, bes
 
         const value = if (capturesOnly and !move.isCapture) v: {
             // TODO: this isnt quite what I want. That move wasn't a capture but that doesn't mean that the new board is safe. 
+            // The problem I'm trying to solve is if you simpleEval on a board where captures are possible, the eval will be totally different next move. 
             break :v if (me == .White) genAllMoves.simpleEval(game) else -genAllMoves.simpleEval(game); 
         } else if (remaining <= 0) v: {
             if (!capturesOnly) {
@@ -295,6 +296,7 @@ fn testPruning(fen: [] const u8, me: Colour) !void {
     const tst = if (@import("builtin").is_test) std.testing.allocator else pls.allocator();
     _ = tst;
     var game = try Board.fromFEN(fen);
+    game.nextPlayer = me; // TODO
     var t = Timer.start();
     const slow = try testSlow.bestMove(&game, me);
     const t1 = t.end();
@@ -342,8 +344,10 @@ test "bestMoves eval equal" {
     inline for (@import("movegen.zig").fensToTest) |fen| {
         inline for (.{Colour.White, Colour.Black}) |me| {
             defer assert(arena.reset(.retain_capacity));
-            const initial = try Board.fromFEN(fen);
+            var initial = try Board.fromFEN(fen);
+            initial.nextPlayer = me; // TODO
             var game = try Board.fromFEN(fen);
+            game.nextPlayer = me; // TODO
             const bestMoves = try testFast.allEqualBestMoves(&game, me, quickAlloc);
 
             const allMoves = try @import("movegen.zig").MoveFilter.Any.get().possibleMoves(&game, me, quickAlloc);

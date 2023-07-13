@@ -67,10 +67,11 @@ fn toIndex(file: usize, rank: usize) u6  {
 //     return moves;
 // }
 
-// TODO: castling, en-passant, check
+// TODO: castling, en-passant
 const one: u64 = 1;
 // Caller owns the returned slice.
 pub fn possibleMoves(board: *const Board, me: Colour, alloc: std.mem.Allocator) ![] Move {
+    assert(board.nextPlayer == me);  // sanity. TODO: don't bother passing colour since the board knows?
     var moves = try std.ArrayList(Move).initCapacity(alloc, 50);
     const mySquares = switch (me) {
             .White => board.peicePositions.white,
@@ -480,6 +481,7 @@ const MoveList = std.ArrayList(Move);
 fn testCapturesOnly(fen: [] const u8) !void {
     inline for (.{Colour.White, Colour.Black}) |me| {
         var game = try Board.fromFEN(fen);
+        game.nextPlayer = me; // TODO
         const big = try MoveFilter.Any.get().possibleMoves(&game, me, tst);
         // var notCaptures = MoveList.fromOwnedSlice(tst, big);
         defer tst.free(big);

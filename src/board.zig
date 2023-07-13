@@ -94,7 +94,7 @@ pub const Piece = packed struct {
 };
 
 const ASCII_ZERO_CHAR: u8 = 48;
-pub const INIT_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR";
+pub const INIT_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w";
 const InvalidFenErr = error { InvalidFen };
 
 const BitBoardPair = packed struct {
@@ -142,6 +142,7 @@ pub const Board = struct {
     simpleEval: i32 = 0,
     blackKingIndex: u6 = 0,
     whiteKingIndex: u6 = 0,
+    nextPlayer: Colour = .White,
 
     pub fn blank() Board {
         return .{};
@@ -180,6 +181,7 @@ pub const Board = struct {
     const genAnyMove = @import("movegen.zig").MoveFilter.Any.get();
     pub fn play(self: *Board, move: Move) !OldMove {
         const thisMove: OldMove = .{ .move = move, .taken = self.squares[move.to], .original = self.squares[move.from]};
+        assert(thisMove.original.colour == self.nextPlayer);
         self.simpleEval -= thisMove.taken.eval();
         
         self.peicePositions.unsetBit(move.from, thisMove.original.colour);
@@ -205,6 +207,7 @@ pub const Board = struct {
             }
         }
 
+        self.nextPlayer = self.nextPlayer.other();
         return thisMove;
     }
 
@@ -231,6 +234,9 @@ pub const Board = struct {
                 .White => self.whiteKingIndex = move.move.from,
             }
         }
+
+        self.nextPlayer = self.nextPlayer.other();
+        assert(move.original.colour == self.nextPlayer);
     }
 
     pub fn copyPlay(self: *const Board, move: Move) Board {
@@ -240,11 +246,15 @@ pub const Board = struct {
     }
 
     // TODO: this rejects the extra data at the end because I can't store it yet. 
-    pub fn fromFEN(fen: [] const u8, ) InvalidFenErr!Board {
+    pub fn fromFEN(fen: [] const u8) InvalidFenErr!Board {
         var self = Board.blank();
         var file: u8 = 0;
         var rank: u8 = 7;
+        var i: usize = 0;
         for (fen) |letter| {
+            defer i += 1;
+            if (letter == ' ') break;
+
             if (std.ascii.isDigit(letter)) {
                 const count = letter - ASCII_ZERO_CHAR;
                 file += count;
@@ -261,13 +271,27 @@ pub const Board = struct {
         }
         
         if (file != 8) return error.InvalidFen;
-        
+
+        // Extra info fields
+        if (i != fen.len){
+            switch (fen[i]) {
+                'w' => self.nextPlayer = .White,
+                'b' => self.nextPlayer = .Black,
+                else => return error.InvalidFen,
+            }
+            i += 1;
+
+            // Reject extra fields. TODO
+            if (i != fen.len) return error.InvalidFen;
+
+        } // TODO: else should probably be a hard error but for now specifing player to move is optional and defaults to white. 
+         
         return self;
     }
 
     // Caller owns the returned string. 
     pub fn toFEN(self: *const Board, allocator: std.mem.Allocator) std.mem.Allocator.Error![] u8 {
-        var letters = try std.ArrayList(u8).initCapacity(allocator, 64 + 8);
+        var letters = try std.ArrayList(u8).initCapacity(allocator, 64 + 8 + 2);
         errdefer letters.deinit();
         try self.appendFEN(&letters);
         return try letters.toOwnedSlice();
@@ -295,11 +319,13 @@ pub const Board = struct {
                 try letters.append('/');
             }
         }
+        try letters.append(' ');
+        try letters.append(if (self.nextPlayer == .White) 'w' else 'b');
     }
 
     // Caller owns the returned string. 
     pub fn displayString(self: *const Board, allocator: std.mem.Allocator) ![] u8 {
-        var letters = try std.ArrayList(u8).initCapacity(allocator, 64 + 8 + (64*3) + 64 + 8 + 8);
+        var letters = try std.ArrayList(u8).initCapacity(allocator, 64 + 8 + (64*3) + 64 + 8 + 8 + 2);
         try self.appendFEN(&letters);
         try letters.append('\n');
 

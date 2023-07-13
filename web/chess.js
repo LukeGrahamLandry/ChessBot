@@ -3,9 +3,11 @@ const textDecoder = new TextDecoder();
 const minMoveTimeMs = 500;  // When computer vs computer, if the engine is faster than this, it will wait before playing again. 
 
 let ticker = null;
+let boardFenHistory = [];
 function tickGame() {
     const start = performance.now();
     const result = Engine.playNextMove();
+    boardFenHistory.push(getFenFromEngine());
     const time = Math.round(performance.now() - start);
     console.log("Found move in " + time + "ms.");
     renderBoard();
@@ -26,6 +28,7 @@ function tickGame() {
 function handleRestart() {
     handlePause();
     Engine.restartGame();
+    boardFenHistory = [getFenFromEngine()];
     renderBoard();
 }
 
@@ -64,6 +67,11 @@ function getFenFromEngine() {
     return fenString;
 }
 
+function isHumanTurn() {
+    // This could be done by parsing the fen but that's too much effort. 
+    return Engine.isWhiteTurn();
+}
+
 let clicked = null;
 function handleCanvasClick(e) {
     const squareSize = ctx.canvas.getBoundingClientRect().width / 8;
@@ -73,6 +81,11 @@ function handleCanvasClick(e) {
         clicked = [file, rank];  // TODO: dont like this. use index or be object
         renderBoard();
     } else {
+        if (!isHumanTurn()) {
+            clicked = [file, rank];
+            return;
+        }
+
         const fromIndex = frToIndex(clicked[0], clicked[1]);
         const toIndex = frToIndex(file, rank);
 
@@ -81,6 +94,7 @@ function handleCanvasClick(e) {
         switch (result) {
             case 0:
                 clicked = null;
+                boardFenHistory.push(getFenFromEngine());
                 renderBoard();
                 // TODO: only do this if other player is engine. 
                 setTimeout(tickGame, 25);  // Give it a chance to render.
@@ -186,11 +200,8 @@ function renderBoard() {
     //       but it will be helpful to add history.
     const fen = getFenFromEngine();
     document.getElementById("fen").value = fen;
+    document.getElementById("player").innerText = Engine.isWhiteTurn() ? "White" : "Black";
     document.getElementById("mEval").innerText = Engine.getMaterialEval();
-    // TODO: If you go back to a previous state and then resume, it makes different moves because the rng state changed. idk if that's good or bad 
-    const history = document.getElementById("history");
-    history.value += "\n" + fen;
-    history.scrollTop = history.scrollHeight;
 
     // TODO: If I really cared I could just render the diff instead of clearing the board
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
