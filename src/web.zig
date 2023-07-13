@@ -117,7 +117,8 @@ export fn getMaterialEval() i32 {
 /// OUT: internalBoard, boardView, nextColour
 export fn playHumanMove(fromIndex: u32, toIndex: u32) i32 {
    if (fromIndex >= 64 or toIndex >= 64) return 1;
-   var move: Move  = .{ .from=@intCast(fromIndex), .to=@intCast(toIndex), .action=.none };
+   const isCapture = !internalBoard.squares[toIndex].empty() and internalBoard.squares[toIndex].colour != nextColour;
+   var move: Move  = .{ .from=@intCast(fromIndex), .to=@intCast(toIndex), .action=.none, .isCapture=isCapture};
    // TODO: ui should know when promoting so it can let you choose which piece to make. 
    if (internalBoard.squares[fromIndex].kind == .Pawn) {
       // TODO: factor out some canPromote function so magic numbers live in one place

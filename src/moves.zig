@@ -185,7 +185,7 @@ pub fn bestMove(game: *Board, me: Colour) !Move {
 // https://en.wikipedia.org/wiki/Alpha%E2%80%93beta_pruning
 // TODO: when hit depth, keep going but only look at captures
 // The alpha-beta values effect lower layers, not higher layers, so passed by value. 
-// TODO: remove capturesOnly flag cause not used
+// The eval of <game>, positive means <me> is winning, assuming it is <me>'s turn. 
 pub fn walkEval(game: *Board, me: Colour, remaining: i32, bigRemaining: i32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, count: *u64, memo: *MemoMap, comptime capturesOnly: bool) MoveErr!i32 {
     // After alpha-beta, bigger starting cap, and not reallocating each move, this does make it faster. 
     // Makes Black move 4 end states go 16,000,000 -> 1,000,000
@@ -203,32 +203,33 @@ pub fn walkEval(game: *Board, me: Colour, remaining: i32, bigRemaining: i32, bes
     var bestWhiteEval = bestWhiteEvalIn;
     var bestBlackEval = bestBlackEvalIn;
 
-    const moves = try genAllMoves.possibleMoves(game, me, alloc);
+    const moveGen = genAllMoves;
+    const moves = try moveGen.possibleMoves(game, me, alloc);
     defer alloc.free(moves);
     // if (moves.len == 0 and capturesOnly) {
     //     return if (me == .White) genAllMoves.simpleEval(game) else -genAllMoves.simpleEval(game);
     // }
     if (moves.len == 0) return error.GameOver;
-
-    if (remaining < 0){
-        for (moves) |move| {
-            if (move.isCapture) break;
-        } else {
-            return if (me == .White) genAllMoves.simpleEval(game) else -genAllMoves.simpleEval(game); 
-        }
-    }
-        
     
     var bestVal: i32 = -1000000;
     for (moves) |move| {
         const unMove = try game.play(move);
         defer game.unplay(unMove);
         if (try inCheck(game, me, alloc)) continue;
-        const value = if (remaining < 1) v: {
+
+        const value = if (remaining <= 0 or (capturesOnly and !move.isCapture)) v: {
+            if (!capturesOnly) {
+                    const val = walkEval(game, me.other(), 3, bigRemaining, bestWhiteEval, bestBlackEval, alloc, count, memo, true) catch |err| {
+                    switch (err) {
+                        error.OutOfMemory => return err,
+                        error.GameOver => break :v 1234567,
+                    }
+                };
+                break :v -val;
+            }
             break :v if (me == .White) genAllMoves.simpleEval(game) else -genAllMoves.simpleEval(game); 
         } else r: {
-            const remain = if (remaining < 0 and !move.isCapture) remaining - 5 else remaining - 1;
-            const v = walkEval(game, me.other(), remain, bigRemaining, bestWhiteEval, bestBlackEval, alloc, count, memo, capturesOnly) catch |err| {
+            const v = walkEval(game, me.other(), remaining - 1, bigRemaining, bestWhiteEval, bestBlackEval, alloc, count, memo, capturesOnly) catch |err| {
                 switch (err) {
                     error.OutOfMemory => return err,
                     error.GameOver => break :r 1234567,
