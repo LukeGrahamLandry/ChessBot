@@ -33,7 +33,6 @@ pub const Move = struct {
     }
 
     pub fn ii(fromIndex: u6, toIndex: u6) Move {
-        // std.debug.assert(fromIndex < 64 and toFile < 8 and toRank < 8);
         return .{
             .from=fromIndex,
             .to = toIndex,
@@ -82,7 +81,7 @@ comptime {
     assert(opts.memoMapFillPercent <= 100);
 }
 
-const MemoMap = std.HashMap(Board, struct {
+pub const MemoMap = std.HashMap(Board, struct {
     eval: i32,
     remaining: i32
 }, struct {
@@ -181,7 +180,7 @@ pub fn bestMove(game: *Board, me: Colour) !Move {
 // https://en.wikipedia.org/wiki/Alpha%E2%80%93beta_pruning
 // TODO: when hit depth, keep going but only look at captures
 // The alpha-beta values effect lower layers, not higher layers, so passed by value. 
-fn walkEval(game: *Board, me: Colour, remaining: i32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, count: *u64, memo: *MemoMap) MoveErr!i32 {
+pub fn walkEval(game: *Board, me: Colour, remaining: i32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, count: *u64, memo: *MemoMap) MoveErr!i32 {
     // After alpha-beta, bigger starting cap, and not reallocating each move, this does make it faster. 
     // Makes Black move 4 end states go 16,000,000 -> 1,000,000
     // But now after better pruning it does almost nothing. 
@@ -271,9 +270,9 @@ const Timer = @import("bench.zig").Timer;
 
 // TODO: this should be generic over a the strategies to compare. 
 fn testPruning(fen: [] const u8, me: Colour) !void {
-    const tst = std.testing.allocator;
-    var game = try Board.fromFEN(fen, tst);
-    defer game.deinit();
+    var pls = std.heap.GeneralPurposeAllocator(.{}){};
+    const tst = if (@import("builtin").is_test) std.testing.allocator else pls.allocator();
+    var game = try Board.fromFEN(fen);
     var t = Timer.start();
     const slow = try testSlow.bestMove(&game, me);
     const t1 = t.end();
@@ -292,12 +291,12 @@ fn testPruning(fen: [] const u8, me: Colour) !void {
         std.debug.print("Moves did not match.\nInitial ({} to move):\n{s}\n\nWithout pruning: \n{s}\nWith pruning: \n{s}", .{me, startBoard, slowBoard, fastBoard});
         return error.TestFailed;
     }
-    std.debug.print("\n- testPruning (slow: {}ms, fast: {}ms) {s}", .{t1, t2, fen});
+    std.debug.print("- testPruning (slow: {}ms, fast: {}ms) {s}\n", .{t1, t2, fen});
 }
 
 // Tests that alpha-beta pruning chooses the same best move as a raw search. 
 // Doesn't check if king is in danger to ignore move. 
-test "simple compare pruning" {
+pub fn runTestComparePruning() !void {
     // The initial position has many equal moves, this makes sure I'm not accidently making random choices while testing. 
     try testPruning("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR", .White);
     try testPruning("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR", .Black);
@@ -312,5 +311,9 @@ test "simple compare pruning" {
     // try testPruning("rn1q1bnr/1p2pkp1/2p2p1p/p2p1b2/1PP4P/3PQP2/P2KP1PB/RN3BNR", .White);
 
     try testPruning("7K/7p/8/8/8/r1q5/1P5P/k7", .White); // TODO: check and multiple best moves for black.    
+}
+
+test "simple compare pruning" {
+    try runTestComparePruning();
 }
 

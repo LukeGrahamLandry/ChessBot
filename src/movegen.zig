@@ -111,105 +111,53 @@ pub fn collectOnePieceMoves(moves: *std.ArrayList(Move), board: *const Board, i:
     }
 }
 
-const Sq = @Vector(2, i32);
 fn rookSlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
-    // _ = _rank;
-    // _ = _file;
-    // const up: i32 = 8;
-    // const down: i32 = -8;
-    // const left: i32 = -1;
-    // const right: i32 = 1;
-    // const directions = comptime [_] i32 { up, down, left, right };
-    // inline for (directions) |dir| {
-    //     var pos: i32 = @intCast(i);
-    //     for (0..8) |_| {
-    //         pos += dir;
-    //         if (pos < 0 or pos > 63) break;
-    //         if (try trySlide2(moves, board, @intCast(i), @intCast(pos), piece)) break;
-    //     }
-    // }
+    _ = file;
 
+    inline for (. { 8, -8 }) |dir| {
+        var pos: i32 = @intCast(i);
+        for (0..8) |_| {
+            pos += dir;
+            if (pos < 0 or pos > 63) break;
+            if (try trySlide2(moves, board, @intCast(i), @intCast(pos), piece)) break;
+        }
+    }
 
-    // const start: Sq = [_] i32 { @intCast(_file), @intCast(_rank) };
-
-    // const up: Sq = comptime [_] i32 { 0, 1 };
-    // const down: Sq = comptime [_] i32 { 0, -1 };
-    // const left: Sq = comptime [_] i32 { -1, 0 };
-    // const right: Sq = comptime [_] i32 { 1, 0 };
-    // const directions = comptime [_] Sq { up, down, left, right };
-
-    // const _flag: i32 = 63;
-    // const flag: Sq = @splat(2, ~_flag);
-
-    // inline for (directions, 0..) |dir, dirIndex| {
-    //     _ = dirIndex;
-    //     var pos = start;
-    //     for (0..8) |_| {
-    //         pos += dir;
-    //         if (@reduce(.Or, pos & flag != @splat(2, @as(i32, 0)))) break;
-    //         if (try trySlide(moves, board, i, @intCast(pos[0]), @intCast(pos[1]), piece)) break;
-    //     }
-    // }
-
-    // const distances = comptime calc: {
-    //     @setEvalBranchQuota(4*64*8);
-    //     var byDirection: [4] [64] usize = std.mem.zeroes([4] [64] usize);
-    //     for (directions, 0..) |dir, dirIndex| {
-    //         for (0..64) |sqIndex| {
-    //             var pos: Sq = [_] i32 { @rem(sqIndex, 8), @divFloor(sqIndex, 8) };
-    //             for (0..8) |_| {
-    //                 pos += dir;
-    //                 if (pos[0] < 0 or pos[1] < 0 or pos[0] > 7 or pos[1] > 7) break;
-    //                 byDirection[dirIndex][sqIndex] += 1;
-    //             }
-    //         }
-    //     }
-    //     break :calc byDirection;
-    // };
-
-    // inline for (directions, 0..) |dir, dirIndex| {
-    //     var pos = start;
-    //     for (0..distances[dirIndex][i]) |_| {
-    //         pos += dir;
-    //         if (try trySlide(moves, board, i, @intCast(pos[0]), @intCast(pos[1]), piece)) break;
-    //     }
-    // }
-
-    // const zero: Sq = @splat(2, @as(i32, 0));
-    // const seven: Sq = @splat(2, @as(i32, 7));
-    // inline for (directions) |dir| {
-    //     var pos = start;
-    //     for (0..8) |_| {
-    //         pos += dir;
-    //         if (@reduce(.Or, pos < zero) or @reduce(.Or, pos > seven)) break;
-    //         if (try trySlide(moves, board, i, @intCast(pos[0]), @intCast(pos[1]), piece)) break;
-    //     }
-    // }
+    const min = rank * 8;
+    const max = (rank + 1) * 8;
+    inline for ( .{ 1, -1 }) |dir| {
+        var pos: i32 = @intCast(i);
+        for (0..8) |_| {
+            pos += dir;
+            if (pos < min or pos >= max) break;
+            if (try trySlide2(moves, board, @intCast(i), @intCast(pos), piece)) break;
+        }
+    }
 
     // TODO: this does not spark joy. Feels like there should be some way to express it as a mask that you bit shift around. 
-    if (file < 7) {
-        for ((file + 1)..8) |checkFile| {
-            if (try trySlide(moves, board, i, checkFile, rank, piece)) break;
-        }
-    }
+    // if (file < 7) {
+    //     for ((file + 1)..8) |checkFile| {
+    //         if (try trySlide(moves, board, i, checkFile, rank, piece)) break;
+    //     }
+    // }
     
-    if (file > 0) {
-        for (1..(file+1)) |checkFile| {
-            if (try trySlide(moves, board, i, file - checkFile, rank, piece)) break;
-        }
-    }
+    // if (file > 0) {
+    //     for (1..(file+1)) |checkFile| {
+    //         if (try trySlide(moves, board, i, file - checkFile, rank, piece)) break;
+    //     }
+    // }
 
-    if (rank < 7) {
-        for ((rank + 1)..8) |checkRank| {
-            if (try trySlide(moves, board, i, file, checkRank, piece)) break;
-        }
-    }
+    // if (rank < 7) {
+    //     for ((rank + 1)..8) |checkRank| {
+    //         if (try trySlide(moves, board, i, file, checkRank, piece)) break;
+    //     }
+    // }
     
-    if (rank > 0) {
-        for (1..(rank+1)) |checkRank| {
-            if (try trySlide(moves, board, i, file, rank-checkRank, piece)) break;
-        }
-    }
+    // if (rank > 0) {
+    //     for (1..(rank+1)) |checkRank| {
+    //         if (try trySlide(moves, board, i, file, rank-checkRank, piece)) break;
+    //     }
+    // }
 }
 
 fn pawnMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
@@ -331,20 +279,31 @@ fn trySlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, checkFil
 }
 
 fn trySlide2(moves: *std.ArrayList(Move), board: *const Board, fromIndex: u6, toIndexx: u6, piece: Piece) !bool {
-    const check = board.squares[toIndexx];
-    
     switch (filter) {
         .Any => {},
-        .CapturesOnly => if (check.empty()) return true,
-        .KingCapturesOnly => if (check.kind != .King) return !check.empty(),
+        .CapturesOnly => if ( board.squares[toIndexx].empty()) return true,
+        .KingCapturesOnly => if ( board.squares[toIndexx].kind != .King) return ! board.squares[toIndexx].empty(),
     }
 
-    if (check.empty()) {
-        try moves.append(Move.ii(fromIndex, toIndexx));
-        return false;
-    } else if (check.colour == piece.colour) { 
+    var mine: u64 = undefined;
+    var other: u64 = undefined;
+    switch (piece.colour) {
+        .White => {
+            mine = board.peicePositions.white;
+            other = board.peicePositions.black;
+        },
+        .Black => {
+            mine = board.peicePositions.black;
+            other = board.peicePositions.white;
+        }
+    }
+
+    const toFlag = one << toIndexx;
+    if ((toFlag & mine) != 0) {  // trying to move onto my piece
         return true;
-    } else {
+    }
+
+    if ((toFlag & other) != 0) {  // taking an enemy piece
         var toPush = Move.ii(fromIndex, toIndexx);
 
         // Have this be a comptime param that gets passed down so I can easily benchmark. 
@@ -362,6 +321,10 @@ fn trySlide2(moves: *std.ArrayList(Move), board: *const Board, fromIndex: u6, to
         try moves.append(toPush);
         return true;
     }
+
+    // moving to empty square
+    try moves.append(Move.ii(fromIndex, toIndexx));
+    return false;
 }
 
 // TODO: This is suck!
@@ -492,20 +455,26 @@ fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, alloc: st
 // TODO: can't go farther until it knows about checkmate
 // Tests that the move generation gets the right number of nodes at each depth. 
 // Also exercises the Board.unplay function.
-test "count possible games" {
+pub fn runTestCountPossibleGames() !void {
     // https://en.wikipedia.org/wiki/Shannon_number
     const possibleGames = [_] usize { 20, 400, 8902, 197281	}; // 4865609 (needs checkmate or castling?)
 
     var tempA = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer tempA.deinit();
-    var game = Board.initial(tst);
-    defer game.deinit();
-    for (possibleGames, 1..) |expected, i| {
+    var game = Board.initial();
+    for (possibleGames, 1..) |expectedGames, i| {
         const start = std.time.nanoTimestamp();
         // These parameters are backwards because it can't infer type from a comptime_int. This seems dumb. 
-        try std.testing.expectEqual(countPossibleGames(&game, .White, i, tempA.allocator()), expected);
-        std.debug.print("Explored Depth {} in {}ms.\n", .{i, @divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms))});
+        const foundGames = countPossibleGames(&game, .White, i, tempA.allocator());
+        try std.testing.expectEqual(foundGames, expectedGames);
+        std.debug.print("- Explored Depth {} in {}ms.\n", .{i, @divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms))});
+        // Ensure that repeatedly calling unplay didn't mutate the board.
+        try std.testing.expectEqual(game, Board.initial());   
     }
+}
+
+test "count possible games" {
+    try runTestCountPossibleGames();
 }
 
 // TODO: this is bascilly a copy paste from the other one 

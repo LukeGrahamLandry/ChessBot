@@ -143,14 +143,8 @@ pub const Board = struct {
     blackKingIndex: u6 = 0,
     whiteKingIndex: u6 = 0,
 
-    pub fn init(alloc: std.mem.Allocator) !Board {
-        _ = alloc;
-        var self: Board = .{ };
-        return self;
-    }
-
-    pub fn deinit(self: *Board) void {
-        _ = self;
+    pub fn blank() Board {
+        return .{};
     }
 
     pub fn set(self: *Board, file: u8, rank: u8, value: Piece) void {
@@ -170,9 +164,8 @@ pub const Board = struct {
         return self.squares[rank*8 + file];
     }
 
-    pub fn initial(alloc: std.mem.Allocator) Board {
-        // TODO: I want this to be comptime but it needs an allocator
-        return fromFEN(INIT_FEN, alloc) catch @panic("INIT_FEN is invalid.");
+    pub fn initial() Board {
+        return comptime try fromFEN(INIT_FEN);
     }
 
     const one: u64 = 1;
@@ -247,8 +240,8 @@ pub const Board = struct {
     }
 
     // TODO: this rejects the extra data at the end because I can't store it yet. 
-    pub fn fromFEN(fen: [] const u8, alloc: std.mem.Allocator) !Board {
-        var self = try Board.init(alloc);
+    pub fn fromFEN(fen: [] const u8, ) InvalidFenErr!Board {
+        var self = Board.blank();
         var file: u8 = 0;
         var rank: u8 = 7;
         for (fen) |letter| {
@@ -328,8 +321,7 @@ pub const Board = struct {
 var tstAlloc = std.testing.allocator;
 
 test "write fen" {
-    var b = Board.initial(tstAlloc);
-    defer b.deinit();
+    var b = Board.initial();
     const fen = try b.toFEN(tstAlloc);
     defer tstAlloc.free(fen);
     try std.testing.expect(std.mem.eql(u8, fen, INIT_FEN));

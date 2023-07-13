@@ -17,13 +17,27 @@ pub fn build(b: *std.Build) void {
 
     const exe = b.addExecutable(.{
         .name = "chess",
-        // In this case the main source file is merely a path, however, in more
-        // complicated build scripts, this could be a generated file.
         .root_source_file = .{ .path = "src/main.zig" },
         .target = target,
         .optimize = optimize,
-        .single_threaded = false,
     });
+
+    const benchExe = b.addExecutable(.{
+        .name = "chess_bench",
+        .root_source_file = .{ .path = "src/bench.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const wasm_target = std.zig.CrossTarget.parse(.{ .arch_os_abi="wasm32-freestanding" }) catch @panic("wasm target not exist?");
+
+    const wasm_exe = b.addSharedLibrary(.{
+        .name = "main",
+        .root_source_file = .{ .path = "src/web.zig" },
+        .target = wasm_target,
+        .optimize = optimize,
+    });
+    b.installArtifact(wasm_exe);
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
@@ -34,6 +48,7 @@ pub fn build(b: *std.Build) void {
     // step is evaluated that depends on it. The next line below will establish
     // such a dependency.
     const run_cmd = b.addRunArtifact(exe);
+    const bench_run_cmd = b.addRunArtifact(benchExe);
 
     // By making the run step depend on the install step, it will be run from the
     // installation directory rather than directly from within the cache directory.
@@ -45,6 +60,7 @@ pub fn build(b: *std.Build) void {
     // command itself, like this: `zig build run -- arg1 arg2 etc`
     if (b.args) |args| {
         run_cmd.addArgs(args);
+        bench_run_cmd.addArgs(args);
     }
 
     // This creates a build step. It will be visible in the `zig build --help` menu,
@@ -53,13 +69,15 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
+    const bench_run_step = b.step("bench", "Run benchmarks");
+    bench_run_step.dependOn(&bench_run_cmd.step);
+
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
     const unit_tests = b.addTest(.{
         .root_source_file = .{ .path = "src/main.zig" },
         .target = target,
         .optimize = optimize,
-        .single_threaded = false,
     });
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
@@ -69,4 +87,7 @@ pub fn build(b: *std.Build) void {
     // running the unit tests.
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
+
+    // Run the tests before bench to not report misleading numbers. 
+    bench_run_step.dependOn(test_step);
 }
