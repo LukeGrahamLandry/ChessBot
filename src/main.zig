@@ -17,6 +17,10 @@ pub fn main() !void {
 
     // try debugPrintAllMoves("8/8/8/8/8/8/8/6PR", .White);
     try debugPrintAllMoves("rnbqkbnr/pp1ppppp/2p5/3N4/8/8/PPPPPPPP/R1BQKBNR", .Black);
+    // try debugPrintAllMoves("rnb1kbnr/ppqppppp/2p5/3N4/8/8/PPPPPPPP/R1BQKBNR", .White);
+    
+
+
     // rbbqk2r/p2p1ppp/nB1P3n/4p2P/PPp1PPP1/8/8/RN1QKBNR .Black
 
     // var game = board.Board.initial();
@@ -64,9 +68,12 @@ fn debugPrintAllMoves(fen: [] const u8, colour: board.Colour) !void {
         const s = try game.displayString(alloc);
         defer alloc.free(s);
         var thing: usize = 0;
+        const ss = try game.toFEN(alloc);
+        defer alloc.free(s);
 
-        const eval = try strat.walkEval(&game, colour, 4, -99999999, -99999999, alloc, &thing, &memo);
-        std.debug.print("{}. eval: {} \n{s}\n", .{i, eval, s});
+        const eval = try strat.walkEval(&game, colour, 3, 1, -99999999, -99999999, alloc, &thing, &memo, false);
+        std.debug.print("{}. eval: {}\n{s}\n{s}\n", .{i, eval, ss, s});
+        
     }
 }
 

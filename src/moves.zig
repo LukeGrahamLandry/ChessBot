@@ -60,16 +60,18 @@ var notTheRng = std.rand.DefaultPrng.init(0);
 var rng = notTheRng.random();
 
 const movegen = @import("movegen.zig");
+pub const genCapturesOnly = movegen.MoveFilter.CapturesOnly.get();
 pub const genAllMoves = movegen.MoveFilter.Any.get();
 
 pub const StratOpts = struct {
-    maxDepth: comptime_int = 4,  // TODO: should be runtime param to bestMove so wasm can change without increasing code size. 
+    maxDepth: comptime_int = 3,  // TODO: should be runtime param to bestMove so wasm can change without increasing code size. 
     doPruning: bool = true, 
     beDeterministicForTest: bool = false,  // Interesting that it's much faster with this =true. Rng is slow!
     memoMapSizeMB: usize = 20,  // Zero means don't use memo map at all. 
     memoMapFillPercent: usize = 60,  // Affects usable map capacity but not memory usage. 
     hashAlgo: HashAlgo = .CityHash64,
     checkDetection: CheckAlgo = .ReverseFromKing,
+    followCaptureDepth: i32 = 0,
 };
 
 // TODO: script that tests different variations (compare speed and run correctness tests). 
@@ -154,7 +156,7 @@ pub fn bestMove(game: *Board, me: Colour) !Move {
         const unMove = try game.play(move);
         defer game.unplay(unMove);
         if (try inCheck(game, me, alloc)) continue;
-        const value = -try walkEval(game, me.other(), opts.maxDepth, bestWhiteEval, bestBlackEval, movesArena.allocator(), &count, &memo);  // TODO: need to catch
+        const value = -try walkEval(game, me.other(), opts.maxDepth, opts.followCaptureDepth, bestWhiteEval, bestBlackEval, movesArena.allocator(), &count, &memo, false);  // TODO: need to catch
         if (value > bestVal) {
             bestVal = value;
             bestMoves.clearRetainingCapacity();
@@ -180,7 +182,7 @@ pub fn bestMove(game: *Board, me: Colour) !Move {
 // https://en.wikipedia.org/wiki/Alpha%E2%80%93beta_pruning
 // TODO: when hit depth, keep going but only look at captures
 // The alpha-beta values effect lower layers, not higher layers, so passed by value. 
-pub fn walkEval(game: *Board, me: Colour, remaining: i32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, count: *u64, memo: *MemoMap) MoveErr!i32 {
+pub fn walkEval(game: *Board, me: Colour, remaining: i32, bigRemaining: i32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, count: *u64, memo: *MemoMap, comptime capturesOnly: bool) MoveErr!i32 {
     // After alpha-beta, bigger starting cap, and not reallocating each move, this does make it faster. 
     // Makes Black move 4 end states go 16,000,000 -> 1,000,000
     // But now after better pruning it does almost nothing. 
@@ -197,8 +199,12 @@ pub fn walkEval(game: *Board, me: Colour, remaining: i32, bestWhiteEvalIn: i32, 
     var bestWhiteEval = bestWhiteEvalIn;
     var bestBlackEval = bestBlackEvalIn;
 
-    const moves = try genAllMoves.possibleMoves(game, me, alloc);
+    const moveGen = if (capturesOnly) genCapturesOnly else genAllMoves;
+    const moves = try moveGen.possibleMoves(game, me, alloc);
     defer alloc.free(moves);
+    if (moves.len == 0 and capturesOnly) {
+        return if (me == .White) genAllMoves.simpleEval(game) else -genAllMoves.simpleEval(game);
+    }
     if (moves.len == 0) return error.GameOver;
     
     var bestVal: i32 = -1000000;
@@ -206,14 +212,24 @@ pub fn walkEval(game: *Board, me: Colour, remaining: i32, bestWhiteEvalIn: i32, 
         const unMove = try game.play(move);
         defer game.unplay(unMove);
         if (try inCheck(game, me, alloc)) continue;
-        const value = if (remaining == 0) e: {
+        const value = if (remaining == 0) ee: {
+            if (!capturesOnly and bigRemaining > 0) {
+                // Start a new search with a really high depth but only consider captures
+                const v = walkEval(game, me.other(), opts.maxDepth, bigRemaining - 1, bestWhiteEval, bestBlackEval, alloc, count, memo, true);
+                if (v) |eval| {
+                    break :ee -eval;
+                } else |_| {
+                    
+                }
+            }
+
             if (!isWasm) count.* += 1;
-            break :e if (me == .White) genAllMoves.simpleEval(game) else -genAllMoves.simpleEval(game);
+            break :ee if (me == .White) genAllMoves.simpleEval(game) else -genAllMoves.simpleEval(game);
         } else r: {
-            const v = walkEval(game, me.other(), remaining - 1, bestWhiteEval, bestBlackEval, alloc, count, memo) catch |err| {
+            const v = walkEval(game, me.other(), remaining - 1, bigRemaining, bestWhiteEval, bestBlackEval, alloc, count, memo, capturesOnly) catch |err| {
                 switch (err) {
                     error.OutOfMemory => return err,
-                    error.GameOver => break :r 1000000,
+                    error.GameOver => break :r 1234567,
                 }
             };
             break :r -v;

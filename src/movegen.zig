@@ -192,10 +192,12 @@ fn pawnMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: us
 
 fn maybePromote(moves: *std.ArrayList(Move), board: *const Board, fromIndex: usize, toFile: usize, toRank: usize, colour: Colour) !void {
     // TODO: including promotions on fast path should be seperate option
+    const check = board.get(toFile, toRank);
+    
     switch (filter) {
         .Any => {},
-        .CapturesOnly => if (board.emptyAt(toFile, toRank)) return,
-        .KingCapturesOnly => if (board.get(toFile, toRank).kind != .King) return,
+        .CapturesOnly => if (check.kind == .Empty or check.colour == colour) return,
+        .KingCapturesOnly => if (check.kind != .King or check.colour == colour) return,
     }
     
     if ((colour == .Black and toRank == 0) or (colour == .White and toRank == 7)){
@@ -249,8 +251,8 @@ fn trySlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, checkFil
     
     switch (filter) {
         .Any => {},
-        .CapturesOnly => if (check.empty()) return true,
-        .KingCapturesOnly => if (check.kind != .King) return !check.empty(),
+        .CapturesOnly => if (check.kind == .Empty or check.colour == piece.colour) return false,
+        .KingCapturesOnly => if (check.kind != .King or check.colour == piece.colour) return !check.empty(),
     }
 
     if (check.empty()) {
@@ -281,7 +283,7 @@ fn trySlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, checkFil
 fn trySlide2(moves: *std.ArrayList(Move), board: *const Board, fromIndex: u6, toIndexx: u6, piece: Piece) !bool {
     switch (filter) {
         .Any => {},
-        .CapturesOnly => if ( board.squares[toIndexx].empty()) return true,
+        .CapturesOnly => if (board.squares[toIndexx].empty()) return false,
         .KingCapturesOnly => if ( board.squares[toIndexx].kind != .King) return ! board.squares[toIndexx].empty(),
     }
 
@@ -475,6 +477,31 @@ pub fn runTestCountPossibleGames() !void {
 
 test "count possible games" {
     try runTestCountPossibleGames();
+}
+
+fn testCapturesOnly(fen: [] const u8, me: Colour) !void {
+    var game = try Board.fromFEN(fen);
+    const big = try MoveFilter.Any.get().possibleMoves(&game, me, tst);
+    defer tst.free(big);
+    const small = try MoveFilter.CapturesOnly.get().possibleMoves(&game, me, tst);
+    defer tst.free(small);
+
+    // Every capture is a move but not all moves are captures. 
+    try std.testing.expect(big.len >= small.len);
+
+    // Count material to make sure it really captured something. 
+    const initialMaterial = MoveFilter.Any.get().simpleEval(&game);
+    for (small) |move| {
+        const unMove = try game.play(move);
+        defer game.unplay(unMove);
+        const newMaterial = MoveFilter.Any.get().simpleEval(&game);
+        try std.testing.expect(initialMaterial != newMaterial);
+    }
+}
+
+test "captures only" {
+    try testCapturesOnly("rnb1kbnr/ppqppppp/2p5/3N4/8/8/PPPPPPPP/R1BQKBNR", .White);
+    try testCapturesOnly("rnbqkbnr/pp1ppppp/2p5/3N4/8/8/PPPPPPPP/R1BQKBNR", .Black);
 }
 
 // TODO: this is bascilly a copy paste from the other one 
