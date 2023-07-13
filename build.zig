@@ -30,14 +30,15 @@ pub fn build(b: *std.Build) void {
     });
 
     const wasm_target = std.zig.CrossTarget.parse(.{ .arch_os_abi="wasm32-freestanding" }) catch @panic("wasm target not exist?");
+    _ = wasm_target;
 
-    const wasm_exe = b.addSharedLibrary(.{
-        .name = "main",
-        .root_source_file = .{ .path = "src/web.zig" },
-        .target = wasm_target,
-        .optimize = optimize,
-    });
-    b.installArtifact(wasm_exe);
+    // const wasm_exe = b.addSharedLibrary(.{
+    //     .name = "main",
+    //     .root_source_file = .{ .path = "src/web.zig" },
+    //     .target = wasm_target,
+    //     .optimize = optimize,
+    // });
+    // b.installArtifact(wasm_exe);
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default

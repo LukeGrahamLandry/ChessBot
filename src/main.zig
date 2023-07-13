@@ -6,17 +6,18 @@ var alloc = allocatorT.allocator();
 const Timer = @import("bench.zig").Timer;
 
 pub fn main() !void {
-    // const t = Timer.start();
-    // for (0..25) |_| {
-    //     try @import("movegen.zig").runTestCountPossibleGames();
-    // }
-    // std.debug.print("Ran perft in {}ms\n", .{t.end()});
+    const t = Timer.start();
+    for (0..100) |_| {
+        try @import("movegen.zig").runTestCountPossibleGames();
+    }
+    std.debug.print("Ran perft in {}ms\n", .{t.end()});
+
     // const stdout_file = std.io.getStdOut().writer();
     // var bw = std.io.bufferedWriter(stdout_file);
     // const stdout = bw.writer();
 
     // try debugPrintAllMoves("8/8/8/8/8/8/8/6PR", .White);
-    try debugPrintAllMoves("rnbqkbnr/pp1ppppp/2p5/3N4/8/8/PPPPPPPP/R1BQKBNR", .Black);
+    // try debugPrintAllMoves("rnbqkbnr/pp1ppppp/2p5/3N4/8/8/PPPPPPPP/R1BQKBNR", .Black);
     // try debugPrintAllMoves("rnb1kbnr/ppqppppp/2p5/3N4/8/8/PPPPPPPP/R1BQKBNR", .White);
     
 
@@ -69,9 +70,9 @@ fn debugPrintAllMoves(fen: [] const u8, colour: board.Colour) !void {
         defer alloc.free(s);
         var thing: usize = 0;
         const ss = try game.toFEN(alloc);
-        defer alloc.free(s);
+        defer alloc.free(ss);
 
-        const eval = try strat.walkEval(&game, colour, 3, 1, -99999999, -99999999, alloc, &thing, &memo, false);
+        const eval = try strat.walkEval(&game, colour, 3, 5, -99999999, -99999999, alloc, &thing, &memo, false);
         std.debug.print("{}. eval: {}\n{s}\n{s}\n", .{i, eval, ss, s});
         
     }

@@ -166,14 +166,14 @@ fn pawnMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: us
         .White => w: {
             // assert(rank < 7);  
             if (filter == .Any and rank == 1 and board.emptyAt(file, 2) and board.emptyAt(file, 3)) {  // forward two
-                try moves.append(Move.irf(i, file, 3));  // cant promote
+                try moves.append(Move.irf(i, file, 3, false));  // cant promote
             }
             break :w rank + 1;
         },
         .Black => b: {
             // assert(rank > 0);
             if (filter == .Any and rank == 6 and board.emptyAt(file, 5) and board.emptyAt(file, 4)) {  // forward two
-                try moves.append(Move.irf(i, file, 4));  // cant promote
+                try moves.append(Move.irf(i, file, 4, false));  // cant promote
             }
             break :b rank - 1;
         }
@@ -223,7 +223,8 @@ fn maybePromote(moves: *std.ArrayList(Move), board: *const Board, fromIndex: usi
         var move: Move = .{
             .from=@truncate(fromIndex),
             .to = @truncate(toRank*8 + toFile),
-            .action = .{.promote = .Queen }
+            .action = .{.promote = .Queen },
+            .isCapture = !check.empty() and check.colour != colour
         };
         // Queen promotions are so good that we don't even care about preserving order of the old stuff. 
         // TODO: that's wrong cause mate
@@ -241,7 +242,7 @@ fn maybePromote(moves: *std.ArrayList(Move), board: *const Board, fromIndex: usi
             try moves.append(move);
         }
     } else {
-        try moves.append(Move.irf(fromIndex, toFile, toRank));
+        try moves.append(Move.irf(fromIndex, toFile, toRank, !check.empty() and check.colour != colour));
     }
 }
 
@@ -256,12 +257,12 @@ fn trySlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, checkFil
     }
 
     if (check.empty()) {
-        try moves.append(Move.irf(i, checkFile, checkRank));
+        try moves.append(Move.irf(i, checkFile, checkRank, false));
         return false;
     } else if (check.colour == piece.colour) { 
         return true;
     } else {
-        var toPush = Move.irf(i, checkFile, checkRank);
+        var toPush = Move.irf(i, checkFile, checkRank, true);
 
         // Have this be a comptime param that gets passed down so I can easily benchmark. 
         // This is a capture, we like that, put it first. Capturing more valuable pieces is also good. 
@@ -306,7 +307,7 @@ fn trySlide2(moves: *std.ArrayList(Move), board: *const Board, fromIndex: u6, to
     }
 
     if ((toFlag & other) != 0) {  // taking an enemy piece
-        var toPush = Move.ii(fromIndex, toIndexx);
+        var toPush = Move.ii(fromIndex, toIndexx, true);
 
         // Have this be a comptime param that gets passed down so I can easily benchmark. 
         // This is a capture, we like that, put it first. Capturing more valuable pieces is also good. 
@@ -325,7 +326,7 @@ fn trySlide2(moves: *std.ArrayList(Move), board: *const Board, fromIndex: u6, to
     }
 
     // moving to empty square
-    try moves.append(Move.ii(fromIndex, toIndexx));
+    try moves.append(Move.ii(fromIndex, toIndexx, false));
     return false;
 }
 
@@ -399,7 +400,7 @@ fn tryHop(moves: *std.ArrayList(Move), board: *const Board, i: usize, checkFile:
     }
     
     if (check.empty() or check.colour != piece.colour) {
-        try moves.append(Move.irf(i, checkFile, checkRank));
+        try moves.append(Move.irf(i, checkFile, checkRank, !check.empty()));
     } 
 }
 
@@ -440,14 +441,10 @@ fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, alloc: st
     for (allMoves) |move| {
         const unMove = try game.play(move);
         defer game.unplay(unMove);
+        if (try reverseFromKingIsInCheck(game, me)) continue; // move illigal
 
-        {
-            const moves = try genKingCapturesOnly.possibleMoves(game, me.other(), alloc);
-            defer alloc.free(moves);
-            if (moves.len > 0) continue; // move illigal
-        }
-
-        total += try countPossibleGames(game, me.other(), remainingDepth - 1, alloc);
+        // Function call overhead is tiny but measurable
+        total += if (remainingDepth - 1 == 0) 1 else try countPossibleGames(game, me.other(), remainingDepth - 1, alloc);
     }
 
     return total;
@@ -466,10 +463,11 @@ pub fn runTestCountPossibleGames() !void {
     var game = Board.initial();
     for (possibleGames, 1..) |expectedGames, i| {
         const start = std.time.nanoTimestamp();
+        _ = start;
         // These parameters are backwards because it can't infer type from a comptime_int. This seems dumb. 
         const foundGames = countPossibleGames(&game, .White, i, tempA.allocator());
         try std.testing.expectEqual(foundGames, expectedGames);
-        std.debug.print("- Explored Depth {} in {}ms.\n", .{i, @divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms))});
+        // std.debug.print("- Explored Depth {} in {}ms.\n", .{i, @divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms))});
         // Ensure that repeatedly calling unplay didn't mutate the board.
         try std.testing.expectEqual(game, Board.initial());   
     }
@@ -479,29 +477,61 @@ test "count possible games" {
     try runTestCountPossibleGames();
 }
 
-fn testCapturesOnly(fen: [] const u8, me: Colour) !void {
-    var game = try Board.fromFEN(fen);
-    const big = try MoveFilter.Any.get().possibleMoves(&game, me, tst);
-    defer tst.free(big);
-    const small = try MoveFilter.CapturesOnly.get().possibleMoves(&game, me, tst);
-    defer tst.free(small);
+const MoveList = std.ArrayList(Move);
+fn testCapturesOnly(fen: [] const u8) !void {
+    inline for (.{Colour.White, Colour.Black}) |me| {
+        var game = try Board.fromFEN(fen);
+        const big = try MoveFilter.Any.get().possibleMoves(&game, me, tst);
+        // var notCaptures = MoveList.fromOwnedSlice(tst, big);
+        defer tst.free(big);
+        const small = try MoveFilter.CapturesOnly.get().possibleMoves(&game, me, tst);
+        defer tst.free(small);
 
-    // Every capture is a move but not all moves are captures. 
-    try std.testing.expect(big.len >= small.len);
+        // Every capture is a move but not all moves are captures. 
+        try std.testing.expect(big.len >= small.len);
 
-    // Count material to make sure it really captured something. 
-    const initialMaterial = MoveFilter.Any.get().simpleEval(&game);
-    for (small) |move| {
-        const unMove = try game.play(move);
-        defer game.unplay(unMove);
-        const newMaterial = MoveFilter.Any.get().simpleEval(&game);
-        try std.testing.expect(initialMaterial != newMaterial);
+        // Count material to make sure it really captured something. 
+        const initialMaterial = MoveFilter.Any.get().simpleEval(&game);
+        for (small) |move| {
+            const unMove = try game.play(move);
+            defer game.unplay(unMove);
+            const newMaterial = MoveFilter.Any.get().simpleEval(&game);
+            try std.testing.expect(initialMaterial != newMaterial);
+
+            // Captures should have the flag set.
+            try std.testing.expect(move.isCapture);
+        }
+
+        // Inverse of the above. 
+        for (big) |move| {
+            for (small) |check| {
+                if (std.meta.eql(move, check)) break;
+            } else {
+                const unMove = try game.play(move);
+                defer game.unplay(unMove);
+                const newMaterial = MoveFilter.Any.get().simpleEval(&game);
+                try std.testing.expect(initialMaterial == newMaterial);
+                try std.testing.expect(!move.isCapture);
+            }
+        }
     }
 }
 
+
+pub const fensToTest = [_] [] const u8 {
+    "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR",  // The initial position has many equal moves, this makes sure I'm not accidently making random choices while testing. 
+    "rnb1kbnr/ppqppppp/2p5/3N4/8/8/PPPPPPPP/R1BQKBNR",
+    "rnbqkbnr/pp1ppppp/2p5/3N4/8/8/PPPPPPPP/R1BQKBNR",
+    "8/p7/8/8/8/4b3/P2P4/8",
+    "7K/8/7B/8/8/8/Pq6/kN6",
+    "7K/7p/8/8/8/r1q5/1P5P/k7", // Check and multiple best moves for black
+    // "rn1q1bnr/1p2pkp1/2p2p1p/p2p1b2/1PP4P/3PQP2/P2KP1PB/RN3BNR", // hang a queen
+};
+
 test "captures only" {
-    try testCapturesOnly("rnb1kbnr/ppqppppp/2p5/3N4/8/8/PPPPPPPP/R1BQKBNR", .White);
-    try testCapturesOnly("rnbqkbnr/pp1ppppp/2p5/3N4/8/8/PPPPPPPP/R1BQKBNR", .Black);
+    inline for (fensToTest) |fen| {
+        try testCapturesOnly(fen);
+    }
 }
 
 // TODO: this is bascilly a copy paste from the other one 

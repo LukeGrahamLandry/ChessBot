@@ -21,22 +21,25 @@ pub const Move = struct {
         none,
         promote: Kind,
     },
+    isCapture: bool,
 
     // TODO: method that factors out bounds check from try methods then calls this? make sure not to do twice in slide loops.
-    pub fn irf(fromIndex: usize, toFile: usize, toRank: usize) Move {
+    pub fn irf(fromIndex: usize, toFile: usize, toRank: usize, isCapture: bool) Move {
         // std.debug.assert(fromIndex < 64 and toFile < 8 and toRank < 8);
         return .{
             .from=@truncate(fromIndex),
             .to = @truncate(toRank*8 + toFile),
             .action = .none,
+            .isCapture=isCapture
         };
     }
 
-    pub fn ii(fromIndex: u6, toIndex: u6) Move {
+    pub fn ii(fromIndex: u6, toIndex: u6, isCapture: bool) Move {
         return .{
             .from=fromIndex,
             .to = toIndex,
             .action = .none,
+            .isCapture=isCapture
         };
     }
 };
@@ -71,7 +74,7 @@ pub const StratOpts = struct {
     memoMapFillPercent: usize = 60,  // Affects usable map capacity but not memory usage. 
     hashAlgo: HashAlgo = .CityHash64,
     checkDetection: CheckAlgo = .ReverseFromKing,
-    followCaptureDepth: i32 = 0,
+    followCaptureDepth: i32 = 5,
 };
 
 // TODO: script that tests different variations (compare speed and run correctness tests). 
@@ -182,6 +185,7 @@ pub fn bestMove(game: *Board, me: Colour) !Move {
 // https://en.wikipedia.org/wiki/Alpha%E2%80%93beta_pruning
 // TODO: when hit depth, keep going but only look at captures
 // The alpha-beta values effect lower layers, not higher layers, so passed by value. 
+// TODO: remove capturesOnly flag cause not used
 pub fn walkEval(game: *Board, me: Colour, remaining: i32, bigRemaining: i32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, count: *u64, memo: *MemoMap, comptime capturesOnly: bool) MoveErr!i32 {
     // After alpha-beta, bigger starting cap, and not reallocating each move, this does make it faster. 
     // Makes Black move 4 end states go 16,000,000 -> 1,000,000
@@ -199,34 +203,32 @@ pub fn walkEval(game: *Board, me: Colour, remaining: i32, bigRemaining: i32, bes
     var bestWhiteEval = bestWhiteEvalIn;
     var bestBlackEval = bestBlackEvalIn;
 
-    const moveGen = if (capturesOnly) genCapturesOnly else genAllMoves;
-    const moves = try moveGen.possibleMoves(game, me, alloc);
+    const moves = try genAllMoves.possibleMoves(game, me, alloc);
     defer alloc.free(moves);
-    if (moves.len == 0 and capturesOnly) {
-        return if (me == .White) genAllMoves.simpleEval(game) else -genAllMoves.simpleEval(game);
-    }
+    // if (moves.len == 0 and capturesOnly) {
+    //     return if (me == .White) genAllMoves.simpleEval(game) else -genAllMoves.simpleEval(game);
+    // }
     if (moves.len == 0) return error.GameOver;
+
+    if (remaining < 0){
+        for (moves) |move| {
+            if (move.isCapture) break;
+        } else {
+            return if (me == .White) genAllMoves.simpleEval(game) else -genAllMoves.simpleEval(game); 
+        }
+    }
+        
     
     var bestVal: i32 = -1000000;
     for (moves) |move| {
         const unMove = try game.play(move);
         defer game.unplay(unMove);
         if (try inCheck(game, me, alloc)) continue;
-        const value = if (remaining == 0) ee: {
-            if (!capturesOnly and bigRemaining > 0) {
-                // Start a new search with a really high depth but only consider captures
-                const v = walkEval(game, me.other(), opts.maxDepth, bigRemaining - 1, bestWhiteEval, bestBlackEval, alloc, count, memo, true);
-                if (v) |eval| {
-                    break :ee -eval;
-                } else |_| {
-                    
-                }
-            }
-
-            if (!isWasm) count.* += 1;
-            break :ee if (me == .White) genAllMoves.simpleEval(game) else -genAllMoves.simpleEval(game);
+        const value = if (remaining < 1) v: {
+            break :v if (me == .White) genAllMoves.simpleEval(game) else -genAllMoves.simpleEval(game); 
         } else r: {
-            const v = walkEval(game, me.other(), remaining - 1, bigRemaining, bestWhiteEval, bestBlackEval, alloc, count, memo, capturesOnly) catch |err| {
+            const remain = if (remaining < 0 and !move.isCapture) remaining - 5 else remaining - 1;
+            const v = walkEval(game, me.other(), remain, bigRemaining, bestWhiteEval, bestBlackEval, alloc, count, memo, capturesOnly) catch |err| {
                 switch (err) {
                     error.OutOfMemory => return err,
                     error.GameOver => break :r 1234567,
@@ -280,7 +282,7 @@ fn checkAlphaBeta(bestVal: i32, me: Colour, bestWhiteEval: *i32, bestBlackEval: 
 };} // End Strategy. 
 
 pub const default = Strategy(.{});
-const testFast = Strategy(.{ .beDeterministicForTest=true, .checkDetection=.Ignore });
+const testFast = Strategy(.{ .beDeterministicForTest=true, .checkDetection=.Ignore, .doPruning=true});
 const testSlow = Strategy(.{ .beDeterministicForTest=true, .checkDetection=.Ignore, .doPruning=false });
 const Timer = @import("bench.zig").Timer;
 
@@ -311,22 +313,13 @@ fn testPruning(fen: [] const u8, me: Colour) !void {
 }
 
 // Tests that alpha-beta pruning chooses the same best move as a raw search. 
-// Doesn't check if king is in danger to ignore move. 
+// Doesn't check if king is in danger to ignore move. // TODO: skip if no legal moves instead 
 pub fn runTestComparePruning() !void {
-    // The initial position has many equal moves, this makes sure I'm not accidently making random choices while testing. 
-    try testPruning("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR", .White);
-    try testPruning("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR", .Black);
-
-    try testPruning("8/p7/8/8/8/4b3/P2P4/8", .White);
-    try testPruning("8/p7/8/8/8/4b3/P2P4/8", .Black);
-
-    try testPruning("7K/8/7B/8/8/8/Pq6/kN6", .White);
-    try testPruning("7K/8/7B/8/8/8/Pq6/kN6", .Black);
-
-    // TODO: it thinks a bunch of things, including hanging its queen, are eval 0. Also takes way too long to run without pruning. 
-    // try testPruning("rn1q1bnr/1p2pkp1/2p2p1p/p2p1b2/1PP4P/3PQP2/P2KP1PB/RN3BNR", .White);
-
-    try testPruning("7K/7p/8/8/8/r1q5/1P5P/k7", .White); // TODO: check and multiple best moves for black.    
+    inline for (@import("movegen.zig").fensToTest) |fen| {
+        inline for (.{Colour.White, Colour.Black}) |me| {
+            try testPruning(fen, me);
+        }
+    }
 }
 
 test "simple compare pruning" {
