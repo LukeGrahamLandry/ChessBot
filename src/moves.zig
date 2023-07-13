@@ -81,6 +81,7 @@ pub const StratOpts = struct {
 pub fn Strategy(comptime opts: StratOpts) type {
     return struct {  // Start Strategy. 
 
+pub const config = opts;
 comptime { 
     assert(@sizeOf(Piece) == @sizeOf(u8)); 
     assert(opts.memoMapFillPercent <= 100);
@@ -160,9 +161,6 @@ pub fn allEqualBestMoves(game: *Board, me: Colour, alloc: std.mem.Allocator) !st
     var memo = MemoMap.init(alloc);
     if (useMemoMap) try memo.ensureTotalCapacity(MEMO_CAPACITY);
     defer memo.deinit();
-
-    var bestWhiteEval: i32 = -99999999;
-    var bestBlackEval: i32 = -99999999;
     
     // TODO: use memo at top level? once it persists longer it must be helpful
     var bestVal: i32 = -1000000;
@@ -171,23 +169,15 @@ pub fn allEqualBestMoves(game: *Board, me: Colour, alloc: std.mem.Allocator) !st
         const unMove = try game.play(move);
         defer game.unplay(unMove);
         if (try inCheck(game, me, alloc)) continue;
-        const value = -try walkEval(game, me.other(), opts.maxDepth, opts.followCaptureDepth, bestWhiteEval, bestBlackEval, movesArena.allocator(), &count, &memo, false);  // TODO: need to catch
-        // std.debug.print("{} count: {} \n", .{ value, bestMoves.items.len });
+        const value = -try walkEval(game, me.other(), opts.maxDepth, opts.followCaptureDepth, -99999999, -99999999, movesArena.allocator(), &count, &memo, false);  // TODO: need to catch
         if (value > bestVal) {
             bestVal = value;
             bestMoves.clearRetainingCapacity();
-            // std.debug.print("just cleared count: {} \n", .{ bestMoves.items.len });
             try bestMoves.append(move);
-            // std.debug.print("before {} {}\n", .{value, bestVal});
-            // if (opts.doPruning and checkAlphaBeta(bestVal, me, &bestWhiteEval, &bestBlackEval)){
-            //     std.debug.print("prune!", .{});
-            //     break;
-            // } 
-            // std.debug.print("after {} {}\n", .{value, bestVal});
         } else if (value == bestVal) {
-            // std.debug.print("{} {} pre equal: {} \n", .{ value, bestVal, bestMoves.items.len });
             try bestMoves.append(move);
         }
+        assert(movesArena.reset(.retain_capacity));
     }
 
     return bestMoves;
@@ -217,9 +207,6 @@ pub fn walkEval(game: *Board, me: Colour, remaining: i32, bigRemaining: i32, bes
     const moveGen = genAllMoves;
     const moves = try moveGen.possibleMoves(game, me, alloc);
     defer alloc.free(moves);
-    // if (moves.len == 0 and capturesOnly) {
-    //     return if (me == .White) genAllMoves.simpleEval(game) else -genAllMoves.simpleEval(game);
-    // }
     if (moves.len == 0) return error.GameOver;
     
     var bestVal: i32 = -1000000;
@@ -228,9 +215,12 @@ pub fn walkEval(game: *Board, me: Colour, remaining: i32, bigRemaining: i32, bes
         defer game.unplay(unMove);
         if (try inCheck(game, me, alloc)) continue;
 
-        const value = if (remaining <= 0 or (capturesOnly and !move.isCapture)) v: {
+        const value = if (capturesOnly and !move.isCapture) v: {
+            // TODO: this isnt quite what I want. That move wasn't a capture but that doesn't mean that the new board is safe. 
+            break :v if (me == .White) genAllMoves.simpleEval(game) else -genAllMoves.simpleEval(game); 
+        } else if (remaining <= 0) v: {
             if (!capturesOnly) {
-                    const val = walkEval(game, me.other(), 3, bigRemaining, bestWhiteEval, bestBlackEval, alloc, count, memo, true) catch |err| {
+                    const val = walkEval(game, me.other(), opts.maxDepth, bigRemaining, bestWhiteEval, bestBlackEval, alloc, count, memo, true) catch |err| {
                     switch (err) {
                         error.OutOfMemory => return err,
                         error.GameOver => break :v 1234567,
@@ -294,14 +284,16 @@ fn checkAlphaBeta(bestVal: i32, me: Colour, bestWhiteEval: *i32, bestBlackEval: 
 };} // End Strategy. 
 
 pub const default = Strategy(.{});
-const testFast = Strategy(.{ .beDeterministicForTest=true, .checkDetection=.Ignore, .doPruning=true});
-const testSlow = Strategy(.{ .beDeterministicForTest=true, .checkDetection=.Ignore, .doPruning=false });
+// TODO: tests dont pass on maxDepth=2
+const testFast = Strategy(.{ .beDeterministicForTest=true, .checkDetection=.Ignore, .doPruning=true, .maxDepth=3 });
+const testSlow = Strategy(.{ .beDeterministicForTest=true, .checkDetection=.Ignore, .doPruning=false, .maxDepth=3 });
 const Timer = @import("bench.zig").Timer;
 
 // TODO: this should be generic over a the strategies to compare. 
 fn testPruning(fen: [] const u8, me: Colour) !void {
     var pls = std.heap.GeneralPurposeAllocator(.{}){};
     const tst = if (@import("builtin").is_test) std.testing.allocator else pls.allocator();
+    _ = tst;
     var game = try Board.fromFEN(fen);
     var t = Timer.start();
     const slow = try testSlow.bestMove(&game, me);
@@ -311,23 +303,28 @@ fn testPruning(fen: [] const u8, me: Colour) !void {
     const t2 = t.end();
 
     if (!std.meta.eql(slow, fast)){
-        // Leaks here don't really matter but freeing prevents error spam. 
-        const startBoard = try game.displayString(tst);
-        defer tst.free(startBoard);
-        const slowBoard = try game.copyPlay(slow).displayString(tst);
-        defer tst.free(slowBoard);
-        const fastBoard = try game.copyPlay(fast).displayString(tst);
-        defer tst.free(fastBoard);
-        std.debug.print("Moves did not match.\nInitial ({} to move):\n{s}\n\nWithout pruning: \n{s}\nWith pruning: \n{s}", .{me, startBoard, slowBoard, fastBoard});
+        std.debug.print("Moves did not match.\nInitial ({} to move):\n", .{ me });
+        game.debugPrint();
+        std.debug.print("Without pruning: \n", .{});
+        game.copyPlay(slow).debugPrint();
+        std.debug.print("With pruning: \n", .{});
+        game.copyPlay(fast).debugPrint();
         return error.TestFailed;
     }
-    std.debug.print("- testPruning (slow: {}ms, fast: {}ms) {s}\n", .{t1, t2, fen});
+    if (t2 > t1 or t1 > 250) std.debug.print("- testPruning (slow: {}ms, fast: {}ms) {s}\n", .{t1, t2, fen});
 }
 
 // Tests that alpha-beta pruning chooses the same best move as a raw search. 
 // Doesn't check if king is in danger to ignore move. // TODO: skip if no legal moves instead 
 pub fn runTestComparePruning() !void {
-    inline for (@import("movegen.zig").fensToTest) |fen| {
+    // Not all of @import("movegen.zig").fensToTest because they're super slow.
+    const fensToTest = [_] [] const u8 {
+        "8/p7/8/8/8/4b3/P2P4/8",
+        "7K/8/7B/8/8/8/Pq6/kN6",
+        "7K/7p/8/8/8/r1q5/1P5P/k7", // Check and multiple best moves for black
+        // "rn1q1bnr/1p2pkp1/2p2p1p/p2p1b2/1PP4P/3PQP2/P2KP1PB/RN3BNR", // hang a queen. super slow to run rn
+    };
+    inline for (fensToTest) |fen| {
         inline for (.{Colour.White, Colour.Black}) |me| {
             try testPruning(fen, me);
         }
@@ -338,3 +335,47 @@ test "simple compare pruning" {
     try runTestComparePruning();
 }
 
+// When I was sharing alpha-beta values between loop iterations when making best move list, it thought all the moves were equal.  
+test "bestMoves eval equal" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var quickAlloc = arena.allocator();
+    inline for (@import("movegen.zig").fensToTest) |fen| {
+        inline for (.{Colour.White, Colour.Black}) |me| {
+            defer assert(arena.reset(.retain_capacity));
+            const initial = try Board.fromFEN(fen);
+            var game = try Board.fromFEN(fen);
+            const bestMoves = try testFast.allEqualBestMoves(&game, me, quickAlloc);
+
+            const allMoves = try @import("movegen.zig").MoveFilter.Any.get().possibleMoves(&game, me, quickAlloc);
+            try std.testing.expect(allMoves.len >= bestMoves.items.len);  // sanity
+            
+            var memo = testFast.MemoMap.init(quickAlloc);
+            try memo.ensureTotalCapacity(10000);
+            var expectedEval: ?i32 = null;
+            for (bestMoves.items, 0..) |move, i| {
+                const unMove = try game.play(move);
+                defer game.unplay(unMove);
+                try std.testing.expect(!(try testFast.inCheck(&game, me, quickAlloc)));
+
+                var thing: usize = 0;
+                // pay attention to negative sign
+                const eval = -(try testFast.walkEval(&game, me.other(), testFast.config.maxDepth, testFast.config.followCaptureDepth, -99999999, -99999999, quickAlloc, &thing, &memo, false));
+                if (expectedEval) |expected| {
+                    if (eval != expected) {
+                        std.debug.print("{} best moves but evals did not match.\nInitial ({} to move):\n", .{ bestMoves.items.len, me });
+                        initial.debugPrint();
+                        std.debug.print("best[0] (eval={}): \n", .{ expected});
+                        initial.copyPlay(bestMoves.items[0]).debugPrint();
+                        std.debug.print("best[{}]: (eval={})\n", .{ i, eval });
+                        game.debugPrint();
+                        return error.TestFailed;
+                    }
+                } else {
+                    expectedEval = eval;
+                }
+            }
+
+            try std.testing.expectEqual(initial, game);  // sanity check unplay function.
+        }
+    }
+}

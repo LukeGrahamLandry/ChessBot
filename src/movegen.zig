@@ -450,10 +450,9 @@ fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, alloc: st
     return total;
 }
 
-// TODO: Super slow. memo or count as you go down instead of redoing work all the time, could do it iteritivly that way and just store the whole next layer in an array. 
-// TODO: can't go farther until it knows about checkmate
 // Tests that the move generation gets the right number of nodes at each depth. 
 // Also exercises the Board.unplay function.
+// Can call this in a loop to test speed of raw movegen. 
 pub fn runTestCountPossibleGames() !void {
     // https://en.wikipedia.org/wiki/Shannon_number
     const possibleGames = [_] usize { 20, 400, 8902, 197281	}; // 4865609 (needs checkmate or castling?)

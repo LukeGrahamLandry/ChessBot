@@ -267,11 +267,13 @@ pub const Board = struct {
 
     // Caller owns the returned string. 
     pub fn toFEN(self: *const Board, allocator: std.mem.Allocator) std.mem.Allocator.Error![] u8 {
-        // This capacity gives space for a letter for each square and a slash after each row,
-        // which is more than it can ever require, so using appendAssumeCapacity below is safe. 
         var letters = try std.ArrayList(u8).initCapacity(allocator, 64 + 8);
         errdefer letters.deinit();
-        
+        try self.appendFEN(&letters);
+        return try letters.toOwnedSlice();
+    }
+
+    pub fn appendFEN(self: *const Board, letters: *std.ArrayList(u8)) std.mem.Allocator.Error!void {
         for (0..8) |rank| {
             var empty: u8 = 0;
             for (0..8) |file| {
@@ -281,40 +283,46 @@ pub const Board = struct {
                     continue;
                 } 
                 if (empty > 0) {
-                    letters.appendAssumeCapacity(empty + ASCII_ZERO_CHAR);
+                    try letters.append(empty + ASCII_ZERO_CHAR);
                     empty = 0;
                 }
-                letters.appendAssumeCapacity(p.toChar());
+                try letters.append(p.toChar());
             }
             if (empty > 0) {
-                letters.appendAssumeCapacity(empty + ASCII_ZERO_CHAR);
+                try letters.append(empty + ASCII_ZERO_CHAR);
             }
             if (rank < 7){
-                letters.appendAssumeCapacity('/');
+                try letters.append('/');
             }
         }
-        return try letters.toOwnedSlice();
     }
 
     // Caller owns the returned string. 
     pub fn displayString(self: *const Board, allocator: std.mem.Allocator) ![] u8 {
-        // Pre-allocate enough space for the string so appendAssumeCapacity is safe to use. 
-        // 64 squares, a pipe before every square, a pipe before each line, and 8 line breaks. 
-        var letters = try std.ArrayList(u8).initCapacity(allocator, (64*3) + 64 + 8 + 8);
-        
+        var letters = try std.ArrayList(u8).initCapacity(allocator, 64 + 8 + (64*3) + 64 + 8 + 8);
+        try self.appendFEN(&letters);
+        try letters.append('\n');
+
         for (0..8) |rank| {
-            letters.appendAssumeCapacity('|');
+            try letters.append('|');
             for (0..8) |file| {
                 const char = self.get(file, 7 - rank).toUnicode();
                 const remaining = letters.allocatedSlice()[letters.items.len..letters.capacity];
                 const count = try std.unicode.utf8Encode(char, remaining);
                 letters.items.len += count;
-                letters.appendAssumeCapacity('|');
+                try letters.append('|');
             }
-            letters.appendAssumeCapacity('\n');
+            try letters.append('\n');
         }
 
         return try letters.toOwnedSlice();
+    }
+
+    pub fn debugPrint(self: *const Board) void {
+        var staticDebugBuffer: [500] u8 = undefined;
+        var staticDebugAlloc = std.heap.FixedBufferAllocator.init(&staticDebugBuffer);
+        const s = self.displayString(staticDebugAlloc.allocator()) catch @panic("Board.debugPrint buffer OOM.");
+        std.debug.print("{s}\n", .{ s });
     }
 };
 
