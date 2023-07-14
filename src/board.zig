@@ -25,6 +25,10 @@ pub const Colour = enum(u1) {
     pub fn other(self: Colour) Colour {
         return @enumFromInt(~@intFromEnum(self));
     }
+
+    pub fn ordinal(self: Colour) u1 {
+        return @intFromEnum(self);
+    }
 };
 
 // This is packed with explicit padding so I can cast boards to byte arrays and pass to js. 
@@ -91,6 +95,10 @@ pub const Piece = packed struct {
     pub fn empty(self: Piece) bool {
         return self.kind == .Empty;
     }
+
+    pub fn is(self: Piece, colour: Colour, kind: Kind) bool {
+        return self.kind == kind and self.colour == colour;
+    }
 };
 
 const ASCII_ZERO_CHAR: u8 = 48;
@@ -117,7 +125,7 @@ const BitBoardPair = packed struct {
         }
     }
 
-    pub fn getFlag(self: *BitBoardPair, colour: Colour) u64 {
+    pub fn getFlag(self: *const BitBoardPair, colour: Colour) u64 {
         return switch (colour) {
             .White => self.white,
             .Black => self.black
@@ -129,20 +137,26 @@ const OldMove = struct {
     move: Move,
     taken: Piece,
     original: Piece,
+    old_castling: CastlingRights,
+    debugPeicePositions: BitBoardPair,
 };
 
-const BoardState = struct {
-    targetedPositions: BitBoardPair = .{},
+// Index with colour ordinal
+const CastlingRights = struct { 
+    right: [2] bool = .{true, true},
+    left: [2] bool = .{true, true},
 };
 
 // TODO: flag for castling rights. Track en passant target squares. Count moves for draw. 
 pub const Board = struct {
     squares: [64] Piece = std.mem.zeroes([64] Piece),
     peicePositions: BitBoardPair = .{},
+    // TODO: make sure these are packed nicely
     simpleEval: i32 = 0,
     blackKingIndex: u6 = 0,
     whiteKingIndex: u6 = 0,
     nextPlayer: Colour = .White,
+    castling: CastlingRights = .{},
 
     pub fn blank() Board {
         return .{};
@@ -180,17 +194,46 @@ pub const Board = struct {
 
     const genAnyMove = @import("movegen.zig").MoveFilter.Any.get();
     pub fn play(self: *Board, move: Move) !OldMove {
-        const thisMove: OldMove = .{ .move = move, .taken = self.squares[move.to], .original = self.squares[move.from]};
+        assert(self.hasCorrectPositionsBits());
+        const thisMove: OldMove = .{ .move = move, .taken = self.squares[move.to], .original = self.squares[move.from], .old_castling = self.castling, .debugPeicePositions = self.peicePositions };
         assert(thisMove.original.colour == self.nextPlayer);
+        const colour = thisMove.original.colour;
         self.simpleEval -= thisMove.taken.eval();
         
-        self.peicePositions.unsetBit(move.from, thisMove.original.colour);
+        self.peicePositions.unsetBit(move.from, colour);
         if (!thisMove.taken.empty()) self.peicePositions.unsetBit(move.to, thisMove.taken.colour);
-        self.peicePositions.setBit(move.to, thisMove.original.colour);
+        self.peicePositions.setBit(move.to, colour);
         if (thisMove.original.kind == .King) {
-            switch (thisMove.original.colour) {
+            switch (colour) {
                 .Black => self.blackKingIndex = move.to,
                 .White => self.whiteKingIndex = move.to,
+            }
+
+            // If you move your king, you can't castle on either side.
+            const cI = @intFromEnum(self.nextPlayer);
+            self.castling.left[cI] = false;
+            self.castling.right[cI] = false;
+        }
+
+        // If you move your rook, you can't castle on that side.
+        if (thisMove.original.kind == .Rook) {
+            const cI = @intFromEnum(self.nextPlayer);
+            if (move.from == 0 or move.from == (7*8)) {
+                self.castling.left[cI] = false;
+            }
+            else if (move.from == 7 or move.from == 63) {
+                self.castling.right[cI] = false;
+            }
+        }
+
+        // If you take a rook, they can't castle on that side.
+        if (thisMove.taken.kind == .Rook) {
+            const cI = @intFromEnum(self.nextPlayer.other());
+            if (move.to == 0 or move.to == (7*8)) {
+                self.castling.left[cI] = false;
+            }
+            else if (move.to == 7 or move.to == 63) {
+                self.castling.right[cI] = false;
             }
         }
         
@@ -201,42 +244,73 @@ pub const Board = struct {
             },
             .promote => |kind| {
                 self.simpleEval -= thisMove.original.eval();
-                self.squares[move.to] = .{ .colour = thisMove.original.colour, .kind = kind };
+                self.squares[move.to] = .{ .colour = colour, .kind = kind };
                 self.simpleEval += self.squares[move.to].eval();
                 self.squares[move.from] = .{ .colour = undefined, .kind = .Empty };
+            },
+            .castle => |info| {
+                self.squares[move.to] = thisMove.original;
+                self.squares[move.from] = .{ .colour = undefined, .kind = .Empty };
+
+                assert(thisMove.taken.empty());
+                self.peicePositions.unsetBit(info.rookFrom, colour);
+                self.peicePositions.setBit(info.rookTo, colour);
+                assert(self.squares[info.rookTo].empty());
+                assert(self.squares[info.rookFrom].is(colour, .Rook));
+                self.squares[info.rookTo] = .{ .colour = colour, .kind = .Rook };
+                self.squares[info.rookFrom] = .{ .colour = undefined, .kind = .Empty };
             }
         }
 
+        assert(move.isCapture == (thisMove.taken.kind != .Empty));
+
         self.nextPlayer = self.nextPlayer.other();
+        assert(self.hasCorrectPositionsBits());
         return thisMove;
     }
 
     // Thought this would be faster because less copying but almost no difference. 
     pub fn unplay(self: *Board, move: OldMove) void {
+        assert(self.hasCorrectPositionsBits());
+        const colour = move.original.colour;
+        self.castling = move.old_castling;
         self.simpleEval += move.taken.eval();
         switch (move.move.action) {
             .none => {},
             .promote => |_| {
                 self.simpleEval -= self.squares[move.move.to].eval();
                 self.simpleEval += move.original.eval();
+            },
+            .castle => |info| {
+                assert(self.squares[info.rookTo].is(colour, .Rook));
+                assert(self.squares[info.rookFrom].empty());
+                assert(self.squares[move.move.to].is(colour, .King));
+                assert(self.squares[move.move.from].empty());
+
+                self.peicePositions.setBit(info.rookFrom, colour);
+                self.peicePositions.unsetBit(info.rookTo, colour);
+                self.squares[info.rookTo] = .{ .colour = undefined, .kind = .Empty };
+                self.squares[info.rookFrom] = .{ .colour = colour, .kind = .Rook };
             }
         }
         
         self.squares[move.move.to] = move.taken;
         self.squares[move.move.from] = move.original;
 
-        self.peicePositions.setBit(move.move.from, move.original.colour);
+        self.peicePositions.setBit(move.move.from, colour);
         if (!move.taken.empty()) self.peicePositions.setBit(move.move.to, move.taken.colour);
-        self.peicePositions.unsetBit(move.move.to, move.original.colour);
+        self.peicePositions.unsetBit(move.move.to, colour);
         if (move.original.kind == .King) {
-            switch (move.original.colour) {
+            switch (colour) {
                 .Black => self.blackKingIndex = move.move.from,
                 .White => self.whiteKingIndex = move.move.from,
             }
         }
-
+        
         self.nextPlayer = self.nextPlayer.other();
-        assert(move.original.colour == self.nextPlayer);
+        assert(colour == self.nextPlayer);
+        assert(std.meta.eql(move.debugPeicePositions, self.peicePositions));
+        assert(self.hasCorrectPositionsBits());
     }
 
     pub fn copyPlay(self: *const Board, move: Move) Board {
@@ -350,7 +424,24 @@ pub const Board = struct {
         const s = self.displayString(staticDebugAlloc.allocator()) catch @panic("Board.debugPrint buffer OOM.");
         std.debug.print("{s}\n", .{ s });
     }
+
+    pub fn hasCorrectPositionsBits(board: *const Board) bool {
+        var flag: u64 = 1;
+        for (board.squares) |piece| {
+            defer flag = flag << 1;
+            if (piece.kind == .Empty){
+                if ((board.peicePositions.white & flag) != 0) return false;
+                if ((board.peicePositions.black & flag) != 0) return false;
+            } else {
+                if ((board.peicePositions.getFlag(piece.colour) & flag) == 0) return false;
+            }
+        }
+
+        return true;
+    }
 };
+
+
 
 var tstAlloc = std.testing.allocator;
 

@@ -78,6 +78,7 @@ pub fn possibleMoves(board: *const Board, me: Colour, alloc: std.mem.Allocator) 
             .Black => board.peicePositions.black,
         };
     
+    assert(board.hasCorrectPositionsBits());
     var flag: u64 = 1;
     for (0..64) |i| {
         defer flag <<= 1; // shift the bit over at the end of each iteration. 
@@ -85,7 +86,8 @@ pub fn possibleMoves(board: *const Board, me: Colour, alloc: std.mem.Allocator) 
             // assert(board.squares[i].empty() or board.squares[i].colour != me);
             continue;
         }
-        // assert(board.squares[i].colour == me);
+        assert(!board.squares[i].empty());
+        assert(board.squares[i].colour == me);
 
         const file = i % 8;
         const rank = i / 8;
@@ -134,31 +136,6 @@ fn rookSlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: u
             if (try trySlide2(moves, board, @intCast(i), @intCast(pos), piece)) break;
         }
     }
-
-    // TODO: this does not spark joy. Feels like there should be some way to express it as a mask that you bit shift around. 
-    // if (file < 7) {
-    //     for ((file + 1)..8) |checkFile| {
-    //         if (try trySlide(moves, board, i, checkFile, rank, piece)) break;
-    //     }
-    // }
-    
-    // if (file > 0) {
-    //     for (1..(file+1)) |checkFile| {
-    //         if (try trySlide(moves, board, i, file - checkFile, rank, piece)) break;
-    //     }
-    // }
-
-    // if (rank < 7) {
-    //     for ((rank + 1)..8) |checkRank| {
-    //         if (try trySlide(moves, board, i, file, checkRank, piece)) break;
-    //     }
-    // }
-    
-    // if (rank > 0) {
-    //     for (1..(rank+1)) |checkRank| {
-    //         if (try trySlide(moves, board, i, file, rank-checkRank, piece)) break;
-    //     }
-    // }
 }
 
 fn pawnMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
@@ -390,6 +367,35 @@ fn kingMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: us
     // horizontal
     if (rank < 7) _ = try trySlide(moves, board, i, file, rank + 1, piece);
     if (rank > 0) _ = try trySlide(moves, board, i, file, rank - 1, piece);
+
+    // Castling
+    const left = board.castling.left[piece.colour.ordinal()];
+    if (file == 4 and left){
+        // TODO: can be a hard coded mask
+        if (board.emptyAt(file - 1, rank) and board.emptyAt(file - 2, rank) and board.emptyAt(file - 3, rank)) {
+            // TODO: check check
+            // TODO: some sort of undefinied behaviour is going on here? 
+            const kingFrom: u6 = @truncate(rank*8 + file);
+            const kingTo: u6 = @truncate(rank*8 + (file - 2));
+            const rookFrom: u6 = @truncate(rank*8);
+            const rookTo: u6 = @truncate(rank*8 + (file - 1));
+            assert(board.squares[kingFrom].is(piece.colour, .King));
+            assert(board.squares[kingTo].empty());
+            assert(board.squares[rookFrom].is(piece.colour, .Rook));
+            assert(board.squares[rookTo].empty());
+            const move: Move = .{
+                .from=kingFrom,
+                .to=kingTo,
+                .action = .{.castle = .{
+                    .rookFrom = rookFrom,
+                    .rookTo =rookTo ,
+                }},
+                .isCapture=false
+            };
+            // std.debug.print("castle: {}", .{ move });
+            try moves.append(move);
+        }
+    }
 }
 
 fn tryHop(moves: *std.ArrayList(Move), board: *const Board, i: usize, checkFile: usize, checkRank: usize, piece: Piece) !void {
@@ -502,6 +508,9 @@ fn testCapturesOnly(fen: [] const u8) !void {
             // Captures should have the flag set.
             try std.testing.expect(move.isCapture);
         }
+        var initial = try Board.fromFEN(fen);
+        initial.nextPlayer = me; // TODO
+        try std.testing.expectEqual(game, initial);  // sanity check unplay()
 
         // Inverse of the above. 
         for (big) |move| {
@@ -515,6 +524,8 @@ fn testCapturesOnly(fen: [] const u8) !void {
                 try std.testing.expect(!move.isCapture);
             }
         }
+
+        try std.testing.expectEqual(game, initial);  // sanity check unplay()
     }
 }
 

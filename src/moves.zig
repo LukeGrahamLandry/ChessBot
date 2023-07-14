@@ -20,6 +20,7 @@ pub const Move = struct {
     action: union(enum) {
         none,
         promote: Kind,
+        castle: struct { rookFrom: u6, rookTo: u6 },
     },
     isCapture: bool,
 
@@ -292,9 +293,6 @@ const Timer = @import("bench.zig").Timer;
 
 // TODO: this should be generic over a the strategies to compare. 
 fn testPruning(fen: [] const u8, me: Colour) !void {
-    var pls = std.heap.GeneralPurposeAllocator(.{}){};
-    const tst = if (@import("builtin").is_test) std.testing.allocator else pls.allocator();
-    _ = tst;
     var game = try Board.fromFEN(fen);
     game.nextPlayer = me; // TODO
     var t = Timer.start();
@@ -314,6 +312,10 @@ fn testPruning(fen: [] const u8, me: Colour) !void {
         return error.TestFailed;
     }
     if (t2 > t1 or t1 > 250) std.debug.print("- testPruning (slow: {}ms, fast: {}ms) {s}\n", .{t1, t2, fen});
+
+    var initial = try Board.fromFEN(fen);
+    initial.nextPlayer = me;  // TODO
+    try std.testing.expectEqual(game, initial);  // sanity check unplay()
 }
 
 // Tests that alpha-beta pruning chooses the same best move as a raw search. 

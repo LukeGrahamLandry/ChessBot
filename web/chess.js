@@ -53,7 +53,7 @@ function handleSetFromFen(){
     const success = Engine.setFromFen(length);
     if (!success) alert("Invalid FEN.");
     renderBoard();
-    tickGame();
+    // tickGame();
 }
 
 function getFenFromEngine() {
@@ -214,6 +214,9 @@ function renderBoard() {
             break;
         case "king": 
             drawBitBoardPair(1);
+            break;
+        case "castle": 
+            drawBitBoardPair(2);
             break;
         default: 
             console.log("Invalid bitBoardInfo string.");

@@ -116,6 +116,7 @@ export fn getMaterialEval() i32 {
 export fn playHumanMove(fromIndex: u32, toIndex: u32) i32 {
    if (fromIndex >= 64 or toIndex >= 64) return 1;
    const isCapture = !internalBoard.squares[toIndex].empty() and internalBoard.squares[toIndex].colour != nextColour;
+   // TODO: can't castle
    var move: Move  = .{ .from=@intCast(fromIndex), .to=@intCast(toIndex), .action=.none, .isCapture=isCapture};
    // TODO: ui should know when promoting so it can let you choose which piece to make. 
    if (internalBoard.squares[fromIndex].kind == .Pawn) {
@@ -152,7 +153,16 @@ export fn getBitBoard(magicEngineIndex: u32, colourIndex: u32) u64 {
    const colour: Colour = if (colourIndex == 0) .White else .Black;
    return switch (magicEngineIndex) {
       0 => internalBoard.peicePositions.getFlag(colour),
-      1 => if (colour == .Black) (one << internalBoard.blackKingIndex) else  (one << internalBoard.whiteKingIndex),
+      1 => if (colour == .Black) (one << internalBoard.blackKingIndex) else (one << internalBoard.whiteKingIndex),
+      2 => {
+         const left = internalBoard.castling.left[colourIndex];
+         const right = internalBoard.castling.right[colourIndex];
+         var result: u64 = 0;
+         if (left) result |= one;
+         if (right) result |= one << 7;
+         if (colourIndex == 1) result <<= (8*7);
+         return result;
+      },
       else => 0,
    };
 }

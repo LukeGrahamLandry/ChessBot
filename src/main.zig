@@ -18,7 +18,8 @@ pub fn main() !void {
 
     // try debugPrintAllMoves("8/8/8/8/8/8/8/6PR", .White);
     // try debugPrintAllMoves("rnb1kb1r/1p1ppppp/1qp2n2/p7/1PPP4/8/P3PPPP/R1BQKBNR", .Black);
-    try debugPrintAllMoves("rnb1kbnr/ppqppppp/2p5/3N4/8/8/PPPPPPPP/R1BQKBNR", .Black);
+    // try debugPrintAllMoves("rnb1kbnr/ppqppppp/2p5/3N4/8/8/PPPPPPPP/R1BQKBNR", .Black);
+    try debugPrintAllMoves("rnbqkbnr/5ppp/1p2p3/p1p5/P1P5/BPQ5/3PPPPP/R3KBNR w", .White);
     
     
     // try debugPrintAllMoves("rnbqkbnr/pp1ppppp/2p5/3N4/8/8/PPPPPPPP/R1BQKBNR", .Black);
@@ -54,7 +55,7 @@ pub fn main() !void {
 
 
 // TODO: pruning does not work on maxDepth=2
-fn debugPrintAllMoves(fen: [] const u8, colour: board.Colour) !void {
+fn debugPrintBestMoves(fen: [] const u8, colour: board.Colour) !void {
     const strat = moves.Strategy(.{ .beDeterministicForTest=true, .maxDepth=3});
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     var quickAlloc = arena.allocator();
@@ -73,7 +74,6 @@ fn debugPrintAllMoves(fen: [] const u8, colour: board.Colour) !void {
     defer allMoves.deinit();
     var memo = strat.MemoMap.init(quickAlloc);
     try memo.ensureTotalCapacity(10000);
-    defer memo.deinit();
     for (allMoves.items, 1..) |move, i| {
         const unMove = try game.play(move);
         defer game.unplay(unMove);
@@ -84,6 +84,37 @@ fn debugPrintAllMoves(fen: [] const u8, colour: board.Colour) !void {
         std.debug.print("{}. eval: {}\n", .{i, -eval});
         game.debugPrint();
     }
+}
+
+fn debugPrintAllMoves(fen: [] const u8, colour: board.Colour) !void {
+    const strat = moves.Strategy(.{ .beDeterministicForTest=true, .maxDepth=3});
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var quickAlloc = arena.allocator();
+    defer std.debug.assert(arena.reset(.retain_capacity));
+
+    var game = try board.Board.fromFEN(fen);
+    std.debug.print("Initial Position:\n", .{});
+    game.debugPrint();
+    // TODO: check
+    const allMoves = try moves.genAllMoves.possibleMoves(&game, colour, alloc);
+    std.debug.print("{} has {} possible moves.\n", .{colour, allMoves.len});
+    
+    var memo = strat.MemoMap.init(quickAlloc);
+    try memo.ensureTotalCapacity(10000);
+    defer memo.deinit();
+    for (allMoves, 1..) |move, i| {
+        const unMove = try game.play(move);
+        defer game.unplay(unMove);
+
+        var thing: usize = 0;
+        // pay attention to negative sign
+        const eval = try strat.walkEval(&game, colour.other(), strat.config.maxDepth, strat.config.followCaptureDepth, -99999999, -99999999, quickAlloc, &thing, &memo, false);
+        std.debug.print("{}. eval: {}\n", .{i, -eval});
+        game.debugPrint();
+    }
+
+    var initial = try board.Board.fromFEN(fen);
+    try std.testing.expectEqual(game, initial); // undo move sanity check
 }
 
 ///////
