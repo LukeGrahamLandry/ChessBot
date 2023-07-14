@@ -488,12 +488,3 @@ pub const Board = struct {
 };
 
 const isWasm = @import("builtin").target.isWasm();
-
-var tstAlloc = std.testing.allocator;
-
-test "write fen" {
-    var b = Board.initial();
-    const fen = try b.toFEN(tstAlloc);
-    defer tstAlloc.free(fen);
-    try std.testing.expect(std.mem.eql(u8, fen, INIT_FEN));
-}

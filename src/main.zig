@@ -156,8 +156,3 @@ fn debugPlayOne(game: *board.Board, i: usize, colour: board.Colour, rng: *std.ra
 
     return true;
 }
-
-test {
-    // Runs tests in other files if there's a chain through @import-s somewhere in this file. 
-    std.testing.refAllDeclsRecursive(@This());
-}

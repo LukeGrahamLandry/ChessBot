@@ -2,6 +2,13 @@ const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 const minMoveTimeMs = 500;  // When computer vs computer, if the engine is faster than this, it will wait before playing again. 
 
+// TODO: select which colour is human or computer. button to switch mid game for testing. 
+// TODO: option to render black at the bottom
+// TODO: set depth/time limit, show search time
+// TODO: forward and back buttons to move through position history, start playing from anywhere to make tree (render all branches as tiny boards?)
+// TODO: run wasm in a worker so it doesn't freeze ui while searching
+// TODO: show checkmate 
+
 let ticker = null;
 let boardFenHistory = [];
 function tickGame() {
