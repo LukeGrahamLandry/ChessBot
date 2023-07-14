@@ -118,24 +118,57 @@ test "bestMoves eval equal" {
 var tst = std.testing.allocator;
 
 
+const PerftResult = struct {
+    games: u64 = 0,
+    checkmates: u64 = 0,
+};
+
 const genKingCapturesOnly = @import("movegen.zig").MoveFilter.KingCapturesOnly.get();
-fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, alloc: std.mem.Allocator) !usize {
-    if (remainingDepth == 0) return 1;
+fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, alloc: std.mem.Allocator, comptime countMates: bool) !PerftResult {
+    var results: PerftResult = .{};
+
+    if (remainingDepth == 0) {
+        if (!countMates) @panic("Should early exit on remainingDepth == 0");
+        
+        if (try reverseFromKingIsInCheck(game, me)) {
+            const allMoves = try MoveFilter.Any.get().possibleMoves(game, me, alloc);
+            defer alloc.free(allMoves);
+            var anyLegalMoves = false;
+            for (allMoves) |move| {
+                const unMove = try game.play(move);
+                defer game.unplay(unMove);
+                if (try reverseFromKingIsInCheck(game, me)) continue; // move illigal
+                anyLegalMoves = true;
+                break;
+            }
+            if (!anyLegalMoves) {
+                results.checkmates += 1;
+            }
+        }
+        
+        results.games += 1;
+        return results;
+    }
     const allMoves = try MoveFilter.Any.get().possibleMoves(game, me, alloc);
     defer alloc.free(allMoves);
-    // if (remainingDepth == 1) return allMoves.len; // TODO: look at checks
-
-    var total: usize = 0;
+    
     for (allMoves) |move| {
         const unMove = try game.play(move);
         defer game.unplay(unMove);
         if (try reverseFromKingIsInCheck(game, me)) continue; // move illigal
 
-        // Function call overhead is tiny but measurable
-        total += if (remainingDepth - 1 == 0) 1 else try countPossibleGames(game, me.other(), remainingDepth - 1, alloc);
+        if (!countMates and (remainingDepth - 1) == 0) {
+            results.games += 1;
+        } else {
+            const next = try countPossibleGames(game, me.other(), remainingDepth - 1, alloc, countMates);
+            results.games += next.games;
+            results.checkmates += next.checkmates;
+        }
     }
 
-    return total;
+    // Not checking for mate here, we only care about the ones on the bottom level. 
+
+    return results;
 }
 
 // Tests that the move generation gets the right number of nodes at each depth. 
@@ -143,26 +176,48 @@ fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, alloc: st
 // Can call this in a loop to test speed of raw movegen. 
 pub fn runTestCountPossibleGames() !void {
     // https://en.wikipedia.org/wiki/Shannon_number
-    const possibleGames = [_] usize { 20, 400, 8902, 197281 }; // 4865609 (needs en-passant and checkmate)
-    // TODO: test number of checkmates as well.
-
-    var tempA = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer tempA.deinit();
-    var game = Board.initial();
-    for (possibleGames, 1..) |expectedGames, i| {
-        const start = std.time.nanoTimestamp();
-        _ = start;
-        // These parameters are backwards because it can't infer type from a comptime_int. This seems dumb. 
-        const foundGames = countPossibleGames(&game, .White, i, tempA.allocator());
-        try std.testing.expectEqual(foundGames, expectedGames);
-        // std.debug.print("- Explored Depth {} in {}ms.\n", .{i, @divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms))});
-        // Ensure that repeatedly calling unplay didn't mutate the board.
-        try std.testing.expectEqual(game, Board.initial());   
-    }
+    try (PerftTest {
+        .possibleGames = &[_] u64 { 20, 400, 8902, 197281, 4865609, 119060324, 3195901860},  // 3195901860 is too slow to deal with but also fails
+        .possibleMates = &[_] u64 {  0,   0,    0,      8,     347,     10828, 435767},  //     435767
+        .fen = @import("board.zig").INIT_FEN,
+    }).run();
 }
 
 test "count possible games" {
     try runTestCountPossibleGames();
+}
+
+const PerftTest = struct { 
+    possibleGames: [] const u64,
+    possibleMates: [] const u64,
+    fen: [] const u8,
+    comptime countMates: bool = true,
+
+    fn run(self: PerftTest) !void{
+        var tempA = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer tempA.deinit();
+        var game = try Board.fromFEN(self.fen);
+        for (self.possibleGames, self.possibleMates, 1..) |expectedGames, expectedMates, i| {
+            const start = std.time.nanoTimestamp();
+            // These parameters are backwards because it can't infer type from a comptime_int. This seems dumb. 
+            const found = try countPossibleGames(&game, .White, i, tempA.allocator(), self.countMates);
+            const expected: PerftResult = .{ .games=expectedGames, .checkmates=(if (self.countMates) expectedMates else 0) };
+            try std.testing.expectEqual(expected.games, found.games);
+            std.debug.print("- [{s}] Explored depth {} in {}ms.\n", .{self.fen, i, @divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms))});
+            // Ensure that repeatedly calling unplay didn't mutate the board.
+            try std.testing.expectEqual(game, try Board.fromFEN(self.fen));
+            // _ = tempA.reset(.retain_capacity);
+        }
+    }
+};
+
+test "perft 3" {
+    // https://www.chessprogramming.org/Perft_Results
+    try (PerftTest {
+        .possibleGames = &[_] u64 { 14, 191, 2812, 43238, 674624, 11030083, }, // 178633661 slow but passes
+        .possibleMates = &[_] u64 {  0,   0,    0,    17,      0,     2733,  }, // 87
+        .fen = "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w",
+    }).run();
 }
 
 const MoveList = std.ArrayList(Move);

@@ -34,6 +34,14 @@ sample <pid> -f zig-out/temp_profile_info.sample
 filtercalltree zig-out/temp_profile_info.sample
 ```
 
+## Learning Zig 
+
+- @truncate explicitly removes high bits but @intCast asserts that the number fits in the new type. So intCast is just better for my usize->u6 of board indexes because it means debug builds catch dumb mistakes and in release builds it becomes (i assume?) a no-op. 
+- You can't always use integer literals directly, you often need an explicit type.
+- @as(type, value) is for unambigous casts that can't fail. No-op at runtime, it's just to explicitly talk to the type system. Can be used to give an explicit type to other casts. 
+
+TODO: should try to get used to the auto-format. 
+
 ## counting possible moves 
 
 After banning letting your king get taken in check, need to make the test faster. Tried writing it iteritivly instead of recusivly but all the speed up was just from using an arena allocator instead of freeing everything. so went back to recusive because that seems more elegant, uses unmove instead of copyMove so if I can make check detection gradual it will help. 

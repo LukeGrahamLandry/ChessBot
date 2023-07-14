@@ -46,7 +46,6 @@ fn toIndex(file: usize, rank: usize) u6  {
     return @intCast(rank*8 + file);
 }
 
-// TODO: castling, en-passant
 const one: u64 = 1;
 // Caller owns the returned slice.
 pub fn possibleMoves(board: *Board, me: Colour, alloc: std.mem.Allocator) ![] Move {
@@ -117,20 +116,30 @@ fn rookSlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: u
     }
 }
 
+pub fn pawnForwardTwo(fromIndex: usize, toFile: usize, toRank: usize, isCapture: bool) Move {
+    // std.debug.assert(fromIndex < 64 and toFile < 8 and toRank < 8);
+    return .{
+        .from=@intCast(fromIndex),
+        .to = @intCast(toRank*8 + toFile),
+        .action = .allowFrenchMove,
+        .isCapture=isCapture
+    };
+}
+
 fn pawnMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
     const targetRank = switch (piece.colour) {
         // Asserts can't have a pawn at the end in real games because it would have promoted. 
         .White => w: {
             assert(rank < 7);  
             if (filter == .Any and rank == 1 and board.emptyAt(file, 2) and board.emptyAt(file, 3)) {  // forward two
-                try moves.append(Move.irf(i, file, 3, false));  // cant promote
+                try moves.append(pawnForwardTwo(i, file, 3, false));  // cant promote
             }
             break :w rank + 1;
         },
         .Black => b: {
             assert(rank > 0);
             if (filter == .Any and rank == 6 and board.emptyAt(file, 5) and board.emptyAt(file, 4)) {  // forward two
-                try moves.append(Move.irf(i, file, 4, false));  // cant promote
+                try moves.append(pawnForwardTwo(i, file, 4, false));  // cant promote
             }
             break :b rank - 1;
         }
@@ -139,11 +148,41 @@ fn pawnMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: us
     if (filter == .Any and board.emptyAt(file, targetRank)) {  // forward
         try maybePromote(moves, board, i, file, targetRank, piece.colour);
     }
-    if (file < 7 and !board.emptyAt(file + 1, targetRank) and board.get(file + 1, targetRank).colour != piece.colour) {  // right
-        try maybePromote(moves, board, i, file + 1, targetRank, piece.colour);
+    if (file < 7) {  // right
+        if (!board.emptyAt(file + 1, targetRank)){
+            if (board.get(file + 1, targetRank).colour != piece.colour) try maybePromote(moves, board, i, file + 1, targetRank, piece.colour);
+        } else {
+            try frenchMove(moves, board, i, file + 1, targetRank, piece.colour);
+        }
+        
     }
-    if (file > 0 and !board.emptyAt(file - 1, targetRank) and board.get(file - 1, targetRank).colour != piece.colour) {
-        try maybePromote(moves, board, i, file - 1, targetRank, piece.colour);
+    if (file > 0) {  // left
+        if (!board.emptyAt(file - 1, targetRank)){
+            if (board.get(file - 1, targetRank).colour != piece.colour) try maybePromote(moves, board, i, file - 1, targetRank, piece.colour);
+        } else {
+            try frenchMove(moves, board, i, file - 1, targetRank, piece.colour);
+        }
+    }
+}
+
+fn frenchMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, targetFile: usize, targetRank: usize, colour: Colour) !void {
+    // TODO
+    // Most of the time you can't en-passant so make that case as fast as possible. 
+    switch (board.frenchMove) {
+        .none => return,
+        .file => |validTargetFile| {
+            if (targetFile != validTargetFile) return;
+            if ((colour == .White and targetRank != 5) or (colour == .Black and targetRank != 2)) return;
+            const endIndex = targetRank*8 + targetFile;
+            const captureIndex = ((if (colour == .White) targetRank-1 else targetRank+1)*8) + targetFile;
+            assert(board.squares[captureIndex].is(colour.other(), .Pawn));
+            try moves.append(.{
+                .from = @intCast(i),
+                .to = @intCast(endIndex),
+                .action = .{.useFrenchMove=@intCast(captureIndex)},
+                .isCapture = true
+            });
+        }
     }
 }
 
@@ -332,6 +371,18 @@ fn kingMove(moves: *std.ArrayList(Move), board: *Board, i: usize, file: usize, r
     try tryCastle(moves, board, i, file, rank, piece.colour, false);
 }
 
+fn castlingIsLegal(board: *Board, i: usize, colour: Colour, comptime goingLeft: bool) !bool {
+    const path = if (goingLeft) [_] usize {i-1, i-2, i-3} else [_] usize {i+1, i+2};
+    for (path) |sq| {
+        // TODO: do this without playing the move? It annoys me that this makes getPossibleMoves take a mutable board pointer (would also be fixed by doing it later with other legal move checks). 
+        const move = Move.ii(@intCast(i), @intCast(sq), false);
+        const unMove = try board.play(move);
+        defer board.unplay(unMove);
+        if (try reverseFromKingIsInCheck(board, colour)) return false;
+    }
+    return true;
+}
+
 // TODO: do all the offsets on i instead of on (x, y) since we know rooks/king are in start pos so can't wrap around board. 
 pub fn tryCastle(moves: *std.ArrayList(Move), board: *Board, i: usize, file: usize, rank: usize, colour: Colour, comptime goingLeft: bool) !void {
     const cI: usize = if (colour == .White) 0 else 1;
@@ -344,16 +395,8 @@ pub fn tryCastle(moves: *std.ArrayList(Move), board: *Board, i: usize, file: usi
                              else (board.emptyAtI(i + 1) and board.emptyAtI(i + 2));
 
         if (pathClear) {
-            // Check check! 
-            // TODO: do I actually want to do this later like other check checks? Or do I want to make the rest only generate legal moves as well?
-            const path = if (goingLeft) [_] usize {i-1, i-2, i-3} else [_] usize {i+1, i+2};
-            for (path) |sq| {
-                // TODO: do this without playing the move? It annoys me that this makes getPossibleMoves take a mutable board pointer. 
-                const move = Move.ii(@intCast(i), @intCast(sq), false);
-                const unMove = try board.play(move);
-                defer board.unplay(unMove);
-                if (try reverseFromKingIsInCheck(board, colour)) return;
-            }
+            // TODO: do this later like other check checks. That way don't need to do the expensive check if it gets pruned out. Probably won't save much since you generally want to castle anyway. 
+            if (!try castlingIsLegal(board, i, colour, goingLeft)) return;
 
             const kingFrom: u6 = @intCast(rank*8 + file);
             const kingTo: u6 = if (goingLeft) @intCast(rank*8 + (file - 2)) else @intCast(rank*8 + (file + 2));
@@ -552,22 +595,26 @@ pub fn reverseFromKingIsInCheck(game: *Board, me: Colour) !bool {
 
         // Pawns
         // Dont care about forward moves becasue they can't take. 
-        const targetRank = switch (me) {
-            .White => w: {
-                break :w rank + 1;
-            },
-            .Black => b: {
-                break :b rank - 1;
+        const onEdge = if (me == .White) rank == 7 else rank == 0;
+        if (!onEdge){
+            const targetRank = switch (me) {
+                .White => w: {
+                    break :w rank + 1;
+                },
+                .Black => b: {
+                    break :b rank - 1;
+                }
+            };
+
+            if (file < 7 and game.get(file + 1, targetRank).kind == .Pawn and game.get(file + 1, targetRank).colour != me) {  // right
+                break :check true;
             }
-        };
+            if (file > 0 and game.get(file - 1, targetRank).kind == .Pawn and game.get(file - 1, targetRank).colour != me) {
+                break :check true;
+            }
 
-        if (file < 7 and game.get(file + 1, targetRank).kind == .Pawn and game.get(file + 1, targetRank).colour != me) {  // right
-            break :check true;
         }
-        if (file > 0 and game.get(file - 1, targetRank).kind == .Pawn and game.get(file - 1, targetRank).colour != me) {
-            break :check true;
-        }
-
+       
         // Knights!
 
         if (rank < 6){

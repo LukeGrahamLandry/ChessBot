@@ -121,14 +121,32 @@ export fn getMaterialEval() i32 {
 /// OUT: internalBoard, boardView, nextColour
 export fn playHumanMove(fromIndex: u32, toIndex: u32) i32 {
    if (fromIndex >= 64 or toIndex >= 64) return 1;
+   if (internalBoard.squares[fromIndex].colour != nextColour) return 4;
+
    const isCapture = !internalBoard.squares[toIndex].empty() and internalBoard.squares[toIndex].colour != nextColour;
-   // TODO: can't castle
-   var move: Move  = .{ .from=@intCast(fromIndex), .to=@intCast(toIndex), .action=.none, .isCapture=isCapture};
+   var move: Move = .{ .from=@intCast(fromIndex), .to=@intCast(toIndex), .action=.none, .isCapture=isCapture};
    // TODO: ui should know when promoting so it can let you choose which piece to make. 
    if (internalBoard.squares[fromIndex].kind == .Pawn) {
       // TODO: factor out some canPromote function so magic numbers live in one place
       const isPromote = (nextColour == .Black and toIndex <= 7) or (nextColour == .White and toIndex > (64-8));
-      if (isPromote) move.action = .{.promote = .Queen };
+      if (isPromote) {
+         move.action = .{.promote = .Queen };
+      } else {
+         const toRank = @divFloor(toIndex, 8);
+         const fromRank = @divFloor(fromIndex, 8);
+         const isForwardTwo = (nextColour == .Black and toRank == 4 and fromRank == 6) or (nextColour == .White and toRank == 3 and fromRank == 1);
+         if (isForwardTwo) {
+            move.action = .allowFrenchMove;
+         } else {
+            const toFile = @mod(toIndex, 8);
+            const fromFile = @mod(fromIndex, 8);
+            if (toFile != fromFile and !move.isCapture){ // this will include invalid moves but that's checked below
+               move.isCapture = true;
+               const captureIndex = ((if (nextColour == .White) toRank-1 else toRank+1)*8) + toFile;
+               move.action = .{ .useFrenchMove = @intCast(captureIndex) };
+            }
+         }
+      }
    } else if (internalBoard.squares[fromIndex].kind == .King) {
       var castles = std.ArrayList(Move).init(alloc);
       defer castles.deinit();
@@ -143,8 +161,6 @@ export fn playHumanMove(fromIndex: u32, toIndex: u32) i32 {
          move = castles.items[1];
       }
    }
-
-   if (internalBoard.squares[fromIndex].colour != nextColour) return 4;
 
    // Check if this is a legal move by the current player. 
    const allMoves = genAllMoves.possibleMoves(&internalBoard, nextColour, alloc) catch return 1;
@@ -197,6 +213,15 @@ export fn getBitBoard(magicEngineIndex: u32, colourIndex: u32) u64 {
             return result;
          } else {
             return 0;
+         }
+      },
+      4 => {   // en-passant
+         switch (internalBoard.frenchMove) {
+            .none => return 0,
+            .file => |targetFile| {
+               const index = @as(u6, if (nextColour == .White) 5 else 2)*8 + targetFile;
+               return one << index;
+            }
          }
       },
       else => 0,

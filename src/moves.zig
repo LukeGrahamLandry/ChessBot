@@ -16,17 +16,22 @@ fn assert(val: bool) void {
 
 // Today we learn this language sucks ass and gives you random garbage numbers if this is not 'packed' but only in release mode,
 // you'll never guess whether that breaks it in debug mode, but padding it out to two bytes works in both.
+// On one hand I respect it because God never intended to have non-byte aligned integers but I don't understand why the compiler doesn't just pad Move so it works. 
+// Can reproduce with minimal example so I think it's just a compiler bug. 
+// Same as this? https://github.com/ziglang/zig/issues/16392
 pub const CastleMove = packed struct { rookFrom: u6, rookTo: u6, fuck: u4 = 0 };
 
 // TODO: this seems much too big (8 bytes?). castling info is redunant cause other side can infer if king moves 2 squares, bool field is evil and redundant
 pub const Move = struct {
     from: u6,
     to: u6,
-    isCapture: bool,
+    isCapture: bool,  // french move says true but to square isnt the captured one
     action: union(enum) {
         none,
         promote: Kind,
         castle: CastleMove,
+        allowFrenchMove,
+        useFrenchMove: u6  // capture index
     },
 
     // TODO: method that factors out bounds check from try methods then calls this? make sure not to do twice in slide loops.
@@ -48,6 +53,10 @@ pub const Move = struct {
             .isCapture=isCapture
         };
     }
+};
+
+pub const GameOver = enum {
+    Continue, Stalemate, WhiteWins, BlackWins
 };
 
 pub const HashAlgo = enum {
@@ -223,7 +232,7 @@ pub fn walkEval(game: *Board, me: Colour, remaining: i32, bigRemaining: i32, bes
         defer game.unplay(unMove);
         if (try inCheck(game, me, alloc)) continue;
 
-        const value = if (capturesOnly and !move.isCapture) v: {
+        const value = if (capturesOnly and !(move.isCapture)) v: {
             // TODO: this isnt quite what I want. That move wasn't a capture but that doesn't mean that the new board is safe. 
             // The problem I'm trying to solve is if you simpleEval on a board where captures are possible, the eval will be totally different next move. 
             break :v if (me == .White) genAllMoves.simpleEval(game) else -genAllMoves.simpleEval(game); 

@@ -7,7 +7,7 @@ const minMoveTimeMs = 500;  // When computer vs computer, if the engine is faste
 // TODO: set depth/time limit, show search time
 // TODO: forward and back buttons to move through position history, start playing from anywhere to make tree (render all branches as tiny boards?)
 // TODO: run wasm in a worker so it doesn't freeze ui while searching
-// TODO: show checkmate 
+// TODO: show checkmate, render captured pieces, show engine eval
 
 let ticker = null;
 let boardFenHistory = [];
@@ -107,6 +107,7 @@ function handleCanvasClick(e) {
                 setTimeout(tickGame, 25);  // Give it a chance to render.
                 break;
             case 4: // Invalid move. 
+                console.log("Player tried illigal move.");
                 clicked = [file, rank];
                 renderBoard();
                 break;
@@ -200,8 +201,6 @@ function drawBitBoardPair(magicEngineIndex) {
 }
 
 function renderBoard() {
-    // TODO: doing this all the time is unnessary because you don't care most of the time and it makes typing one in annoying. 
-    //       but it will be helpful to add history.
     const fen = getFenFromEngine();
     document.getElementById("fen").value = fen;
     document.getElementById("player").innerText = Engine.isWhiteTurn() ? "White" : "Black";
@@ -210,6 +209,8 @@ function renderBoard() {
     // TODO: If I really cared I could just render the diff instead of clearing the board
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
+    // TODO: Either put the magic numbers in the option value or have explicitly named functions (second one probably better!). 
+    //       Could make the option value be the function name to call on the engine... but that feels weird. 
     switch (bitBoardInfo) {
         case "none":
             break;
@@ -224,6 +225,10 @@ function renderBoard() {
             break;
         case "prev": {
             drawBitBoard(Engine.getBitBoard(3, 0), "green");
+            break;
+        }
+        case "french": {
+            drawBitBoard(Engine.getBitBoard(4, 0), "black");
             break;
         }
         default: 

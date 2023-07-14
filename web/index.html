@@ -19,13 +19,16 @@
                 <option value="all">All Piece Positions</option>
                 <option value="king">King Position</option>
                 <option value="castle">Castling Rights</option>
+                <option value="french" selected>En Passant Target</option>
                 <option value="prev" selected>Last Move</option>
+                
             </select>
         </div>
         <div id="loading"> Loading... </div>
     </div>
     <pre id="letters"></pre>
   <script>
+    const startTime = performance.now();
     var wasmReady = false;
     function startChessIfReady() {
         // This get's called each time something loads. Wait until everything is loaded...
@@ -40,6 +43,7 @@
 
     var Engine;
     function handleWasmLoaded(wasm) {
+        console.log("WASM ready in " + Math.round(performance.now() - startTime) + "ms.");
         Engine = wasm.instance.exports;
         wasmReady = true;
         window.startChessIfReady();
@@ -55,11 +59,8 @@
     chessImg.src = "assets/pieces.svg";
     chessImg.onload = window.startChessIfReady;
     const ctx = document.getElementById("board").getContext("2d");
-
-    {
-        let boardWidth = document.getElementById("board").width;
-        document.getElementById("board").height = boardWidth;
-    }
+    // TODO: why does this still work when you resize the page later?
+    document.getElementById("board").height = document.getElementById("board").width;
 
     // TODO: put this in build.zig
     // zig build-lib src/web.zig -target wasm32-freestanding -dynamic -rdynamic -O ReleaseFast && mv web.wasm web/main.wasm

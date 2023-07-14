@@ -33,6 +33,9 @@ pub const Piece = packed struct {
     kind: Kind,
     _pad: u3 = 0,
 
+    // An empty square is all zeros (not just kind=Empty and undefined colour). This means a raw byte array can be used in board's hash/eql. 
+    pub const EMPTY: Piece = .{ .kind=.Empty, .colour=.White };
+
     pub fn eval(self: Piece) i32 {
         return switch (self.colour) {
             .White => self.kind.material(),
@@ -122,13 +125,19 @@ const OldMove = struct {
     old_castling: CastlingRights,
     // TODO: remove
     debugPeicePositions: BitBoardPair,
-    debugSimpleEval: i32
+    debugSimpleEval: i32,
+    frenchMove: FrenchMove
 };
 
 // Index with colour ordinal
 const CastlingRights = struct { 
     right: [2] bool = .{true, true},
     left: [2] bool = .{true, true},
+};
+
+const FrenchMove = union(enum){
+    none,
+    file: u4
 };
 
 // TODO: Track en passant target squares. Count moves for draw. 
@@ -139,6 +148,7 @@ pub const Board = struct {
     simpleEval: i32 = 0,  // TODO: a test that recalculates
     blackKingIndex: u6 = 0,
     whiteKingIndex: u6 = 0,
+    frenchMove: FrenchMove = .none,
     nextPlayer: Colour = .White,
     castling: CastlingRights = .{},
 
@@ -184,13 +194,14 @@ pub const Board = struct {
         return isEmpty;
     }
 
-    const genAnyMove = @import("movegen.zig").MoveFilter.Any.get();
+    // TODO: no error
     pub fn play(self: *Board, move: Move) !OldMove {
         assert(self.hasCorrectPositionsBits());
-        const thisMove: OldMove = .{ .move = move, .taken = self.squares[move.to], .original = self.squares[move.from], .old_castling = self.castling, .debugPeicePositions = self.peicePositions, .debugSimpleEval=self.simpleEval};
+        const thisMove: OldMove = .{ .move = move, .taken = self.squares[move.to], .original = self.squares[move.from], .old_castling = self.castling, .debugPeicePositions = self.peicePositions, .debugSimpleEval=self.simpleEval, .frenchMove=self.frenchMove };
         assert(thisMove.original.colour == self.nextPlayer);
         const colour = thisMove.original.colour;
         self.simpleEval -= thisMove.taken.eval();
+        self.frenchMove = .none;
         
         self.peicePositions.unsetBit(move.from, colour);
         if (!thisMove.taken.empty()) self.peicePositions.unsetBit(move.to, thisMove.taken.colour);
@@ -232,17 +243,19 @@ pub const Board = struct {
         switch (move.action) {
             .none => {
                 self.squares[move.to] = thisMove.original;
-                self.squares[move.from] = .{ .colour = .White, .kind = .Empty };
+                self.squares[move.from] = Piece.EMPTY;
+                assert(move.isCapture == (thisMove.taken.kind != .Empty));
             },
             .promote => |kind| {
                 self.squares[move.to] = .{ .colour = colour, .kind = kind };
-                self.squares[move.from] = .{ .colour = .White, .kind = .Empty };
+                self.squares[move.from] = Piece.EMPTY;
                 self.simpleEval -= thisMove.original.eval();
                 self.simpleEval += self.squares[move.to].eval();
+                assert(move.isCapture == (thisMove.taken.kind != .Empty));
             },
             .castle => |info| {
                 self.squares[move.to] = thisMove.original;
-                self.squares[move.from] = .{ .colour = .White, .kind = .Empty };
+                self.squares[move.from] = Piece.EMPTY;
 
                 assert(thisMove.taken.empty());
                 self.peicePositions.unsetBit(info.rookFrom, colour);
@@ -250,11 +263,26 @@ pub const Board = struct {
                 assert(self.squares[info.rookTo].empty());
                 assert(self.squares[info.rookFrom].is(colour, .Rook));
                 self.squares[info.rookTo] = .{ .colour = colour, .kind = .Rook };
-                self.squares[info.rookFrom] = .{ .colour = .White, .kind = .Empty };
+                self.squares[info.rookFrom] = Piece.EMPTY;
+                assert(!move.isCapture and (thisMove.taken.kind == .Empty));
+            },
+            .allowFrenchMove => {
+                self.squares[move.to] = thisMove.original;
+                self.squares[move.from] = Piece.EMPTY;
+                self.frenchMove = .{.file = @intCast(@rem(move.to, 8))};
+                assert(!move.isCapture and (thisMove.taken.kind == .Empty));
+            },
+            .useFrenchMove => |captureIndex| {
+                assert(self.squares[captureIndex].is(colour.other(), .Pawn));
+                self.squares[move.to] = thisMove.original;
+                self.squares[move.from] = Piece.EMPTY;
+                self.squares[captureIndex] = Piece.EMPTY;
+                assert(move.isCapture and thisMove.taken.kind == .Empty);  // confusing
+                self.squares[captureIndex] = Piece.EMPTY;
+                self.peicePositions.unsetBit(captureIndex, colour.other());
             }
         }
 
-        assert(move.isCapture == (thisMove.taken.kind != .Empty));
         self.nextPlayer = self.nextPlayer.other();
         assert(self.hasCorrectPositionsBits());
         return thisMove;
@@ -265,6 +293,7 @@ pub const Board = struct {
         assert(self.hasCorrectPositionsBits());
         const colour = move.original.colour;
         self.castling = move.old_castling;
+        self.frenchMove = move.frenchMove;
         self.simpleEval += move.taken.eval();
         switch (move.move.action) {
             .none => {},
@@ -282,6 +311,11 @@ pub const Board = struct {
                 self.peicePositions.unsetBit(info.rookTo, colour);
                 self.squares[info.rookTo] = .{ .colour = .White, .kind = .Empty };
                 self.squares[info.rookFrom] = .{ .colour = colour, .kind = .Rook };
+            },
+            .allowFrenchMove => {},
+            .useFrenchMove => |captureIndex| {
+                self.squares[captureIndex] = .{.kind=.Pawn, .colour=colour.other()};
+                self.peicePositions.setBit(captureIndex, colour.other());
             }
         }
         
@@ -418,36 +452,40 @@ pub const Board = struct {
         std.debug.print("{s}\n", .{ s });
     }
 
+    // Asserts to this don't get compiled out in release mode! It's like 10x faster with this commented out. 
     pub fn hasCorrectPositionsBits(board: *const Board) bool {
-        const valid = v: {
-            var flag: u64 = 1;
-            for (board.squares) |piece| {
-                defer flag = flag << 1;
-                if (piece.kind == .Empty){
-                    if ((board.peicePositions.white & flag) != 0) break :v false;
-                    if ((board.peicePositions.black & flag) != 0) break :v false;
-                } else {
-                    if ((board.peicePositions.getFlag(piece.colour) & flag) == 0) break :v false;
-                }
-            }
+        _ = board;
+        
+        // const valid = v: {
+        //     var flag: u64 = 1;
+        //     for (board.squares) |piece| {
+        //         defer flag = flag << 1;
+        //         if (piece.kind == .Empty){
+        //             if ((board.peicePositions.white & flag) != 0) break :v false;
+        //             if ((board.peicePositions.black & flag) != 0) break :v false;
+        //         } else {
+        //             if ((board.peicePositions.getFlag(piece.colour) & flag) == 0) break :v false;
+        //         }
+        //     }
 
-            // TODO: this is broken until I detect checkmate
-            // if (!board.squares[board.whiteKingIndex].is(.White, .King)) {
-            //     if (board.whiteKingIndex == 0) std.debug.print("whiteKingIndex=0, maybe not set?\n", .{});
-            //     break :v false;
-            // }
-            // if (!board.squares[board.blackKingIndex].is(.Black, .King)) {
-            //     if (board.blackKingIndex == 0) std.debug.print("blackKingIndex=0, maybe not set?\n", .{});
-            //     break :v false;
-            // }
-            break :v true;
-        };
+        //     // TODO: this is broken until I detect checkmate
+        //     // if (!board.squares[board.whiteKingIndex].is(.White, .King)) {
+        //     //     if (board.whiteKingIndex == 0) std.debug.print("whiteKingIndex=0, maybe not set?\n", .{});
+        //     //     break :v false;
+        //     // }
+        //     // if (!board.squares[board.blackKingIndex].is(.Black, .King)) {
+        //     //     if (board.blackKingIndex == 0) std.debug.print("blackKingIndex=0, maybe not set?\n", .{});
+        //     //     break :v false;
+        //     // }
+        //     break :v true;
+        // };
 
-        if (!valid and !isWasm) {
-            board.debugPrint();
-            std.debug.print("white: {b}\nblack: {b}\neval={}. {} to move. kings: {} {}\n {}\n\n", .{board.peicePositions.white, board.peicePositions.black, board.simpleEval, board.nextPlayer, board.whiteKingIndex, board.blackKingIndex, board.castling});
-        }
-        return valid;
+        // // if (!valid and !isWasm) {
+        // //     board.debugPrint();
+        // //     std.debug.print("white: {b}\nblack: {b}\neval={}. {} to move. kings: {} {}\n {}\n\n", .{board.peicePositions.white, board.peicePositions.black, board.simpleEval, board.nextPlayer, board.whiteKingIndex, board.blackKingIndex, board.castling});
+        // // }
+        // return valid;
+        return true;
         
     }
 
