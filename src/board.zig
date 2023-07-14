@@ -4,7 +4,7 @@ const Move = @import("moves.zig").Move;
 
 // Numbers matter because js sees them. 
 pub const Kind = enum(u4) { 
-    Empty = 0, Pawn = 1, Bishop = 2, Knight = 3, Rook = 4, Queen = 5, King = 6, 
+    Empty = 0, Pawn = 6, Bishop = 3, Knight = 4, Rook = 5, Queen = 2, King = 1, 
 
     pub fn material(self: Kind) i32 {
         return switch (self) {
@@ -57,15 +57,8 @@ pub const Piece = packed struct {
     }
 
     pub fn toChar(self: Piece) u8 {
-        const letter = @as(u8, switch (self.kind) {
-            .Pawn => 'P',
-            .Bishop => 'B',
-            .Knight => 'N',
-            .Rook => 'R',
-            .King => 'K',
-            .Queen => 'Q',
-            .Empty => return ' ',
-        });
+        const letters = [_] u8 {' ', 'K', 'Q', 'B', 'N', 'R', 'P'};
+        const letter = letters[@intFromEnum(self.kind)];
         return switch (self.colour) {
             .White => letter,
             .Black => std.ascii.toLower(letter),
@@ -73,15 +66,8 @@ pub const Piece = packed struct {
     }
 
     pub fn toUnicode(self: Piece) u21 {
-        const letter = @as(u21, switch (self.kind) {
-            .Pawn => '♙',
-            .Bishop => '♗',
-            .Knight => '♘',
-            .Rook => '♖',
-            .King => '♔',
-            .Queen => '♕',
-            .Empty => return ' ',
-        });
+        const letters = [_] u21 {' ', '♔', '♕', '♗', '♘', '♖', '♙'};
+        const letter = letters[@intFromEnum(self.kind)];
         return switch (self.colour) {
             .White => letter,
             .Black => letter + 6
@@ -178,6 +164,7 @@ pub const Board = struct {
     }
 
     pub fn initial() Board {
+        // This is kinda cool. It's a compile error if this fails to parse, so the function doesn't return an error union.
         return comptime try fromFEN(INIT_FEN);
     }
 
@@ -187,6 +174,13 @@ pub const Board = struct {
         const flag = one << index;
         const isEmpty = ((self.peicePositions.white & flag) | (self.peicePositions.black & flag)) == 0;   
         // assert(self.get(file, rank).empty() == isEmpty);
+        return isEmpty;
+    }
+
+    pub fn emptyAtI(self: *const Board, index: usize) bool {
+        const i: u6 = @intCast(index);
+        const flag = one << i;
+        const isEmpty = ((self.peicePositions.white & flag) | (self.peicePositions.black & flag)) == 0;   
         return isEmpty;
     }
 
@@ -238,17 +232,17 @@ pub const Board = struct {
         switch (move.action) {
             .none => {
                 self.squares[move.to] = thisMove.original;
-                self.squares[move.from] = .{ .colour = undefined, .kind = .Empty };
+                self.squares[move.from] = .{ .colour = .White, .kind = .Empty };
             },
             .promote => |kind| {
                 self.squares[move.to] = .{ .colour = colour, .kind = kind };
-                self.squares[move.from] = .{ .colour = undefined, .kind = .Empty };
+                self.squares[move.from] = .{ .colour = .White, .kind = .Empty };
                 self.simpleEval -= thisMove.original.eval();
                 self.simpleEval += self.squares[move.to].eval();
             },
             .castle => |info| {
                 self.squares[move.to] = thisMove.original;
-                self.squares[move.from] = .{ .colour = undefined, .kind = .Empty };
+                self.squares[move.from] = .{ .colour = .White, .kind = .Empty };
 
                 assert(thisMove.taken.empty());
                 self.peicePositions.unsetBit(info.rookFrom, colour);
@@ -256,7 +250,7 @@ pub const Board = struct {
                 assert(self.squares[info.rookTo].empty());
                 assert(self.squares[info.rookFrom].is(colour, .Rook));
                 self.squares[info.rookTo] = .{ .colour = colour, .kind = .Rook };
-                self.squares[info.rookFrom] = .{ .colour = undefined, .kind = .Empty };
+                self.squares[info.rookFrom] = .{ .colour = .White, .kind = .Empty };
             }
         }
 
@@ -286,7 +280,7 @@ pub const Board = struct {
 
                 self.peicePositions.setBit(info.rookFrom, colour);
                 self.peicePositions.unsetBit(info.rookTo, colour);
-                self.squares[info.rookTo] = .{ .colour = undefined, .kind = .Empty };
+                self.squares[info.rookTo] = .{ .colour = .White, .kind = .Empty };
                 self.squares[info.rookFrom] = .{ .colour = colour, .kind = .Rook };
             }
         }

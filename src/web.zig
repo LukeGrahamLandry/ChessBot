@@ -8,10 +8,11 @@ const genAllMoves = @import("moves.zig").genAllMoves;
 const Move = @import("moves.zig").Move;
 
 comptime { assert(@sizeOf(Piece) == @sizeOf(u8)); }
+// TODO: want multiple games so give js opaque pointers instead.
 var internalBoard: Board = Board.initial();
 export var boardView: [64] u8 = undefined;
 var nextColour: Colour = .White;
-export var fenView: [80] u8 = undefined;  // This length must match the one in js handleSetFromFen.
+export var fenView: [80] u8 = undefined;  // This length MUST match the one in js handleSetFromFen.
 var lastMove: ?Move = null;
 
 const alloc = std.heap.wasm_allocator;
@@ -23,6 +24,7 @@ export fn restartGame() void {
    internalBoard = Board.initial();
    boardView = @bitCast(internalBoard.squares);
    nextColour = .White;
+   lastMove = null;
 }
 
 /// Returns 0->continue, 1->error, 2->black wins, 3->white wins. 
@@ -166,6 +168,8 @@ export fn playHumanMove(fromIndex: u32, toIndex: u32) i32 {
 }
 
 // TODO: one for illigal moves (because check)
+// TODO: seperate functions probably better than magic nubers
+/// IN: internalBoard
 const one: u64 = 1;
 export fn getBitBoard(magicEngineIndex: u32, colourIndex: u32) u64 {
    const colour: Colour = if (colourIndex == 0) .White else .Black;

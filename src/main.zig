@@ -6,11 +6,11 @@ var alloc = allocatorT.allocator();
 const Timer = @import("bench.zig").Timer;
 
 pub fn main() !void {
-    // const t = Timer.start();
-    // for (0..100) |_| {
-    //     try @import("movegen.zig").runTestCountPossibleGames();
-    // }
-    // std.debug.print("Ran perft in {}ms\n", .{t.end()});
+    const t = Timer.start();
+    for (0..20) |_| {
+        try @import("tests.zig").runTestCountPossibleGames();
+    }
+    std.debug.print("Ran perft in {}ms\n", .{t.end()});
 
     // const stdout_file = std.io.getStdOut().writer();
     // var bw = std.io.bufferedWriter(stdout_file);
@@ -19,7 +19,7 @@ pub fn main() !void {
     // try debugPrintAllMoves("8/8/8/8/8/8/8/6PR", .White);
     // try debugPrintAllMoves("rnb1kb1r/1p1ppppp/1qp2n2/p7/1PPP4/8/P3PPPP/R1BQKBNR", .Black);
     // try debugPrintAllMoves("rnb1kbnr/ppqppppp/2p5/3N4/8/8/PPPPPPPP/R1BQKBNR", .Black);
-    try debugPrintAllMoves("rnbqkbnr/5ppp/1p2p3/p1p5/P1P5/BPQ5/3PPPPP/R3KBNR w", .White);
+    // try debugPrintAllMoves("rnbqkbnr/5ppp/1p2p3/p1p5/P1P5/BPQ5/3PPPPP/R3KBNR w", .White);
     
     
     // try debugPrintAllMoves("rnbqkbnr/pp1ppppp/2p5/3N4/8/8/PPPPPPPP/R1BQKBNR", .Black);

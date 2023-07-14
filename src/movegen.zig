@@ -3,8 +3,7 @@ const std = @import("std");
 
 fn assert(val: bool) void {
     // if (val) @panic("lol nope");
-    // std.debug.assert(val);
-    _ = val;
+    std.debug.assert(val);
 }
 
 const Board = @import("board.zig").Board;
@@ -44,13 +43,13 @@ pub fn slowSimpleEval(game: *const Board) i32 {
 }
 
 fn toIndex(file: usize, rank: usize) u6  {
-    return @truncate(rank*8 + file);
+    return @intCast(rank*8 + file);
 }
 
 // TODO: castling, en-passant
 const one: u64 = 1;
 // Caller owns the returned slice.
-pub fn possibleMoves(board: *const Board, me: Colour, alloc: std.mem.Allocator) ![] Move {
+pub fn possibleMoves(board: *Board, me: Colour, alloc: std.mem.Allocator) ![] Move {
     assert(board.nextPlayer == me);  // sanity. TODO: don't bother passing colour since the board knows?
     var moves = try std.ArrayList(Move).initCapacity(alloc, 50);
     const mySquares = switch (me) {
@@ -78,7 +77,7 @@ pub fn possibleMoves(board: *const Board, me: Colour, alloc: std.mem.Allocator) 
     return try moves.toOwnedSlice();
 }
 
-pub fn collectOnePieceMoves(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: usize, rank: usize) !void {
+pub fn collectOnePieceMoves(moves: *std.ArrayList(Move), board: *Board, i: usize, file: usize, rank: usize) !void {
     const piece = board.squares[i];
     switch (piece.kind) {
         .Pawn => try pawnMove(moves, board, i, file, rank, piece),
@@ -122,14 +121,14 @@ fn pawnMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: us
     const targetRank = switch (piece.colour) {
         // Asserts can't have a pawn at the end in real games because it would have promoted. 
         .White => w: {
-            // assert(rank < 7);  
+            assert(rank < 7);  
             if (filter == .Any and rank == 1 and board.emptyAt(file, 2) and board.emptyAt(file, 3)) {  // forward two
                 try moves.append(Move.irf(i, file, 3, false));  // cant promote
             }
             break :w rank + 1;
         },
         .Black => b: {
-            // assert(rank > 0);
+            assert(rank > 0);
             if (filter == .Any and rank == 6 and board.emptyAt(file, 5) and board.emptyAt(file, 4)) {  // forward two
                 try moves.append(Move.irf(i, file, 4, false));  // cant promote
             }
@@ -160,8 +159,8 @@ fn maybePromote(moves: *std.ArrayList(Move), board: *const Board, fromIndex: usi
     
     if ((colour == .Black and toRank == 0) or (colour == .White and toRank == 7)){
         var move: Move = .{
-            .from=@truncate(fromIndex),
-            .to = @truncate(toRank*8 + toFile),
+            .from=@intCast(fromIndex),
+            .to = @intCast(toRank*8 + toFile),
             .action = .{.promote = .Queen },
             .isCapture = !check.empty() and check.colour != colour
         };
@@ -312,7 +311,7 @@ fn bishopSlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, file:
     }
 }
 
-fn kingMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
+fn kingMove(moves: *std.ArrayList(Move), board: *Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
     // forward
     if (file < 7) {
         _ = try trySlide(moves, board, i, file + 1, rank, piece);
@@ -334,18 +333,28 @@ fn kingMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: us
 }
 
 // TODO: do all the offsets on i instead of on (x, y) since we know rooks/king are in start pos so can't wrap around board. 
-pub fn tryCastle(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: usize, rank: usize, colour: Colour, comptime goingLeft: bool) !void {
+pub fn tryCastle(moves: *std.ArrayList(Move), board: *Board, i: usize, file: usize, rank: usize, colour: Colour, comptime goingLeft: bool) !void {
     const cI: usize = if (colour == .White) 0 else 1;
     if (i != 4 + (cI * 8*7)) return;  // TODO: redundant
     const allow = if (goingLeft) board.castling.left[cI] else board.castling.right[cI];
     if (allow){
         // TODO: can be a hard coded mask
         const pathClear = if (goingLeft) 
-                             (board.emptyAt(file - 1, rank) and board.emptyAt(file - 2, rank) and board.emptyAt(file - 3, rank))
-                             else (board.emptyAt(file + 1, rank) and board.emptyAt(file + 2, rank));
+                             (board.emptyAtI(i - 1) and board.emptyAtI(i - 2) and board.emptyAtI(i - 3))
+                             else (board.emptyAtI(i + 1) and board.emptyAtI(i + 2));
 
         if (pathClear) {
-            // TODO: check check
+            // Check check! 
+            // TODO: do I actually want to do this later like other check checks? Or do I want to make the rest only generate legal moves as well?
+            const path = if (goingLeft) [_] usize {i-1, i-2, i-3} else [_] usize {i+1, i+2};
+            for (path) |sq| {
+                // TODO: do this without playing the move? It annoys me that this makes getPossibleMoves take a mutable board pointer. 
+                const move = Move.ii(@intCast(i), @intCast(sq), false);
+                const unMove = try board.play(move);
+                defer board.unplay(unMove);
+                if (try reverseFromKingIsInCheck(board, colour)) return;
+            }
+
             const kingFrom: u6 = @intCast(rank*8 + file);
             const kingTo: u6 = if (goingLeft) @intCast(rank*8 + (file - 2)) else @intCast(rank*8 + (file + 2));
             const rookFrom: u6 = if (goingLeft) @intCast(rank*8) else @intCast((rank+1)*8 - 1);
@@ -403,7 +412,7 @@ fn knightMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: 
 
 };} // End Strategy. 
 
-// TODO: this is bascilly a copy paste from the other one 
+// TODO: this is bascilly a copy paste from the other one. could have all the move functions be generic over a function to call when you get each move.
 pub fn reverseFromKingIsInCheck(game: *Board, me: Colour) !bool {
     const i = if (me == .Black) (game.blackKingIndex) else (game.whiteKingIndex);
     const file = i % 8;

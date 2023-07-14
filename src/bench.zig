@@ -20,6 +20,7 @@ pub fn main() !void {
     std.debug.print("- [   ] (1.00x) default finished in {}ms.\n", .{first});
 
     // Timing these this way is safe because they don't effect move ordering so always plays the same game.
+    // TODO: asserts ^ and crashes for AutoHash cause i'm storing more info on the board
     std.debug.print("Comparing hash functions...\n", .{});
     const algos = comptime std.enums.values(moves.HashAlgo);
     inline for (algos, 0..) |hashAlgo, i| {

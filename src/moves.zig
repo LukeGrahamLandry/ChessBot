@@ -10,34 +10,31 @@ const isWasm = @import("builtin").target.isWasm();
 
 fn assert(val: bool) void {
     // if (val) @panic("lol nope");
-    // std.debug.assert(val);
-    _ = val;
+    std.debug.assert(val);
+    // _ = val;
 }
 
-// This is 4 bytes but, 
-// If I was more efficient for promotion targets because you know it's on the far rank, and there's only 4 promotion options,
-// this could fit in 3 bytes, [from: u6, action: u1, (to: u6) or (kind: u2, to: u3)] = u13. 
-// Or even 2 bytes because if you can check if its a pawn moving from second back rank so you don't need the action flag. 
-// But it's not worth dealing with yet. Might be worth it to store the opening book in half the space tho!
+// Today we learn this language sucks ass and gives you random garbage numbers if this is not 'packed' but only in release mode,
+// you'll never guess whether that breaks it in debug mode, but padding it out to two bytes works in both.
+pub const CastleMove = packed struct { rookFrom: u6, rookTo: u6, fuck: u4 = 0 };
 
-// Today we learn this language sucks ass and gives you random garbage numbers if this is not 'packed' but only in release mode.
-pub const CastleMove = packed struct { rookFrom: u6, rookTo: u6 };
+// TODO: this seems much too big (8 bytes?). castling info is redunant cause other side can infer if king moves 2 squares, bool field is evil and redundant
 pub const Move = struct {
     from: u6,
     to: u6,
+    isCapture: bool,
     action: union(enum) {
         none,
         promote: Kind,
         castle: CastleMove,
     },
-    isCapture: bool,
 
     // TODO: method that factors out bounds check from try methods then calls this? make sure not to do twice in slide loops.
     pub fn irf(fromIndex: usize, toFile: usize, toRank: usize, isCapture: bool) Move {
         // std.debug.assert(fromIndex < 64 and toFile < 8 and toRank < 8);
         return .{
-            .from=@truncate(fromIndex),
-            .to = @truncate(toRank*8 + toFile),
+            .from=@intCast(fromIndex),
+            .to = @intCast(toRank*8 + toFile),
             .action = .none,
             .isCapture=isCapture
         };
@@ -96,12 +93,13 @@ comptime {
     assert(opts.memoMapFillPercent <= 100);
 }
 
+// TODO: dont store extra fields, just squares
+// This is relies on empty squares having a definied colour so they bytes match! TODO: test that stays true
 pub const MemoMap = std.HashMap(Board, struct {
     eval: i32,
     remaining: i32
 }, struct {
     // TODO: don't include padding bytes, try Zobrist. 
-    // TODO: this is totally wrong because of Empty squares having undefinied colour!!
     pub fn hash(ctx: @This(), key: Board) u64 {
         const data = std.mem.asBytes(&key.squares);  
         return switch (comptime opts.hashAlgo) {
@@ -115,7 +113,6 @@ pub const MemoMap = std.HashMap(Board, struct {
     }
     
     pub fn eql(_: @This(), a: Board, b: Board) bool {
-        // TODO: EVIL AND WRONG
         return std.mem.eql(u8, std.mem.asBytes(&a.squares), std.mem.asBytes(&b.squares));
     }
 }, opts.memoMapFillPercent);  

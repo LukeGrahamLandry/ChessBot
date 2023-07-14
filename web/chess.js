@@ -75,7 +75,7 @@ function getFenFromEngine() {
 }
 
 function isHumanTurn() {
-    // This could be done by parsing the fen but that's too much effort. 
+    // This could be done by parsing the fen but that's a lot of extra code just to be slightly slower. 
     return Engine.isWhiteTurn();
 }
 
@@ -146,18 +146,15 @@ function reportEngineMsg(result) {
 
 function drawPiece(file, rank, pieceByte) {
     if (pieceByte === 0) return;
-
+    
+    const kind = BigInt(pieceByte) >> 1n;
     const squareSize = document.getElementById("board").width / 8;
     const imgSquareSize = chessImg.width / 6;
-    const offset = pieces[pieceByte];
-    if (offset === undefined) {
+    if (kind > 6n) {
         console.log("Engine gave invalid pieceByte (" + pieceByte + ")");
     } else {
-        const sX = offset * imgSquareSize;
-        let sY = 0;
-        if (pieceByte % 2 === 1){
-            sY = imgSquareSize;
-        }
+        const sX = (Number(kind) - 1) * imgSquareSize;
+        const sY = (pieceByte % 2 === 0) ? 0 : imgSquareSize;  // White or Black
         ctx.drawImage(chessImg, sX, sY, imgSquareSize, imgSquareSize, file * squareSize, (7 - rank) * squareSize, squareSize, squareSize);
     }
     
@@ -258,34 +255,6 @@ function fillSquare(file, rank, colour, isSmall) {
     } else {
         ctx.fillRect(file*squareSize, (7-rank)*squareSize, squareSize, squareSize);
     }
-}
-
-// TODO: these should be done in drawPiece with (b & flag)
-const pieces = pieceArray();
-function pieceArray() {
-    // These are the indexes of each type of piece in the pieces.svg image.
-    const piecesMap = {
-        6: 3,
-        7: 3,
-        8: 4,
-        9: 4,
-        4: 2,
-        5: 2,
-        2: 5,
-        3: 5,
-        12: 0,
-        13: 0,
-        10: 1,
-        11: 1,
-    };
-    const pieces = new Array(26);  // TODO: Why does making this a Uint8Array hide the kings? that's offset zero
-    for (let i = 0; i<27;i++) {
-        const c = piecesMap[i];
-        if (c !== undefined) {
-            pieces[i] = c;
-        }
-    }
-    return pieces
 }
 
 window.chessJsReady = true;
