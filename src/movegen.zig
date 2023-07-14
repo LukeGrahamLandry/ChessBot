@@ -1,5 +1,11 @@
 const std = @import("std");
-const assert = std.debug.assert;
+// const assert = std.debug.assert;
+
+fn assert(val: bool) void {
+    // if (val) @panic("lol nope");
+    std.debug.assert(val);
+    // _ = val;
+}
 
 const Board = @import("board.zig").Board;
 const Colour = @import("board.zig").Colour;
@@ -369,7 +375,8 @@ fn kingMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: us
     if (rank > 0) _ = try trySlide(moves, board, i, file, rank - 1, piece);
 
     // Castling
-    const left = board.castling.left[piece.colour.ordinal()];
+    const cI: usize = if (piece.colour == .White) 0 else 1;
+    const left = board.castling.left[cI];
     if (file == 4 and left){
         // TODO: can be a hard coded mask
         if (board.emptyAt(file - 1, rank) and board.emptyAt(file - 2, rank) and board.emptyAt(file - 3, rank)) {
@@ -379,6 +386,8 @@ fn kingMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: us
             const kingTo: u6 = @truncate(rank*8 + (file - 2));
             const rookFrom: u6 = @truncate(rank*8);
             const rookTo: u6 = @truncate(rank*8 + (file - 1));
+            // board.debugPrint();
+            // std.debug.print("{}", .{board.castling});
             assert(board.squares[kingFrom].is(piece.colour, .King));
             assert(board.squares[kingTo].empty());
             assert(board.squares[rookFrom].is(piece.colour, .Rook));
@@ -510,7 +519,7 @@ fn testCapturesOnly(fen: [] const u8) !void {
         }
         var initial = try Board.fromFEN(fen);
         initial.nextPlayer = me; // TODO
-        try std.testing.expectEqual(game, initial);  // sanity check unplay()
+        try initial.expectEqual(&game); // undo move sanity check
 
         // Inverse of the above. 
         for (big) |move| {
@@ -525,7 +534,7 @@ fn testCapturesOnly(fen: [] const u8) !void {
             }
         }
 
-        try std.testing.expectEqual(game, initial);  // sanity check unplay()
+        try initial.expectEqual(&game); // undo move sanity check
     }
 }
 

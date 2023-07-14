@@ -1,5 +1,4 @@
 const std = @import("std");
-const assert = std.debug.assert;
 
 const Board = @import("board.zig").Board;
 const Colour = @import("board.zig").Colour;
@@ -9,18 +8,27 @@ const Kind = @import("board.zig").Kind;
 const MoveErr = error { GameOver, OutOfMemory };
 const isWasm = @import("builtin").target.isWasm();
 
+fn assert(val: bool) void {
+    // if (val) @panic("lol nope");
+    std.debug.assert(val);
+    // _ = val;
+}
+
 // This is 4 bytes but, 
 // If I was more efficient for promotion targets because you know it's on the far rank, and there's only 4 promotion options,
 // this could fit in 3 bytes, [from: u6, action: u1, (to: u6) or (kind: u2, to: u3)] = u13. 
 // Or even 2 bytes because if you can check if its a pawn moving from second back rank so you don't need the action flag. 
 // But it's not worth dealing with yet. Might be worth it to store the opening book in half the space tho!
+
+// Today we learn this language sucks ass and gives you random garbage numbers if this is not 'packed' but only in release mode.
+pub const CastleMove = packed struct { rookFrom: u6, rookTo: u6 };
 pub const Move = struct {
     from: u6,
     to: u6,
     action: union(enum) {
         none,
         promote: Kind,
-        castle: struct { rookFrom: u6, rookTo: u6 },
+        castle: CastleMove,
     },
     isCapture: bool,
 
@@ -93,6 +101,7 @@ pub const MemoMap = std.HashMap(Board, struct {
     remaining: i32
 }, struct {
     // TODO: don't include padding bytes, try Zobrist. 
+    // TODO: this is totally wrong because of Empty squares having undefinied colour!!
     pub fn hash(ctx: @This(), key: Board) u64 {
         const data = std.mem.asBytes(&key.squares);  
         return switch (comptime opts.hashAlgo) {
@@ -106,6 +115,7 @@ pub const MemoMap = std.HashMap(Board, struct {
     }
     
     pub fn eql(_: @This(), a: Board, b: Board) bool {
+        // TODO: EVIL AND WRONG
         return std.mem.eql(u8, std.mem.asBytes(&a.squares), std.mem.asBytes(&b.squares));
     }
 }, opts.memoMapFillPercent);  
@@ -315,7 +325,8 @@ fn testPruning(fen: [] const u8, me: Colour) !void {
 
     var initial = try Board.fromFEN(fen);
     initial.nextPlayer = me;  // TODO
-    try std.testing.expectEqual(game, initial);  // sanity check unplay()
+
+    try initial.expectEqual(&game); // undo move sanity check
 }
 
 // Tests that alpha-beta pruning chooses the same best move as a raw search. 
@@ -381,7 +392,7 @@ test "bestMoves eval equal" {
                 }
             }
 
-            try std.testing.expectEqual(initial, game);  // sanity check unplay function.
+            try initial.expectEqual(&game); // undo move sanity check
         }
     }
 }

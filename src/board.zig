@@ -25,10 +25,6 @@ pub const Colour = enum(u1) {
     pub fn other(self: Colour) Colour {
         return @enumFromInt(~@intFromEnum(self));
     }
-
-    pub fn ordinal(self: Colour) u1 {
-        return @intFromEnum(self);
-    }
 };
 
 // This is packed with explicit padding so I can cast boards to byte arrays and pass to js. 
@@ -138,7 +134,9 @@ const OldMove = struct {
     taken: Piece,
     original: Piece,
     old_castling: CastlingRights,
+    // TODO: remove
     debugPeicePositions: BitBoardPair,
+    debugSimpleEval: i32
 };
 
 // Index with colour ordinal
@@ -152,7 +150,7 @@ pub const Board = struct {
     squares: [64] Piece = std.mem.zeroes([64] Piece),
     peicePositions: BitBoardPair = .{},
     // TODO: make sure these are packed nicely
-    simpleEval: i32 = 0,
+    simpleEval: i32 = 0,  // TODO: a test that recalculates
     blackKingIndex: u6 = 0,
     whiteKingIndex: u6 = 0,
     nextPlayer: Colour = .White,
@@ -195,7 +193,7 @@ pub const Board = struct {
     const genAnyMove = @import("movegen.zig").MoveFilter.Any.get();
     pub fn play(self: *Board, move: Move) !OldMove {
         assert(self.hasCorrectPositionsBits());
-        const thisMove: OldMove = .{ .move = move, .taken = self.squares[move.to], .original = self.squares[move.from], .old_castling = self.castling, .debugPeicePositions = self.peicePositions };
+        const thisMove: OldMove = .{ .move = move, .taken = self.squares[move.to], .original = self.squares[move.from], .old_castling = self.castling, .debugPeicePositions = self.peicePositions, .debugSimpleEval=self.simpleEval};
         assert(thisMove.original.colour == self.nextPlayer);
         const colour = thisMove.original.colour;
         self.simpleEval -= thisMove.taken.eval();
@@ -210,14 +208,14 @@ pub const Board = struct {
             }
 
             // If you move your king, you can't castle on either side.
-            const cI = @intFromEnum(self.nextPlayer);
+            const cI: usize = if (colour == .White) 0 else 1;
             self.castling.left[cI] = false;
             self.castling.right[cI] = false;
         }
 
         // If you move your rook, you can't castle on that side.
         if (thisMove.original.kind == .Rook) {
-            const cI = @intFromEnum(self.nextPlayer);
+            const cI: usize = if (colour == .White) 0 else 1;
             if (move.from == 0 or move.from == (7*8)) {
                 self.castling.left[cI] = false;
             }
@@ -228,7 +226,7 @@ pub const Board = struct {
 
         // If you take a rook, they can't castle on that side.
         if (thisMove.taken.kind == .Rook) {
-            const cI = @intFromEnum(self.nextPlayer.other());
+            const cI: usize = if (thisMove.taken.colour == .White) 0 else 1;
             if (move.to == 0 or move.to == (7*8)) {
                 self.castling.left[cI] = false;
             }
@@ -243,12 +241,14 @@ pub const Board = struct {
                 self.squares[move.from] = .{ .colour = undefined, .kind = .Empty };
             },
             .promote => |kind| {
-                self.simpleEval -= thisMove.original.eval();
                 self.squares[move.to] = .{ .colour = colour, .kind = kind };
-                self.simpleEval += self.squares[move.to].eval();
                 self.squares[move.from] = .{ .colour = undefined, .kind = .Empty };
+                self.simpleEval -= thisMove.original.eval();
+                self.simpleEval += self.squares[move.to].eval();
             },
             .castle => |info| {
+                std.debug.print("before \n", .{});
+                self.debugPrint();
                 self.squares[move.to] = thisMove.original;
                 self.squares[move.from] = .{ .colour = undefined, .kind = .Empty };
 
@@ -259,11 +259,12 @@ pub const Board = struct {
                 assert(self.squares[info.rookFrom].is(colour, .Rook));
                 self.squares[info.rookTo] = .{ .colour = colour, .kind = .Rook };
                 self.squares[info.rookFrom] = .{ .colour = undefined, .kind = .Empty };
+                std.debug.print("do {}\n", .{move});
+                self.debugPrint();
             }
         }
 
         assert(move.isCapture == (thisMove.taken.kind != .Empty));
-
         self.nextPlayer = self.nextPlayer.other();
         assert(self.hasCorrectPositionsBits());
         return thisMove;
@@ -290,7 +291,11 @@ pub const Board = struct {
                 self.peicePositions.setBit(info.rookFrom, colour);
                 self.peicePositions.unsetBit(info.rookTo, colour);
                 self.squares[info.rookTo] = .{ .colour = undefined, .kind = .Empty };
+                std.debug.print("info={} 1 {}\n", .{info, self.squares[info.rookFrom]});
                 self.squares[info.rookFrom] = .{ .colour = colour, .kind = .Rook };
+                std.debug.print("info.rookFrom 2 {}\n", .{self.squares[info.rookFrom]});
+                std.debug.print("undo {}\n", .{move.move});
+                self.debugPrint();
             }
         }
         
@@ -311,6 +316,7 @@ pub const Board = struct {
         assert(colour == self.nextPlayer);
         assert(std.meta.eql(move.debugPeicePositions, self.peicePositions));
         assert(self.hasCorrectPositionsBits());
+        assert(self.simpleEval == move.debugSimpleEval);
     }
 
     pub fn copyPlay(self: *const Board, move: Move) Board {
@@ -437,7 +443,26 @@ pub const Board = struct {
             }
         }
 
+        if (!board.squares[board.whiteKingIndex].is(.White, .King)) return false;
+        if (!board.squares[board.blackKingIndex].is(.Black, .King)) return false;
         return true;
+    }
+
+    pub fn expectEqual(a: *const Board, b: *const Board) !void {
+        for (a.squares, b.squares) |aSq, bSq| {
+            if (aSq.empty() and bSq.empty()) continue;
+            if (!std.meta.eql(aSq, bSq)) {
+                std.debug.print("=====\n", .{});
+                a.debugPrint();
+                b.debugPrint();
+                std.debug.print("Expected boards above to be equal.\n", .{});
+                return error.TestExpectedEqual;
+            }
+        }
+        if (!a.hasCorrectPositionsBits() or !b.hasCorrectPositionsBits()) {std.debug.print("Incorrect bitboards\n", .{});return error.TestExpectedEqual;}
+        if (!std.meta.eql(a.castling, b.castling)) {std.debug.print("Expected same castling rights. {} vs {}", .{a.castling, b.castling}); return error.TestExpectedEqual;}
+        if (!std.meta.eql(a.simpleEval, b.simpleEval)) {std.debug.panic("Expected same simpleEval. {} vs {}", .{a.simpleEval, b.simpleEval});return error.TestExpectedEqual;}
+        if (!std.meta.eql(a.nextPlayer, b.nextPlayer)) {std.debug.panic("Expected same nextPlayer. {} vs {}", .{a.nextPlayer, b.nextPlayer});return error.TestExpectedEqual;}
     }
 };
 

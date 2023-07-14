@@ -81,7 +81,7 @@ fn debugPrintBestMoves(fen: [] const u8, colour: board.Colour) !void {
         var thing: usize = 0;
         // pay attention to negative sign
         const eval = try strat.walkEval(&game, colour.other(), strat.config.maxDepth, strat.config.followCaptureDepth, -99999999, -99999999, quickAlloc, &thing, &memo, false);
-        std.debug.print("{}. eval: {}\n", .{i, -eval});
+        std.debug.print("{}. eval: {}\n{}\n", .{i, -eval, move});
         game.debugPrint();
     }
 }
@@ -92,12 +92,16 @@ fn debugPrintAllMoves(fen: [] const u8, colour: board.Colour) !void {
     var quickAlloc = arena.allocator();
     defer std.debug.assert(arena.reset(.retain_capacity));
 
+    var initial = try board.Board.fromFEN(fen);
+    initial.nextPlayer = colour;
     var game = try board.Board.fromFEN(fen);
+    game.nextPlayer = colour;
     std.debug.print("Initial Position:\n", .{});
     game.debugPrint();
     // TODO: check
     const allMoves = try moves.genAllMoves.possibleMoves(&game, colour, alloc);
     std.debug.print("{} has {} possible moves.\n", .{colour, allMoves.len});
+    try initial.expectEqual(&game); // undo move sanity check
     
     var memo = strat.MemoMap.init(quickAlloc);
     try memo.ensureTotalCapacity(10000);
@@ -109,12 +113,12 @@ fn debugPrintAllMoves(fen: [] const u8, colour: board.Colour) !void {
         var thing: usize = 0;
         // pay attention to negative sign
         const eval = try strat.walkEval(&game, colour.other(), strat.config.maxDepth, strat.config.followCaptureDepth, -99999999, -99999999, quickAlloc, &thing, &memo, false);
-        std.debug.print("{}. eval: {}\n", .{i, -eval});
+        std.debug.print("{}. eval: {}\n{}\n", .{i, -eval, move});
         game.debugPrint();
     }
 
-    var initial = try board.Board.fromFEN(fen);
-    try std.testing.expectEqual(game, initial); // undo move sanity check
+   
+    try initial.expectEqual(&game); // undo move sanity check
 }
 
 ///////
