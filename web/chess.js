@@ -218,6 +218,10 @@ function renderBoard() {
         case "castle": 
             drawBitBoardPair(2);
             break;
+        case "prev": {
+            drawBitBoard(Engine.getBitBoard(3, 0), "green");
+            break;
+        }
         default: 
             console.log("Invalid bitBoardInfo string.");
     }

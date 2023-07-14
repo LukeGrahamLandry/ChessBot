@@ -12,6 +12,7 @@ var internalBoard: Board = Board.initial();
 export var boardView: [64] u8 = undefined;
 var nextColour: Colour = .White;
 export var fenView: [80] u8 = undefined;  // This length must match the one in js handleSetFromFen.
+var lastMove: ?Move = null;
 
 const alloc = std.heap.wasm_allocator;
 var notTheRng = std.rand.DefaultPrng.init(0);
@@ -37,7 +38,8 @@ export fn playRandomMove() i32 {
    const choice = rng.uintLessThanBiased(usize, allMoves.len);
    const move = allMoves[choice];
    _ = internalBoard.play(move) catch return 1;
-
+   
+   lastMove = move;
    boardView = @bitCast(internalBoard.squares);
    nextColour = nextColour.other();
    return 0;
@@ -55,6 +57,7 @@ export fn playNextMove() i32 {
    };
 
    _ = internalBoard.play(move) catch return 1;
+   lastMove = move;
    boardView = @bitCast(internalBoard.squares);
    nextColour = nextColour.other();
    return 0;
@@ -89,6 +92,7 @@ export fn setFromFen(length: u32) bool {
    internalBoard = temp;
    boardView = @bitCast(internalBoard.squares);
    nextColour = .White;  // TODO
+   lastMove = null;
    return true;
 }
 
@@ -123,6 +127,19 @@ export fn playHumanMove(fromIndex: u32, toIndex: u32) i32 {
       // TODO: factor out some canPromote function so magic numbers live in one place
       const isPromote = (nextColour == .Black and toIndex <= 7) or (nextColour == .White and toIndex > (64-8));
       if (isPromote) move.action = .{.promote = .Queen };
+   } else if (internalBoard.squares[fromIndex].kind == .King) {
+      var castles = std.ArrayList(Move).init(alloc);
+      defer castles.deinit();
+      const file: usize = @rem(fromIndex, 8);
+      const rank: usize = @divFloor(fromIndex, 8);
+      genAllMoves.tryCastle(&castles, &internalBoard, @intCast(fromIndex), file, rank, nextColour, true) catch return 1;
+      genAllMoves.tryCastle(&castles, &internalBoard, @intCast(fromIndex), file, rank, nextColour, false) catch return 1;
+      assert(castles.items.len <= 2);
+      if (castles.items.len > 0 and castles.items[0].to == toIndex) {
+         move = castles.items[0];
+      } else if (castles.items.len > 1 and castles.items[1].to == toIndex) {
+         move = castles.items[1];
+      }
    }
 
    if (internalBoard.squares[fromIndex].colour != nextColour) return 4;
@@ -142,6 +159,7 @@ export fn playHumanMove(fromIndex: u32, toIndex: u32) i32 {
       return 4;
    }
 
+   lastMove = move;
    boardView = @bitCast(internalBoard.squares);
    nextColour = nextColour.other();
    return 0;
@@ -162,6 +180,20 @@ export fn getBitBoard(magicEngineIndex: u32, colourIndex: u32) u64 {
          if (right) result |= one << 7;
          if (colourIndex == 1) result <<= (8*7);
          return result;
+      },
+      3 => {
+         if (lastMove) |move|{
+            var result: u64 = (one << move.to) | (one << move.from);
+            switch (move.action) {
+               .castle => |info| {
+                  result |= (one << info.rookTo) | (one << info.rookFrom);
+               },
+               else => {}
+            }
+            return result;
+         } else {
+            return 0;
+         }
       },
       else => 0,
    };

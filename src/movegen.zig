@@ -3,8 +3,8 @@ const std = @import("std");
 
 fn assert(val: bool) void {
     // if (val) @panic("lol nope");
-    std.debug.assert(val);
-    // _ = val;
+    // std.debug.assert(val);
+    _ = val;
 }
 
 const Board = @import("board.zig").Board;
@@ -47,32 +47,6 @@ fn toIndex(file: usize, rank: usize) u6  {
     return @truncate(rank*8 + file);
 }
 
-// const MoveSortContext = struct { 
-//     me: Colour,
-//     board: Board,
-// };
-
-// This is used as a lessThan function but is flipped because std sorts in ascending order. 
-// fn bestMovesFirst(ctx: MoveSortContext, a: Move, b: Move) bool {
-//     switch (ctx.me) {
-//         .White => return simpleEval(&ctx.board.copyPlay(a)) > simpleEval(&ctx.board.copyPlay(b)),
-//         .Black => return simpleEval(&ctx.board.copyPlay(a)) < simpleEval(&ctx.board.copyPlay(b)),
-//         .Empty => unreachable,
-//     }
-// }
-
-// // The alpha-beta pruning saves a lot more time if the best moves are the first ones it tries. 
-// // Sort by material eval with the best moves first. 
-// pub fn sortedMoves(board: *const Board, me: Colour, alloc: std.mem.Allocator) ![] Move {
-//     var moves = try possibleMoves(board, me, alloc);
-//     // This was much slower than the simple prefer captures in trySlide. 
-//     // TODO: maybe check again if I do the iterative deepening thing then remove this. even doubling speed of simpleEval didn't help. 
-//     // TODO: try heap sort so you can bail out after best x moves or whatever
-//     // const ctx: MoveSortContext = .{ .me=me, .board=board.* };
-//     // std.sort.insertion(Move, moves, ctx, bestMovesFirst);
-//     return moves;
-// }
-
 // TODO: castling, en-passant
 const one: u64 = 1;
 // Caller owns the returned slice.
@@ -89,7 +63,7 @@ pub fn possibleMoves(board: *const Board, me: Colour, alloc: std.mem.Allocator) 
     for (0..64) |i| {
         defer flag <<= 1; // shift the bit over at the end of each iteration. 
         if ((mySquares & flag) == 0) {
-            // assert(board.squares[i].empty() or board.squares[i].colour != me);
+            assert(board.squares[i].empty() or board.squares[i].colour != me);
             continue;
         }
         assert(!board.squares[i].empty());
@@ -185,25 +159,6 @@ fn maybePromote(moves: *std.ArrayList(Move), board: *const Board, fromIndex: usi
     }
     
     if ((colour == .Black and toRank == 0) or (colour == .White and toRank == 7)){
-        // Just pushing all options does make it a bit slower. 
-        // This is even slower:
-        // var toPush: Move = base;
-        // for (moves.items, 0..) |move, index| {
-        //     const holding = switch (toPush.action) {
-        //         .none => board.squares[toPush.to].kind.material(),
-        //         .promote => |kind| kind.material(),
-        //     };
-        //     const lookingAt = switch (move.action) {
-        //         .none => board.squares[move.to].kind.material(),
-        //         .promote => |kind| kind.material(),
-        //     };
-        //     if (holding == 0) break;
-        //     if (holding > lookingAt){
-        //         moves.items[index] = toPush;
-        //         toPush = move;
-        //     }
-        // }
-
         var move: Move = .{
             .from=@truncate(fromIndex),
             .to = @truncate(toRank*8 + toFile),
@@ -374,34 +329,40 @@ fn kingMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: us
     if (rank < 7) _ = try trySlide(moves, board, i, file, rank + 1, piece);
     if (rank > 0) _ = try trySlide(moves, board, i, file, rank - 1, piece);
 
-    // Castling
-    const cI: usize = if (piece.colour == .White) 0 else 1;
-    const left = board.castling.left[cI];
-    if (file == 4 and left){
+    try tryCastle(moves, board, i, file, rank, piece.colour, true);
+    try tryCastle(moves, board, i, file, rank, piece.colour, false);
+}
+
+// TODO: do all the offsets on i instead of on (x, y) since we know rooks/king are in start pos so can't wrap around board. 
+pub fn tryCastle(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: usize, rank: usize, colour: Colour, comptime goingLeft: bool) !void {
+    const cI: usize = if (colour == .White) 0 else 1;
+    if (i != 4 + (cI * 8*7)) return;  // TODO: redundant
+    const allow = if (goingLeft) board.castling.left[cI] else board.castling.right[cI];
+    if (allow){
         // TODO: can be a hard coded mask
-        if (board.emptyAt(file - 1, rank) and board.emptyAt(file - 2, rank) and board.emptyAt(file - 3, rank)) {
+        const pathClear = if (goingLeft) 
+                             (board.emptyAt(file - 1, rank) and board.emptyAt(file - 2, rank) and board.emptyAt(file - 3, rank))
+                             else (board.emptyAt(file + 1, rank) and board.emptyAt(file + 2, rank));
+
+        if (pathClear) {
             // TODO: check check
-            // TODO: some sort of undefinied behaviour is going on here? 
-            const kingFrom: u6 = @truncate(rank*8 + file);
-            const kingTo: u6 = @truncate(rank*8 + (file - 2));
-            const rookFrom: u6 = @truncate(rank*8);
-            const rookTo: u6 = @truncate(rank*8 + (file - 1));
-            // board.debugPrint();
-            // std.debug.print("{}", .{board.castling});
-            assert(board.squares[kingFrom].is(piece.colour, .King));
+            const kingFrom: u6 = @intCast(rank*8 + file);
+            const kingTo: u6 = if (goingLeft) @intCast(rank*8 + (file - 2)) else @intCast(rank*8 + (file + 2));
+            const rookFrom: u6 = if (goingLeft) @intCast(rank*8) else @intCast((rank+1)*8 - 1);
+            const rookTo: u6 = if (goingLeft) @intCast(rank*8 + (file - 1)) else @intCast(rank*8 + (file + 1));
+            assert(board.squares[kingFrom].is(colour, .King));
             assert(board.squares[kingTo].empty());
-            assert(board.squares[rookFrom].is(piece.colour, .Rook));
+            assert(board.squares[rookFrom].is(colour, .Rook));
             assert(board.squares[rookTo].empty());
             const move: Move = .{
                 .from=kingFrom,
                 .to=kingTo,
                 .action = .{.castle = .{
                     .rookFrom = rookFrom,
-                    .rookTo =rookTo ,
+                    .rookTo =rookTo,
                 }},
                 .isCapture=false
             };
-            // std.debug.print("castle: {}", .{ move });
             try moves.append(move);
         }
     }
@@ -471,7 +432,8 @@ fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, alloc: st
 // Can call this in a loop to test speed of raw movegen. 
 pub fn runTestCountPossibleGames() !void {
     // https://en.wikipedia.org/wiki/Shannon_number
-    const possibleGames = [_] usize { 20, 400, 8902, 197281	}; // 4865609 (needs checkmate or castling?)
+    const possibleGames = [_] usize { 20, 400, 8902, 197281 }; // 4865609 (needs en-passant and checkmate)
+    // TODO: test number of checkmates as well.
 
     var tempA = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer tempA.deinit();
@@ -539,11 +501,12 @@ fn testCapturesOnly(fen: [] const u8) !void {
 }
 
 
+// TODO: need to include player in the fen because some positions have check and dont make sense for both
 pub const fensToTest = [_] [] const u8 {
     "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR",  // The initial position has many equal moves, this makes sure I'm not accidently making random choices while testing. 
     "rnb1kbnr/ppqppppp/2p5/3N4/8/8/PPPPPPPP/R1BQKBNR",
     "rnbqkbnr/pp1ppppp/2p5/3N4/8/8/PPPPPPPP/R1BQKBNR",
-    "8/p7/8/8/8/4b3/P2P4/8",
+    "7K/p7/8/8/8/4b3/P2P4/7k",
     "7K/8/7B/8/8/8/Pq6/kN6",
     "7K/7p/8/8/8/r1q5/1P5P/k7", // Check and multiple best moves for black
     // "rn1q1bnr/1p2pkp1/2p2p1p/p2p1b2/1PP4P/3PQP2/P2KP1PB/RN3BNR", // hang a queen

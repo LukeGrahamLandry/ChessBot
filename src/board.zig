@@ -145,7 +145,7 @@ const CastlingRights = struct {
     left: [2] bool = .{true, true},
 };
 
-// TODO: flag for castling rights. Track en passant target squares. Count moves for draw. 
+// TODO: Track en passant target squares. Count moves for draw. 
 pub const Board = struct {
     squares: [64] Piece = std.mem.zeroes([64] Piece),
     peicePositions: BitBoardPair = .{},
@@ -219,7 +219,7 @@ pub const Board = struct {
             if (move.from == 0 or move.from == (7*8)) {
                 self.castling.left[cI] = false;
             }
-            else if (move.from == 7 or move.from == 63) {
+            else if (move.from == 7 or move.from == (7*8 + 7)) {
                 self.castling.right[cI] = false;
             }
         }
@@ -230,7 +230,7 @@ pub const Board = struct {
             if (move.to == 0 or move.to == (7*8)) {
                 self.castling.left[cI] = false;
             }
-            else if (move.to == 7 or move.to == 63) {
+            else if (move.to == 7 or move.to == (7*8 + 7)) {
                 self.castling.right[cI] = false;
             }
         }
@@ -247,8 +247,6 @@ pub const Board = struct {
                 self.simpleEval += self.squares[move.to].eval();
             },
             .castle => |info| {
-                std.debug.print("before \n", .{});
-                self.debugPrint();
                 self.squares[move.to] = thisMove.original;
                 self.squares[move.from] = .{ .colour = undefined, .kind = .Empty };
 
@@ -259,8 +257,6 @@ pub const Board = struct {
                 assert(self.squares[info.rookFrom].is(colour, .Rook));
                 self.squares[info.rookTo] = .{ .colour = colour, .kind = .Rook };
                 self.squares[info.rookFrom] = .{ .colour = undefined, .kind = .Empty };
-                std.debug.print("do {}\n", .{move});
-                self.debugPrint();
             }
         }
 
@@ -291,11 +287,7 @@ pub const Board = struct {
                 self.peicePositions.setBit(info.rookFrom, colour);
                 self.peicePositions.unsetBit(info.rookTo, colour);
                 self.squares[info.rookTo] = .{ .colour = undefined, .kind = .Empty };
-                std.debug.print("info={} 1 {}\n", .{info, self.squares[info.rookFrom]});
                 self.squares[info.rookFrom] = .{ .colour = colour, .kind = .Rook };
-                std.debug.print("info.rookFrom 2 {}\n", .{self.squares[info.rookFrom]});
-                std.debug.print("undo {}\n", .{move.move});
-                self.debugPrint();
             }
         }
         
@@ -425,6 +417,7 @@ pub const Board = struct {
     }
 
     pub fn debugPrint(self: *const Board) void {
+        if (isWasm) return;
         var staticDebugBuffer: [500] u8 = undefined;
         var staticDebugAlloc = std.heap.FixedBufferAllocator.init(&staticDebugBuffer);
         const s = self.displayString(staticDebugAlloc.allocator()) catch @panic("Board.debugPrint buffer OOM.");
@@ -432,41 +425,69 @@ pub const Board = struct {
     }
 
     pub fn hasCorrectPositionsBits(board: *const Board) bool {
-        var flag: u64 = 1;
-        for (board.squares) |piece| {
-            defer flag = flag << 1;
-            if (piece.kind == .Empty){
-                if ((board.peicePositions.white & flag) != 0) return false;
-                if ((board.peicePositions.black & flag) != 0) return false;
-            } else {
-                if ((board.peicePositions.getFlag(piece.colour) & flag) == 0) return false;
+        const valid = v: {
+            var flag: u64 = 1;
+            for (board.squares) |piece| {
+                defer flag = flag << 1;
+                if (piece.kind == .Empty){
+                    if ((board.peicePositions.white & flag) != 0) break :v false;
+                    if ((board.peicePositions.black & flag) != 0) break :v false;
+                } else {
+                    if ((board.peicePositions.getFlag(piece.colour) & flag) == 0) break :v false;
+                }
             }
-        }
 
-        if (!board.squares[board.whiteKingIndex].is(.White, .King)) return false;
-        if (!board.squares[board.blackKingIndex].is(.Black, .King)) return false;
-        return true;
+            // TODO: this is broken until I detect checkmate
+            // if (!board.squares[board.whiteKingIndex].is(.White, .King)) {
+            //     if (board.whiteKingIndex == 0) std.debug.print("whiteKingIndex=0, maybe not set?\n", .{});
+            //     break :v false;
+            // }
+            // if (!board.squares[board.blackKingIndex].is(.Black, .King)) {
+            //     if (board.blackKingIndex == 0) std.debug.print("blackKingIndex=0, maybe not set?\n", .{});
+            //     break :v false;
+            // }
+            break :v true;
+        };
+
+        if (!valid and !isWasm) {
+            board.debugPrint();
+            std.debug.print("white: {b}\nblack: {b}\neval={}. {} to move. kings: {} {}\n {}\n\n", .{board.peicePositions.white, board.peicePositions.black, board.simpleEval, board.nextPlayer, board.whiteKingIndex, board.blackKingIndex, board.castling});
+        }
+        return valid;
+        
     }
 
     pub fn expectEqual(a: *const Board, b: *const Board) !void {
         for (a.squares, b.squares) |aSq, bSq| {
             if (aSq.empty() and bSq.empty()) continue;
             if (!std.meta.eql(aSq, bSq)) {
-                std.debug.print("=====\n", .{});
-                a.debugPrint();
-                b.debugPrint();
-                std.debug.print("Expected boards above to be equal.\n", .{});
+                if (!isWasm) {
+                    std.debug.print("=====\n", .{});
+                    a.debugPrint();
+                    b.debugPrint();
+                    std.debug.print("Expected boards above to be equal.\n", .{});
+                }
                 return error.TestExpectedEqual;
             }
         }
-        if (!a.hasCorrectPositionsBits() or !b.hasCorrectPositionsBits()) {std.debug.print("Incorrect bitboards\n", .{});return error.TestExpectedEqual;}
-        if (!std.meta.eql(a.castling, b.castling)) {std.debug.print("Expected same castling rights. {} vs {}", .{a.castling, b.castling}); return error.TestExpectedEqual;}
-        if (!std.meta.eql(a.simpleEval, b.simpleEval)) {std.debug.panic("Expected same simpleEval. {} vs {}", .{a.simpleEval, b.simpleEval});return error.TestExpectedEqual;}
-        if (!std.meta.eql(a.nextPlayer, b.nextPlayer)) {std.debug.panic("Expected same nextPlayer. {} vs {}", .{a.nextPlayer, b.nextPlayer});return error.TestExpectedEqual;}
+        var badMetaData = !a.hasCorrectPositionsBits() or !b.hasCorrectPositionsBits() 
+                        or !std.meta.eql(a.castling, b.castling) or !std.meta.eql(a.simpleEval, b.simpleEval) 
+                        or !std.meta.eql(a.nextPlayer, b.nextPlayer);
+        if (badMetaData) {
+            if (!isWasm) {
+                std.debug.print("=====\n", .{});
+                a.debugPrint();
+                std.debug.print("white: {b}\nblack: {b}\neval={}. {} to move. kings: {} {}\n {}\n\n", .{a.peicePositions.white, a.peicePositions.black, a.simpleEval, a.nextPlayer, a.whiteKingIndex, a.blackKingIndex, a.castling});
+                b.debugPrint();
+                std.debug.print("white: {b}\nblack: {b}\neval={} {} to move. kings: {} {}\n {}\n\n", .{b.peicePositions.white, b.peicePositions.black, b.simpleEval, b.nextPlayer, b.whiteKingIndex, b.blackKingIndex, b.castling});
+                std.debug.print("Expected boards above to be equal.\n", .{});
+            }
+            return error.TestExpectedEqual;
+        }
     }
 };
 
-
+const isWasm = @import("builtin").target.isWasm();
 
 var tstAlloc = std.testing.allocator;
 

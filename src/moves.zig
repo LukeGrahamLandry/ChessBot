@@ -10,8 +10,8 @@ const isWasm = @import("builtin").target.isWasm();
 
 fn assert(val: bool) void {
     // if (val) @panic("lol nope");
-    std.debug.assert(val);
-    // _ = val;
+    // std.debug.assert(val);
+    _ = val;
 }
 
 // This is 4 bytes but, 
@@ -321,7 +321,7 @@ fn testPruning(fen: [] const u8, me: Colour) !void {
         game.copyPlay(fast).debugPrint();
         return error.TestFailed;
     }
-    if (t2 > t1 or t1 > 250) std.debug.print("- testPruning (slow: {}ms, fast: {}ms) {s}\n", .{t1, t2, fen});
+    if (t2 > t1 or t1 > 250) std.log.info("- testPruning (slow: {}ms, fast: {}ms) {s}\n", .{t1, t2, fen});
 
     var initial = try Board.fromFEN(fen);
     initial.nextPlayer = me;  // TODO
@@ -332,9 +332,10 @@ fn testPruning(fen: [] const u8, me: Colour) !void {
 // Tests that alpha-beta pruning chooses the same best move as a raw search. 
 // Doesn't check if king is in danger to ignore move. // TODO: skip if no legal moves instead 
 pub fn runTestComparePruning() !void {
+    // TODO: need to include player in the fen because some positions have check and dont make sense for both
     // Not all of @import("movegen.zig").fensToTest because they're super slow.
     const fensToTest = [_] [] const u8 {
-        "8/p7/8/8/8/4b3/P2P4/8",
+        "7K/p7/8/8/8/4b3/P2P4/7k",
         "7K/8/7B/8/8/8/Pq6/kN6",
         "7K/7p/8/8/8/r1q5/1P5P/k7", // Check and multiple best moves for black
         // "rn1q1bnr/1p2pkp1/2p2p1p/p2p1b2/1PP4P/3PQP2/P2KP1PB/RN3BNR", // hang a queen. super slow to run rn
