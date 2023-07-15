@@ -39,7 +39,7 @@ export fn playRandomMove() i32 {
 
    const choice = rng.uintLessThanBiased(usize, allMoves.len);
    const move = allMoves[choice];
-   _ = internalBoard.play(move) catch return 1;
+   _ = internalBoard.play(move);
    
    lastMove = move;
    boardView = @bitCast(internalBoard.squares);
@@ -58,7 +58,7 @@ export fn playNextMove() i32 {
       }
    };
 
-   _ = internalBoard.play(move) catch return 1;
+   _ = internalBoard.play(move);
    lastMove = move;
    boardView = @bitCast(internalBoard.squares);
    nextColour = nextColour.other();
@@ -76,7 +76,7 @@ export fn getPossibleMoves(from: i32) u64 {
    defer alloc.free(allMoves);
    for (allMoves) |move| {
       if (@as(i32, move.from) == from) {
-         const unMove = internalBoard.play(move) catch return 1;
+         const unMove = internalBoard.play(move);
          defer internalBoard.unplay(unMove);
          if (moves.inCheck(&internalBoard, piece.colour, alloc) catch return 1) continue;
          result |= @as(u64, 1) << @intCast(move.to);
@@ -171,7 +171,7 @@ export fn playHumanMove(fromIndex: u32, toIndex: u32) i32 {
       return 4;
    }
 
-   const unMove = internalBoard.play(move) catch return 1;
+   const unMove = internalBoard.play(move);
    if (moves.inCheck(&internalBoard, nextColour, alloc) catch return 1) {
       internalBoard.unplay(unMove);
       return 4;

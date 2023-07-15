@@ -85,7 +85,7 @@ test "bestMoves eval equal" {
             var memo = try testFast.MemoTable.initWithCapacity(10, quickAlloc);
             var expectedEval: ?i32 = null;
             for (bestMoves.items, 0..) |move, i| {
-                const unMove = try game.play(move);
+                const unMove = game.play(move);
                 defer game.unplay(unMove);
                 try std.testing.expect(!(try testFast.inCheck(&game, me, quickAlloc)));
 
@@ -134,7 +134,7 @@ fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, alloc: st
             defer alloc.free(allMoves);
             var anyLegalMoves = false;
             for (allMoves) |move| {
-                const unMove = try game.play(move);
+                const unMove = game.play(move);
                 defer game.unplay(unMove);
                 if (try reverseFromKingIsInCheck(game, me)) continue; // move illigal
                 anyLegalMoves = true;
@@ -152,7 +152,7 @@ fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, alloc: st
     defer alloc.free(allMoves);
     
     for (allMoves) |move| {
-        const unMove = try game.play(move);
+        const unMove = game.play(move);
         defer game.unplay(unMove);
         if (try reverseFromKingIsInCheck(game, me)) continue; // move illigal
 
@@ -236,7 +236,7 @@ fn testCapturesOnly(fen: [] const u8) !void {
         // Count material to make sure it really captured something. 
         const initialMaterial = MoveFilter.Any.get().simpleEval(&game);
         for (small) |move| {
-            const unMove = try game.play(move);
+            const unMove = game.play(move);
             defer game.unplay(unMove);
             const newMaterial = MoveFilter.Any.get().simpleEval(&game);
             try std.testing.expect(initialMaterial != newMaterial);
@@ -253,7 +253,7 @@ fn testCapturesOnly(fen: [] const u8) !void {
             for (small) |check| {
                 if (std.meta.eql(move, check)) break;
             } else {
-                const unMove = try game.play(move);
+                const unMove = game.play(move);
                 defer game.unplay(unMove);
                 const newMaterial = MoveFilter.Any.get().simpleEval(&game);
                 try std.testing.expect(initialMaterial == newMaterial);

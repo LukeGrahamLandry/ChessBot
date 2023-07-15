@@ -75,7 +75,7 @@ fn debugPrintBestMoves(fen: [] const u8, colour: board.Colour) !void {
     defer allMoves.deinit();
     var memo = try strat.MemoTable.initWithCapacity(10, quickAlloc);
     for (allMoves.items, 1..) |move, i| {
-        const unMove = try game.play(move);
+        const unMove = game.play(move);
         defer game.unplay(unMove);
 
         var thing: usize = 0;
@@ -106,7 +106,7 @@ fn debugPrintAllMoves(fen: [] const u8, colour: board.Colour) !void {
     var memo = try strat.MemoTable.initWithCapacity(10, quickAlloc);
     defer memo.deinit();
     for (allMoves, 1..) |move, i| {
-        const unMove = try game.play(move);
+        const unMove = game.play(move);
         defer game.unplay(unMove);
 
         var thing: usize = 0;
@@ -142,7 +142,7 @@ fn debugPlayOne(game: *board.Board, i: usize, colour: board.Colour, rng: *std.ra
     const move = try moves.Strategy(.{ .beDeterministicForTest=true }).bestMove(game, colour);
     try stdout.print("Found move in {}ms\n", .{@divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms))});
     try stdout.print("{} move {} is {}\n", .{colour, i, move});
-    _ = try game.play(move);
+    _ = game.play(move);
 
 
     const ss = try game.toFEN(alloc);

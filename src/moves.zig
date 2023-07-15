@@ -5,7 +5,6 @@ const Colour = @import("board.zig").Colour;
 const Piece = @import("board.zig").Piece;
 const Kind = @import("board.zig").Kind;
 
-const MoveErr = error { GameOver, OutOfMemory };
 const isWasm = @import("builtin").target.isWasm();
 
 fn assert(val: bool) void {
@@ -92,6 +91,9 @@ pub const StratOpts = struct {
     followCaptureDepth: i32 = 5,
 };
 
+
+const MoveErr = error { GameOver, OutOfMemory };
+
 // TODO: script that tests different variations (compare speed and run correctness tests). 
 pub fn Strategy(comptime opts: StratOpts) type {
     return struct {  // Start Strategy. 
@@ -143,7 +145,7 @@ pub fn bestMove(game: *Board, me: Colour) !Move {
 
 var memoMap: ?MemoTable = null;
 
-pub fn allEqualBestMoves(game: *Board, me: Colour, alloc: std.mem.Allocator) !std.ArrayList(Move) {
+pub fn allEqualBestMoves(game: *Board, me: Colour, alloc: std.mem.Allocator) MoveErr!std.ArrayList(Move) {
     const moves = try genAllMoves.possibleMoves(game, me, alloc);
     defer alloc.free(moves);
     if (moves.len == 0) return error.GameOver;
@@ -151,6 +153,7 @@ pub fn allEqualBestMoves(game: *Board, me: Colour, alloc: std.mem.Allocator) !st
     // No deinit because returned
     var bestMoves = try std.ArrayList(Move).initCapacity(alloc, 50);
 
+    // TODO: I don't like that I can't init this outside. 
     if (memoMap == null) memoMap = try MemoTable.initWithCapacity(opts.memoMapSizeMB, std.heap.page_allocator);
     var memo = &memoMap.?;
     defer memo.deinit(alloc);
@@ -159,7 +162,7 @@ pub fn allEqualBestMoves(game: *Board, me: Colour, alloc: std.mem.Allocator) !st
     var bestVal: i32 = -1000000;
     var count: u64 = 0;
     for (moves) |move| {
-        const unMove = try game.play(move);
+        const unMove = game.play(move);
         defer game.unplay(unMove);
         if (try inCheck(game, me, alloc)) continue;
         const value = -try walkEval(game, me.other(), opts.maxDepth, opts.followCaptureDepth, -99999999, -99999999, movesArena.allocator(), &count, memo, false);  // TODO: need to catch
@@ -173,13 +176,14 @@ pub fn allEqualBestMoves(game: *Board, me: Colour, alloc: std.mem.Allocator) !st
         assert(movesArena.reset(.retain_capacity));
     }
 
+    if (bestMoves.items.len == 0) return error.GameOver;
     return bestMoves;
 }
 
 // https://en.wikipedia.org/wiki/Alpha%E2%80%93beta_pruning
-// TODO: when hit depth, keep going but only look at captures
 // The alpha-beta values effect lower layers, not higher layers, so passed by value. 
 // The eval of <game>, positive means <me> is winning, assuming it is <me>'s turn. 
+// Returns error.GameOver if there were no possible moves. 
 pub fn walkEval(game: *Board, me: Colour, remaining: i32, bigRemaining: i32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, count: *u64, memo: *MemoTable, comptime capturesOnly: bool) MoveErr!i32 {
     // After alpha-beta, bigger starting cap, and not reallocating each move, this does make it faster. 
     // Makes Black move 4 end states go 16,000,000 -> 1,000,000
@@ -204,7 +208,7 @@ pub fn walkEval(game: *Board, me: Colour, remaining: i32, bigRemaining: i32, bes
     
     var bestVal: i32 = -1000000;
     for (moves) |move| {
-        const unMove = try game.play(move);
+        const unMove = game.play(move);
         defer game.unplay(unMove);
         if (try inCheck(game, me, alloc)) continue;
 
@@ -239,9 +243,7 @@ pub fn walkEval(game: *Board, me: Colour, remaining: i32, bigRemaining: i32, bes
         }
     }
 
-    // TODO: I want to not reset the table between moves but then when it runs out of space it would be full of positions we don't need anymore.
-    //       need to get rid of old ones somehow. maybe my own hash map that just overwrites on collissions? 
-    // Don't need to check `and memo.capacity() > MEMO_CAPACITY` because we allocate the desired capacity up front.
+    // TODO: don't bother storing it if it came from simpleEval sicne I capculate that incrementally so it's free to look up. that might change if i want to consider more complicated things like piece positions. 
     if (useMemoMap){
         memo.setAndOverwriteBucket(game, .{
             .eval = if (me == .White) bestVal else -bestVal,
@@ -272,28 +274,57 @@ fn checkAlphaBeta(bestVal: i32, me: Colour, bestWhiteEval: *i32, bestBlackEval: 
     return false;
 }
 
+// TODO: this could be faster if it didn't generate every possible move first
+pub fn hasAnyLegalMoves(game: *Board, alloc: std.mem.Allocator) !bool {
+    const moves = try genAllMoves.possibleMoves(game, game.nextPlayer, alloc);
+    defer alloc.free(moves);
+    if (moves.len == 0) return false;
+    
+    for (moves) |move| {
+        const unMove = game.play(move);
+        defer game.unplay(unMove);
+        if (try inCheck(game, game.nextPlayer, alloc)) continue;
+        break;
+    } else {
+        return true;
+    }
+    return false;
+}
+
+pub fn isGameOver(game: *Board, alloc: std.mem.Allocator) !GameOver {
+    if (try hasAnyLegalMoves(game, alloc)) return .Continue;
+    if (!(try inCheck(game, game.nextPlayer, alloc))) return .Stalemate;
+    return if (game.nextPlayer == .White) .BlackWins else .WhiteWins;
+}
+
 pub const MemoEntry = struct {
     squares: [64] Piece,
     hash: u64,
     value: MemoValue,
 };
 
+// TODO: can I store some sort of alpha beta info here as well? try just putting the number in once I have skill testing
 pub const MemoValue = struct { 
     eval: i32,
     remaining: i32
 };
 
+// Sets overwrite if their buckets collide so never have to worry about it filling up with old boards.
+// That also means there's no chain of bucket collissions to follow when reading a value. 
+// Allocates the full capacity up front so never needs to resize. 
 pub const MemoTable = struct {
     buffer: [] MemoEntry,
+    bucketMask: u64,
 
-    pub fn initWithCapacity(sizeMB: usize, alloc: std.mem.Allocator) !MemoTable {
+    pub fn initWithCapacity(comptime sizeMB: usize, alloc: std.mem.Allocator) !MemoTable {
         if (sizeMB == 0) @panic("MemoTable.initWithCapacity(0)");
 
         const targetCapacity = (sizeMB * 1024 * 1024) / @sizeOf(MemoEntry);
         // TODO WASM is 32 bit
-        const realCapacity = @as(usize, 1) << @as(u5, @truncate(std.math.log2(targetCapacity)));
-        assert(std.math.isPowerOfTwo(realCapacity));
-        var self = MemoTable { .buffer = try alloc.alloc(MemoEntry, realCapacity) };
+        const bits: u5 = @truncate(std.math.log2(targetCapacity));
+        const realCapacity = @as(usize, 1) << bits;
+        if (!std.math.isPowerOfTwo(realCapacity)) std.debug.panic("MemoTable calculated size is {}, not a power of two!", .{realCapacity});
+        var self = MemoTable { .buffer = try alloc.alloc(MemoEntry, realCapacity), .bucketMask = (realCapacity-1)};
         for (0..realCapacity) |i| {
             self.buffer[i] = std.mem.zeroes(MemoEntry);
         }
@@ -323,9 +354,10 @@ pub const MemoTable = struct {
         return std.mem.eql(u8, std.mem.asBytes(&key.squares), std.mem.asBytes(&entry.squares));
     }
 
+    // TODO: some heuristic for when you get to overwrite bucket? age (epoch counter) vs remaining
     pub fn setAndOverwriteBucket(self: *MemoTable, key: *const Board, value: MemoValue) void {
         const hashcode = hash(key);
-        const bucket: usize = @intCast(hashcode % self.buffer.len);
+        const bucket: usize = @intCast(hashcode & self.bucketMask);
         self.buffer[bucket] = .{
             .squares = key.squares,
             .hash = hashcode,
@@ -335,8 +367,12 @@ pub const MemoTable = struct {
 
     pub fn get(self: *MemoTable, key: *const Board) ?MemoValue {
         const hashcode = hash(key);
-        const bucket: usize = @intCast(hashcode % self.buffer.len);
-        if (self.buffer[bucket].hash == hashcode and eql(key, &self.buffer[bucket])) {
+        const bucket: usize = @intCast(hashcode & self.bucketMask);
+        if (self.buffer[bucket].hash == hashcode) {
+            if (!eql(key, &self.buffer[bucket])) {
+                if (!isWasm) @panic("hash collission (not a problem, just debugging)");  // TODO: does this every happen? how confident am I?
+                return null;
+            }
             return self.buffer[bucket].value;
         } else {
             return null;
@@ -350,3 +386,4 @@ pub const MemoTable = struct {
 pub const default = Strategy(.{});
 
 
+// TODO: prune test is broken because there's one where it gets to capture your king and it doesnt really know what mate is

@@ -29,6 +29,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const uciExe = b.addExecutable(.{
+        .name = "chess_uci",
+        .root_source_file = .{ .path = "src/uci.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+
     const wasm_target = std.zig.CrossTarget.parse(.{ .arch_os_abi="wasm32-freestanding" }) catch @panic("wasm target not exist?");
     _ = wasm_target;
 
@@ -50,6 +57,8 @@ pub fn build(b: *std.Build) void {
     // such a dependency.
     const run_cmd = b.addRunArtifact(exe);
     const bench_run_cmd = b.addRunArtifact(benchExe);
+    const uci_run_cmd = b.addRunArtifact(uciExe);
+    
 
     // By making the run step depend on the install step, it will be run from the
     // installation directory rather than directly from within the cache directory.
@@ -62,6 +71,7 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| {
         run_cmd.addArgs(args);
         bench_run_cmd.addArgs(args);
+        uci_run_cmd.addArgs(args);
     }
 
     // This creates a build step. It will be visible in the `zig build --help` menu,
@@ -72,6 +82,10 @@ pub fn build(b: *std.Build) void {
 
     const bench_run_step = b.step("bench", "Run benchmarks");
     bench_run_step.dependOn(&bench_run_cmd.step);
+
+
+    const uci_run_step = b.step("uci", "Run against stockfish");
+    uci_run_step.dependOn(&uci_run_cmd.step);
 
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.

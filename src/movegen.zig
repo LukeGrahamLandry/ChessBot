@@ -34,9 +34,10 @@ pub fn simpleEval(game: *const Board) i32 {
 pub fn slowSimpleEval(game: *const Board) i32 {
     var result: i32 = 0;
     for (game.squares) |piece| {
+        if (piece.kind == .Empty) continue;
         switch (piece.colour) {
             .White => result += piece.kind.material(),
-            else => result -= piece.kind.material(),
+            .Black => result -= piece.kind.material(),
         }
     }
     return result;
@@ -111,13 +112,13 @@ fn rookSlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: u
     }
 }
 
-pub fn pawnForwardTwo(fromIndex: usize, toFile: usize, toRank: usize, isCapture: bool) Move {
+pub fn pawnForwardTwo(fromIndex: usize, toFile: usize, toRank: usize) Move {
     // std.debug.assert(fromIndex < 64 and toFile < 8 and toRank < 8);
     return .{
         .from=@intCast(fromIndex),
         .to = @intCast(toRank*8 + toFile),
         .action = .allowFrenchMove,
-        .isCapture=isCapture
+        .isCapture=false
     };
 }
 
@@ -127,14 +128,14 @@ fn pawnMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: us
         .White => w: {
             assert(rank < 7);  
             if (filter == .Any and rank == 1 and board.emptyAt(file, 2) and board.emptyAt(file, 3)) {  // forward two
-                try moves.append(pawnForwardTwo(i, file, 3, false));  // cant promote
+                try moves.append(pawnForwardTwo(i, file, 3));  // cant promote
             }
             break :w rank + 1;
         },
         .Black => b: {
             assert(rank > 0);
             if (filter == .Any and rank == 6 and board.emptyAt(file, 5) and board.emptyAt(file, 4)) {  // forward two
-                try moves.append(pawnForwardTwo(i, file, 4, false));  // cant promote
+                try moves.append(pawnForwardTwo(i, file, 4));  // cant promote
             }
             break :b rank - 1;
         }
@@ -224,7 +225,7 @@ fn trySlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, checkFil
     
     switch (filter) {
         .Any => {},
-        .CapturesOnly => if (check.kind == .Empty or check.colour == piece.colour) return false,
+        .CapturesOnly => if (check.kind == .Empty or check.colour == piece.colour) return !check.empty(),
         .KingCapturesOnly => if (check.kind != .King or check.colour == piece.colour) return !check.empty(),
     }
 
@@ -256,8 +257,8 @@ fn trySlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, checkFil
 fn trySlide2(moves: *std.ArrayList(Move), board: *const Board, fromIndex: u6, toIndexx: u6, piece: Piece) !bool {
     switch (filter) {
         .Any => {},
-        .CapturesOnly => if (board.squares[toIndexx].empty()) return false,
-        .KingCapturesOnly => if ( board.squares[toIndexx].kind != .King) return ! board.squares[toIndexx].empty(),
+        .CapturesOnly => if (board.squares[toIndexx].empty() or board.squares[toIndexx].colour == piece.colour) return !board.squares[toIndexx].empty(),
+        .KingCapturesOnly => if ( board.squares[toIndexx].kind != .King) return !board.squares[toIndexx].empty(),
     }
 
     var mine: u64 = undefined;
@@ -367,11 +368,12 @@ fn kingMove(moves: *std.ArrayList(Move), board: *Board, i: usize, file: usize, r
 }
 
 fn castlingIsLegal(board: *Board, i: usize, colour: Colour, comptime goingLeft: bool) !bool {
+    if (try reverseFromKingIsInCheck(board, colour)) return false;
     const path = if (goingLeft) [_] usize {i-1, i-2, i-3} else [_] usize {i+1, i+2};
     for (path) |sq| {
         // TODO: do this without playing the move? It annoys me that this makes getPossibleMoves take a mutable board pointer (would also be fixed by doing it later with other legal move checks). 
         const move = Move.ii(@intCast(i), @intCast(sq), false);
-        const unMove = try board.play(move);
+        const unMove = board.play(move);
         defer board.unplay(unMove);
         if (try reverseFromKingIsInCheck(board, colour)) return false;
     }

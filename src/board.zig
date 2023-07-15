@@ -170,6 +170,7 @@ const FrenchMove = union(enum){
 
 // TODO: Count moves for draw. 
 pub const Board = struct {
+    // TODO: this could be a PackedIntArray if I remove padding from Piece and deal with re-encoding to bytes before sending to js. is that better?
     squares: [64] Piece = std.mem.zeroes([64] Piece),
     peicePositions: BitBoardPair = .{},
     // TODO: make sure these are packed nicely
@@ -222,8 +223,9 @@ pub const Board = struct {
         // return self.squares[index].kind == .Empty;
     }
 
-    // TODO: no error
-    pub fn play(self: *Board, move: Move) !OldMove {
+    /// This assumes that <move> is legal. 
+    pub fn play(self: *Board, move: Move) OldMove {
+        assert(move.from != move.to);
         assertSlow(self.hasCorrectPositionsBits());
         const thisMove: OldMove = .{ .move = move, .taken = self.squares[move.to], .original = self.squares[move.from], .old_castling = self.castling, .debugPeicePositions = self.peicePositions, .debugSimpleEval=self.simpleEval, .frenchMove=self.frenchMove };
         assert(thisMove.original.colour == self.nextPlayer);
@@ -274,9 +276,9 @@ pub const Board = struct {
 
         switch (move.action) {
             .none => {
+                assert(move.isCapture == (thisMove.taken.kind != .Empty)); 
                 self.squares[move.to] = thisMove.original;
                 self.squares[move.from] = Piece.EMPTY;
-                assert(move.isCapture == (thisMove.taken.kind != .Empty));
             },
             .promote => |kind| {
                 self.squares[move.to] = .{ .colour = colour, .kind = kind };
@@ -324,7 +326,8 @@ pub const Board = struct {
         return thisMove;
     }
 
-    // Thought this would be faster because less copying but almost no difference. 
+    // Thought this would be faster because less copying but almost no difference (at the time. TODO: check again). 
+    /// <move> must be the value returned from playing the most recent move. 
     pub fn unplay(self: *Board, move: OldMove) void {
         assertSlow(self.hasCorrectPositionsBits());
         const colour = move.original.colour;
@@ -377,7 +380,7 @@ pub const Board = struct {
 
     pub fn copyPlay(self: *const Board, move: Move) Board {
         var board = self.*;
-        _ = try board.play(move);
+        _ = board.play(move);
         return board;
     }
 

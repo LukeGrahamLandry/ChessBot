@@ -42,6 +42,9 @@ filtercalltree zig-out/temp_profile_info.sample
 
 TODO: should try to get used to the auto-format. 
 
+## much better memo table 
+
+
 ## counting possible moves 
 
 After banning letting your king get taken in check, need to make the test faster. Tried writing it iteritivly instead of recusivly but all the speed up was just from using an arena allocator instead of freeing everything. so went back to recusive because that seems more elegant, uses unmove instead of copyMove so if I can make check detection gradual it will help. 
