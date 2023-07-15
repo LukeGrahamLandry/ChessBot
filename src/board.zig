@@ -1,6 +1,16 @@
 const std = @import("std");
-const assert = std.debug.assert;
 const Move = @import("moves.zig").Move;
+
+fn assert(val: bool) void {
+    std.debug.assert(val);
+    // _ = val;
+}
+
+// Calling hasCorrectPositionsBits doesn't get optimised out in release mode when passed to std assert. But it does if passed to a function that discards it. 
+fn assertSlow(val: bool) void {
+    // std.debug.assert(val);
+    _ = val;
+}
 
 // Numbers matter because js sees them. 
 pub const Kind = enum(u4) { 
@@ -94,19 +104,17 @@ const BitBoardPair = packed struct {
     white: u64 = 0,
     black: u64 = 0,
 
-    const one: u64 = 1;
-
     pub fn setBit(self: *BitBoardPair, index: u6, colour: Colour) void {
         switch (colour) {
-            .White => self.white |= (one << index),
-            .Black => self.black |= (one << index),
+            .White => self.white |= (@as(u64, 1) << index),
+            .Black => self.black |= (@as(u64, 1) << index),
         }
     }
 
     pub fn unsetBit(self: *BitBoardPair, index: u6, colour: Colour) void {
         switch (colour) {
-            .White => self.white ^= (one << index),
-            .Black => self.black ^= (one << index),
+            .White => self.white ^= (@as(u64, 1) << index),
+            .Black => self.black ^= (@as(u64, 1) << index),
         }
     }
 
@@ -130,17 +138,37 @@ const OldMove = struct {
 };
 
 // Index with colour ordinal
-const CastlingRights = struct { 
-    right: [2] bool = .{true, true},
-    left: [2] bool = .{true, true},
+const CastlingRights = packed struct(u4) { 
+    whiteLeft: bool = true,
+    whiteRight: bool = true,
+    blackLeft: bool = true,
+    blackRight: bool = true,
+
+    pub fn get(self: CastlingRights, colour: Colour, goingLeft: bool) bool {
+        switch (colour) {
+            .White => return if (goingLeft) self.whiteLeft else self.whiteRight,
+            .Black => return if (goingLeft) self.blackLeft else self.blackRight,
+        }
+    }
+
+    pub fn set(self: *CastlingRights, colour: Colour, goingLeft: bool, value: bool) void {
+        switch (colour) {
+            .White => return if (goingLeft) {self.whiteLeft = value;} else {self.whiteRight = value;},
+            .Black => return if (goingLeft) {self.blackLeft = value;} else {self.blackLeft = value;},
+        }
+    }
 };
+
+comptime {
+    std.debug.assert(@sizeOf(CastlingRights) == 1);
+}
 
 const FrenchMove = union(enum){
     none,
     file: u4
 };
 
-// TODO: Track en passant target squares. Count moves for draw. 
+// TODO: Count moves for draw. 
 pub const Board = struct {
     squares: [64] Piece = std.mem.zeroes([64] Piece),
     peicePositions: BitBoardPair = .{},
@@ -178,10 +206,9 @@ pub const Board = struct {
         return comptime try fromFEN(INIT_FEN);
     }
 
-    const one: u64 = 1;
     pub fn emptyAt(self: *const Board, file: usize, rank: usize) bool {
         const index: u6 = @intCast(rank*8 + file);
-        const flag = one << index;
+        const flag = @as(u64, 1) << index;
         const isEmpty = ((self.peicePositions.white & flag) | (self.peicePositions.black & flag)) == 0;   
         // assert(self.get(file, rank).empty() == isEmpty);
         return isEmpty;
@@ -189,14 +216,15 @@ pub const Board = struct {
 
     pub fn emptyAtI(self: *const Board, index: usize) bool {
         const i: u6 = @intCast(index);
-        const flag = one << i;
+        const flag = @as(u64, 1) << i;
         const isEmpty = ((self.peicePositions.white & flag) | (self.peicePositions.black & flag)) == 0;   
         return isEmpty;
+        // return self.squares[index].kind == .Empty;
     }
 
     // TODO: no error
     pub fn play(self: *Board, move: Move) !OldMove {
-        assert(self.hasCorrectPositionsBits());
+        assertSlow(self.hasCorrectPositionsBits());
         const thisMove: OldMove = .{ .move = move, .taken = self.squares[move.to], .original = self.squares[move.from], .old_castling = self.castling, .debugPeicePositions = self.peicePositions, .debugSimpleEval=self.simpleEval, .frenchMove=self.frenchMove };
         assert(thisMove.original.colour == self.nextPlayer);
         const colour = thisMove.original.colour;
@@ -206,40 +234,44 @@ pub const Board = struct {
         self.peicePositions.unsetBit(move.from, colour);
         if (!thisMove.taken.empty()) self.peicePositions.unsetBit(move.to, thisMove.taken.colour);
         self.peicePositions.setBit(move.to, colour);
+
+
         if (thisMove.original.kind == .King) {
             switch (colour) {
                 .Black => self.blackKingIndex = move.to,
                 .White => self.whiteKingIndex = move.to,
             }
-
-            // If you move your king, you can't castle on either side.
-            const cI: usize = if (colour == .White) 0 else 1;
-            self.castling.left[cI] = false;
-            self.castling.right[cI] = false;
         }
 
-        // If you move your rook, you can't castle on that side.
-        if (thisMove.original.kind == .Rook) {
-            const cI: usize = if (colour == .White) 0 else 1;
-            if (move.from == 0 or move.from == (7*8)) {
-                self.castling.left[cI] = false;
+        // Most of the time, nobody can castle. Handle that case in the fewest branches.
+        if (@as(u4, @bitCast(self.castling)) != 0) {
+            if (thisMove.original.kind == .King) {
+                // If you move your king, you can't castle on either side.
+                self.castling.set(colour, true, false);
+                self.castling.set(colour, false, false);
             }
-            else if (move.from == 7 or move.from == (7*8 + 7)) {
-                self.castling.right[cI] = false;
+
+            // If you move your rook, you can't castle on that side.
+            if (thisMove.original.kind == .Rook) {
+                if (move.from == 0 or move.from == (7*8)) {
+                    self.castling.set(colour, true, false);
+                }
+                else if (move.from == 7 or move.from == (7*8 + 7)) {
+                    self.castling.set(colour, false, false);
+                }
+            }
+
+            // If you take a rook, they can't castle on that side.
+            if (thisMove.taken.kind == .Rook) {
+                if (move.to == 0 or move.to == (7*8)) {
+                    self.castling.set(colour.other(), true, false);
+                }
+                else if (move.to == 7 or move.to == (7*8 + 7)) {
+                    self.castling.set(colour.other(), false, false);
+                }
             }
         }
 
-        // If you take a rook, they can't castle on that side.
-        if (thisMove.taken.kind == .Rook) {
-            const cI: usize = if (thisMove.taken.colour == .White) 0 else 1;
-            if (move.to == 0 or move.to == (7*8)) {
-                self.castling.left[cI] = false;
-            }
-            else if (move.to == 7 or move.to == (7*8 + 7)) {
-                self.castling.right[cI] = false;
-            }
-        }
-        
         switch (move.action) {
             .none => {
                 self.squares[move.to] = thisMove.original;
@@ -254,6 +286,7 @@ pub const Board = struct {
                 assert(move.isCapture == (thisMove.taken.kind != .Empty));
             },
             .castle => |info| {
+                assert(self.squares[move.from].is(colour, .King));
                 self.squares[move.to] = thisMove.original;
                 self.squares[move.from] = Piece.EMPTY;
 
@@ -267,12 +300,15 @@ pub const Board = struct {
                 assert(!move.isCapture and (thisMove.taken.kind == .Empty));
             },
             .allowFrenchMove => {
+                assert(self.squares[move.from].is(colour, .Pawn));
                 self.squares[move.to] = thisMove.original;
                 self.squares[move.from] = Piece.EMPTY;
                 self.frenchMove = .{.file = @intCast(@rem(move.to, 8))};
                 assert(!move.isCapture and (thisMove.taken.kind == .Empty));
             },
             .useFrenchMove => |captureIndex| {
+                assert(self.squares[move.from].is(colour, .Pawn));
+                assert(self.squares[move.to].empty());
                 assert(self.squares[captureIndex].is(colour.other(), .Pawn));
                 self.squares[move.to] = thisMove.original;
                 self.squares[move.from] = Piece.EMPTY;
@@ -284,13 +320,13 @@ pub const Board = struct {
         }
 
         self.nextPlayer = self.nextPlayer.other();
-        assert(self.hasCorrectPositionsBits());
+        assertSlow(self.hasCorrectPositionsBits());
         return thisMove;
     }
 
     // Thought this would be faster because less copying but almost no difference. 
     pub fn unplay(self: *Board, move: OldMove) void {
-        assert(self.hasCorrectPositionsBits());
+        assertSlow(self.hasCorrectPositionsBits());
         const colour = move.original.colour;
         self.castling = move.old_castling;
         self.frenchMove = move.frenchMove;
@@ -335,7 +371,7 @@ pub const Board = struct {
         self.nextPlayer = self.nextPlayer.other();
         assert(colour == self.nextPlayer);
         assert(std.meta.eql(move.debugPeicePositions, self.peicePositions));
-        assert(self.hasCorrectPositionsBits());
+        assertSlow(self.hasCorrectPositionsBits());
         assert(self.simpleEval == move.debugSimpleEval);
     }
 
@@ -454,38 +490,37 @@ pub const Board = struct {
 
     // Asserts to this don't get compiled out in release mode! It's like 10x faster with this commented out. 
     pub fn hasCorrectPositionsBits(board: *const Board) bool {
-        _ = board;
         
-        // const valid = v: {
-        //     var flag: u64 = 1;
-        //     for (board.squares) |piece| {
-        //         defer flag = flag << 1;
-        //         if (piece.kind == .Empty){
-        //             if ((board.peicePositions.white & flag) != 0) break :v false;
-        //             if ((board.peicePositions.black & flag) != 0) break :v false;
-        //         } else {
-        //             if ((board.peicePositions.getFlag(piece.colour) & flag) == 0) break :v false;
-        //         }
-        //     }
+        const valid = v: {
+            var flag: u64 = 1;
+            for (board.squares) |piece| {
+                defer flag = flag << 1;
+                if (piece.kind == .Empty){
+                    if ((board.peicePositions.white & flag) != 0) break :v false;
+                    if ((board.peicePositions.black & flag) != 0) break :v false;
+                } else {
+                    if ((board.peicePositions.getFlag(piece.colour) & flag) == 0) break :v false;
+                }
+            }
 
-        //     // TODO: this is broken until I detect checkmate
-        //     // if (!board.squares[board.whiteKingIndex].is(.White, .King)) {
-        //     //     if (board.whiteKingIndex == 0) std.debug.print("whiteKingIndex=0, maybe not set?\n", .{});
-        //     //     break :v false;
-        //     // }
-        //     // if (!board.squares[board.blackKingIndex].is(.Black, .King)) {
-        //     //     if (board.blackKingIndex == 0) std.debug.print("blackKingIndex=0, maybe not set?\n", .{});
-        //     //     break :v false;
-        //     // }
-        //     break :v true;
-        // };
+            // TODO: this is broken until I detect checkmate
+            // if (!board.squares[board.whiteKingIndex].is(.White, .King)) {
+            //     if (board.whiteKingIndex == 0) std.debug.print("whiteKingIndex=0, maybe not set?\n", .{});
+            //     break :v false;
+            // }
+            // if (!board.squares[board.blackKingIndex].is(.Black, .King)) {
+            //     if (board.blackKingIndex == 0) std.debug.print("blackKingIndex=0, maybe not set?\n", .{});
+            //     break :v false;
+            // }
+            break :v true;
+        };
 
-        // // if (!valid and !isWasm) {
-        // //     board.debugPrint();
-        // //     std.debug.print("white: {b}\nblack: {b}\neval={}. {} to move. kings: {} {}\n {}\n\n", .{board.peicePositions.white, board.peicePositions.black, board.simpleEval, board.nextPlayer, board.whiteKingIndex, board.blackKingIndex, board.castling});
-        // // }
-        // return valid;
-        return true;
+        // if (!valid and !isWasm) {
+        //     board.debugPrint();
+        //     std.debug.print("white: {b}\nblack: {b}\neval={}. {} to move. kings: {} {}\n {}\n\n", .{board.peicePositions.white, board.peicePositions.black, board.simpleEval, board.nextPlayer, board.whiteKingIndex, board.blackKingIndex, board.castling});
+        // }
+        return valid;
+        // return true;
         
     }
 

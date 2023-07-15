@@ -46,17 +46,12 @@ fn toIndex(file: usize, rank: usize) u6  {
     return @intCast(rank*8 + file);
 }
 
-const one: u64 = 1;
 // Caller owns the returned slice.
 pub fn possibleMoves(board: *Board, me: Colour, alloc: std.mem.Allocator) ![] Move {
     assert(board.nextPlayer == me);  // sanity. TODO: don't bother passing colour since the board knows?
     var moves = try std.ArrayList(Move).initCapacity(alloc, 50);
-    const mySquares = switch (me) {
-            .White => board.peicePositions.white,
-            .Black => board.peicePositions.black,
-        };
+    const mySquares = board.peicePositions.getFlag(me);
     
-    assert(board.hasCorrectPositionsBits());
     var flag: u64 = 1;
     for (0..64) |i| {
         defer flag <<= 1; // shift the bit over at the end of each iteration. 
@@ -278,7 +273,7 @@ fn trySlide2(moves: *std.ArrayList(Move), board: *const Board, fromIndex: u6, to
         }
     }
 
-    const toFlag = one << toIndexx;
+    const toFlag = @as(u64, 1) << toIndexx;
     if ((toFlag & mine) != 0) {  // trying to move onto my piece
         return true;
     }
@@ -387,8 +382,7 @@ fn castlingIsLegal(board: *Board, i: usize, colour: Colour, comptime goingLeft: 
 pub fn tryCastle(moves: *std.ArrayList(Move), board: *Board, i: usize, file: usize, rank: usize, colour: Colour, comptime goingLeft: bool) !void {
     const cI: usize = if (colour == .White) 0 else 1;
     if (i != 4 + (cI * 8*7)) return;  // TODO: redundant
-    const allow = if (goingLeft) board.castling.left[cI] else board.castling.right[cI];
-    if (allow){
+    if (board.castling.get(colour, goingLeft)){
         // TODO: can be a hard coded mask
         const pathClear = if (goingLeft) 
                              (board.emptyAtI(i - 1) and board.emptyAtI(i - 2) and board.emptyAtI(i - 3))

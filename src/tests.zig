@@ -177,8 +177,8 @@ fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, alloc: st
 pub fn runTestCountPossibleGames() !void {
     // https://en.wikipedia.org/wiki/Shannon_number
     try (PerftTest {
-        .possibleGames = &[_] u64 { 20, 400, 8902, 197281, 4865609, 119060324, 3195901860},  // 3195901860 is too slow to deal with but also fails
-        .possibleMates = &[_] u64 {  0,   0,    0,      8,     347,     10828, 435767},  //     435767
+        .possibleGames = &[_] u64 { 20, 400, 8902, 197281, 4865609, 119060324 },  // 3195901860 is too slow to deal with but also fails TODO
+        .possibleMates = &[_] u64 {  0,   0,    0,      8,     347,     10828 },  //     435767
         .fen = @import("board.zig").INIT_FEN,
     }).run();
 }

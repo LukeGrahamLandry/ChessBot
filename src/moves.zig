@@ -26,7 +26,7 @@ pub const Move = struct {
     from: u6,
     to: u6,
     isCapture: bool,  // french move says true but to square isnt the captured one
-    action: union(enum) {
+    action: union(enum(u3)) {
         none,
         promote: Kind,
         castle: CastleMove,
