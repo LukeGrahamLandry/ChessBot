@@ -19,11 +19,13 @@ pub fn main() !void {
     const first = try checkGameTime(moves.Strategy(.{ .beDeterministicForTest=true }), count);
     std.debug.print("- [   ] (1.00x) default finished in {}ms.\n", .{first});
 
-    // Timing these this way is safe because they don't effect move ordering so always plays the same game.
+    // Before: Timing these this way is safe because they don't effect move ordering so always plays the same game.
     // TODO: asserts ^ and crashes for AutoHash cause i'm storing more info on the board
+    // TODO: these tests no longer work because I overwrite on hash <bucket> collissions
     std.debug.print("Comparing hash functions...\n", .{});
     const algos = comptime std.enums.values(moves.HashAlgo);
     inline for (algos, 0..) |hashAlgo, i| {
+        if (hashAlgo == .StdAuto) continue;
         const strategy = comptime moves.Strategy(.{ .hashAlgo=hashAlgo, .beDeterministicForTest=true });
         const time = try checkGameTime(strategy, count);
         var multiplier: f64 = @as(f64, @floatFromInt(first)) / @as(f64, @floatFromInt(time)); 

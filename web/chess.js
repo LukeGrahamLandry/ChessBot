@@ -8,6 +8,8 @@ const minMoveTimeMs = 500;  // When computer vs computer, if the engine is faste
 // TODO: forward and back buttons to move through position history, start playing from anywhere to make tree (render all branches as tiny boards?)
 // TODO: run wasm in a worker so it doesn't freeze ui while searching
 // TODO: show checkmate, render captured pieces, show engine eval
+// TODO: each file should know the git hash and report the error if  something caches just one
+// TODO: show the line it thinks is best 
 
 let ticker = null;
 let boardFenHistory = [];

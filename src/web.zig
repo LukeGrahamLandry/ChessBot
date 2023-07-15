@@ -193,8 +193,8 @@ export fn getBitBoard(magicEngineIndex: u32, colourIndex: u32) u64 {
       0 => internalBoard.peicePositions.getFlag(colour),
       1 => if (colour == .Black) (one << internalBoard.blackKingIndex) else (one << internalBoard.whiteKingIndex),
       2 => {
-         const left = internalBoard.castling.left[colourIndex];
-         const right = internalBoard.castling.right[colourIndex];
+         const left = internalBoard.castling.get(colour, true);
+         const right = internalBoard.castling.get(colour, false);
          var result: u64 = 0;
          if (left) result |= one;
          if (right) result |= one << 7;

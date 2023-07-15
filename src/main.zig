@@ -73,8 +73,7 @@ fn debugPrintBestMoves(fen: [] const u8, colour: board.Colour) !void {
     std.debug.print("{} has {} best moves.\n", .{colour, allMoves.items.len});
     
     defer allMoves.deinit();
-    var memo = strat.MemoMap.init(quickAlloc);
-    try memo.ensureTotalCapacity(10000);
+    var memo = try strat.MemoTable.initWithCapacity(10, quickAlloc);
     for (allMoves.items, 1..) |move, i| {
         const unMove = try game.play(move);
         defer game.unplay(unMove);
@@ -104,8 +103,7 @@ fn debugPrintAllMoves(fen: [] const u8, colour: board.Colour) !void {
     std.debug.print("{} has {} possible moves.\n", .{colour, allMoves.len});
     try initial.expectEqual(&game); // undo move sanity check
     
-    var memo = strat.MemoMap.init(quickAlloc);
-    try memo.ensureTotalCapacity(10000);
+    var memo = try strat.MemoTable.initWithCapacity(10, quickAlloc);
     defer memo.deinit();
     for (allMoves, 1..) |move, i| {
         const unMove = try game.play(move);

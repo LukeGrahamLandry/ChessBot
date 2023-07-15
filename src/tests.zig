@@ -82,8 +82,7 @@ test "bestMoves eval equal" {
             const allMoves = try MoveFilter.Any.get().possibleMoves(&game, me, quickAlloc);
             try std.testing.expect(allMoves.len >= bestMoves.items.len);  // sanity
             
-            var memo = testFast.MemoMap.init(quickAlloc);
-            try memo.ensureTotalCapacity(10000);
+            var memo = try testFast.MemoTable.initWithCapacity(10, quickAlloc);
             var expectedEval: ?i32 = null;
             for (bestMoves.items, 0..) |move, i| {
                 const unMove = try game.play(move);

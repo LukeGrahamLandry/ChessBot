@@ -86,7 +86,7 @@ pub const StratOpts = struct {
     doPruning: bool = true, 
     beDeterministicForTest: bool = true,  // Interesting that it's much faster with this =true. Rng is slow!
     memoMapSizeMB: usize = 20,  // Zero means don't use memo map at all. 
-    memoMapFillPercent: usize = 60,  // Affects usable map capacity but not memory usage. 
+    memoMapFillPercent: usize = 60,  // TODO: this is unused in my memo table impl
     hashAlgo: HashAlgo = .CityHash64,
     checkDetection: CheckAlgo = .ReverseFromKing,
     followCaptureDepth: i32 = 5,
@@ -102,33 +102,7 @@ comptime {
     assert(opts.memoMapFillPercent <= 100);
 }
 
-// TODO: dont store extra fields, just squares
-// This is relies on empty squares having a definied colour so they bytes match! TODO: test that stays true
-pub const MemoMap = std.HashMap(Board, struct {
-    eval: i32,
-    remaining: i32
-}, struct {
-    // TODO: don't include padding bytes, try Zobrist. 
-    pub fn hash(ctx: @This(), key: Board) u64 {
-        const data = std.mem.asBytes(&key.squares);  
-        return switch (comptime opts.hashAlgo) {
-            .StdAuto => (comptime std.hash_map.getAutoHashFn(Board, @This()))(ctx, key), 
-            .Wyhash => std.hash.Wyhash.hash(0, data),
-            .Fnv1a_64 => std.hash.Fnv1a_64.hash(data),
-            .XxHash64 => std.hash.XxHash64.hash(0, data),
-            .Murmur2_64 => std.hash.Murmur2_64.hash(data),
-            .CityHash64 => std.hash.CityHash64.hash(data),
-        };
-    }
-    
-    pub fn eql(_: @This(), a: Board, b: Board) bool {
-        return std.mem.eql(u8, std.mem.asBytes(&a.squares), std.mem.asBytes(&b.squares));
-    }
-}, opts.memoMapFillPercent);  
-
-const useMemoMap = opts.memoMapSizeMB > 0 and opts.memoMapFillPercent > 0;
-// TODO: this wont be exact because capacity goes to the next highest power of two. 
-const MEMO_CAPACITY = if (useMemoMap) (opts.memoMapSizeMB * 1024 * 1024) / @sizeOf(MemoMap.KV) * 100 / opts.memoMapFillPercent else 0;
+const useMemoMap = opts.memoMapSizeMB > 0;
 
 // This gets reset after each whole decision is done.
 var upperArena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -167,6 +141,8 @@ pub fn bestMove(game: *Board, me: Colour) !Move {
     return bestMoves.items[choice];
 }
 
+var memoMap: ?MemoTable = null;
+
 pub fn allEqualBestMoves(game: *Board, me: Colour, alloc: std.mem.Allocator) !std.ArrayList(Move) {
     const moves = try genAllMoves.possibleMoves(game, me, alloc);
     defer alloc.free(moves);
@@ -175,9 +151,9 @@ pub fn allEqualBestMoves(game: *Board, me: Colour, alloc: std.mem.Allocator) !st
     // No deinit because returned
     var bestMoves = try std.ArrayList(Move).initCapacity(alloc, 50);
 
-    var memo = MemoMap.init(alloc);
-    if (useMemoMap) try memo.ensureTotalCapacity(MEMO_CAPACITY);
-    defer memo.deinit();
+    if (memoMap == null) memoMap = try MemoTable.initWithCapacity(opts.memoMapSizeMB, std.heap.page_allocator);
+    var memo = &memoMap.?;
+    defer memo.deinit(alloc);
     
     // TODO: use memo at top level? once it persists longer it must be helpful
     var bestVal: i32 = -1000000;
@@ -186,7 +162,7 @@ pub fn allEqualBestMoves(game: *Board, me: Colour, alloc: std.mem.Allocator) !st
         const unMove = try game.play(move);
         defer game.unplay(unMove);
         if (try inCheck(game, me, alloc)) continue;
-        const value = -try walkEval(game, me.other(), opts.maxDepth, opts.followCaptureDepth, -99999999, -99999999, movesArena.allocator(), &count, &memo, false);  // TODO: need to catch
+        const value = -try walkEval(game, me.other(), opts.maxDepth, opts.followCaptureDepth, -99999999, -99999999, movesArena.allocator(), &count, memo, false);  // TODO: need to catch
         if (value > bestVal) {
             bestVal = value;
             bestMoves.clearRetainingCapacity();
@@ -204,12 +180,12 @@ pub fn allEqualBestMoves(game: *Board, me: Colour, alloc: std.mem.Allocator) !st
 // TODO: when hit depth, keep going but only look at captures
 // The alpha-beta values effect lower layers, not higher layers, so passed by value. 
 // The eval of <game>, positive means <me> is winning, assuming it is <me>'s turn. 
-pub fn walkEval(game: *Board, me: Colour, remaining: i32, bigRemaining: i32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, count: *u64, memo: *MemoMap, comptime capturesOnly: bool) MoveErr!i32 {
+pub fn walkEval(game: *Board, me: Colour, remaining: i32, bigRemaining: i32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, count: *u64, memo: *MemoTable, comptime capturesOnly: bool) MoveErr!i32 {
     // After alpha-beta, bigger starting cap, and not reallocating each move, this does make it faster. 
     // Makes Black move 4 end states go 16,000,000 -> 1,000,000
     // But now after better pruning it does almost nothing. 
     if (useMemoMap) {
-        if (memo.get(game.*)) |cached| {
+        if (memo.get(game)) |cached| {
             if (cached.remaining >= remaining){
                 return if (me == .White) cached.eval else -cached.eval;
             }
@@ -267,13 +243,10 @@ pub fn walkEval(game: *Board, me: Colour, remaining: i32, bigRemaining: i32, bes
     //       need to get rid of old ones somehow. maybe my own hash map that just overwrites on collissions? 
     // Don't need to check `and memo.capacity() > MEMO_CAPACITY` because we allocate the desired capacity up front.
     if (useMemoMap){
-        const memoFull = memo.unmanaged.available == 0;
-        if (!memoFull) {
-            try memo.put(game.*, .{
-                .eval = if (me == .White) bestVal else -bestVal,
-                .remaining = remaining,
-            });
-        }
+        memo.setAndOverwriteBucket(game, .{
+            .eval = if (me == .White) bestVal else -bestVal,
+            .remaining = remaining,
+        });
     }
     
     return bestVal;
@@ -299,6 +272,81 @@ fn checkAlphaBeta(bestVal: i32, me: Colour, bestWhiteEval: *i32, bestBlackEval: 
     return false;
 }
 
+pub const MemoEntry = struct {
+    squares: [64] Piece,
+    hash: u64,
+    value: MemoValue,
+};
+
+pub const MemoValue = struct { 
+    eval: i32,
+    remaining: i32
+};
+
+pub const MemoTable = struct {
+    buffer: [] MemoEntry,
+
+    pub fn initWithCapacity(sizeMB: usize, alloc: std.mem.Allocator) !MemoTable {
+        if (sizeMB == 0) @panic("MemoTable.initWithCapacity(0)");
+
+        const targetCapacity = (sizeMB * 1024 * 1024) / @sizeOf(MemoEntry);
+        // TODO WASM is 32 bit
+        const realCapacity = @as(usize, 1) << @as(u5, @truncate(std.math.log2(targetCapacity)));
+        assert(std.math.isPowerOfTwo(realCapacity));
+        var self = MemoTable { .buffer = try alloc.alloc(MemoEntry, realCapacity) };
+        for (0..realCapacity) |i| {
+            self.buffer[i] = std.mem.zeroes(MemoEntry);
+        }
+        return self;
+    }
+
+    pub fn deinit(self: *MemoTable, alloc: std.mem.Allocator) void {
+        alloc.free(self.buffer);
+    }
+
+    // This is relies on empty squares having a definied colour so they bytes match! TODO: test that stays true
+    pub fn hash(key: *const Board) u64 {
+        const data = std.mem.asBytes(&key.squares);  
+        const hashcode = switch (comptime opts.hashAlgo) {
+            .Wyhash => std.hash.Wyhash.hash(0, data),
+            .Fnv1a_64 => std.hash.Fnv1a_64.hash(data),
+            .XxHash64 => std.hash.XxHash64.hash(0, data),
+            .Murmur2_64 => std.hash.Murmur2_64.hash(data),
+            .CityHash64 => std.hash.CityHash64.hash(data),
+            else => @compileError("hash algo not implemented"),
+        };
+        assert(hashcode != 0);  // collission with my empty bucket indicator
+        return hashcode;
+    }
+
+    pub fn eql(key: *const Board, entry: *MemoEntry) bool {
+        return std.mem.eql(u8, std.mem.asBytes(&key.squares), std.mem.asBytes(&entry.squares));
+    }
+
+    pub fn setAndOverwriteBucket(self: *MemoTable, key: *const Board, value: MemoValue) void {
+        const hashcode = hash(key);
+        const bucket: usize = @intCast(hashcode % self.buffer.len);
+        self.buffer[bucket] = .{
+            .squares = key.squares,
+            .hash = hashcode,
+            .value = value,
+        };
+    }
+
+    pub fn get(self: *MemoTable, key: *const Board) ?MemoValue {
+        const hashcode = hash(key);
+        const bucket: usize = @intCast(hashcode % self.buffer.len);
+        if (self.buffer[bucket].hash == hashcode and eql(key, &self.buffer[bucket])) {
+            return self.buffer[bucket].value;
+        } else {
+            return null;
+        }
+    }
+};
+
+
 };} // End Strategy. 
 
 pub const default = Strategy(.{});
+
+
