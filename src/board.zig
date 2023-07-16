@@ -137,21 +137,21 @@ const OldMove = struct {
     frenchMove: FrenchMove
 };
 
-// Index with colour ordinal
 const CastlingRights = packed struct(u4) { 
     whiteLeft: bool = true,
     whiteRight: bool = true,
     blackLeft: bool = true,
     blackRight: bool = true,
 
-    pub fn get(self: CastlingRights, colour: Colour, goingLeft: bool) bool {
+    // TODO: goingLeft should be an enum
+    pub fn get(self: CastlingRights, colour: Colour, comptime goingLeft: bool) bool {
         switch (colour) {
             .White => return if (goingLeft) self.whiteLeft else self.whiteRight,
             .Black => return if (goingLeft) self.blackLeft else self.blackRight,
         }
     }
 
-    pub fn set(self: *CastlingRights, colour: Colour, goingLeft: bool, value: bool) void {
+    pub fn set(self: *CastlingRights, colour: Colour, comptime goingLeft: bool, value: bool) void {
         switch (colour) {
             .White => return if (goingLeft) {self.whiteLeft = value;} else {self.whiteRight = value;},
             .Black => return if (goingLeft) {self.blackLeft = value;} else {self.blackLeft = value;},
@@ -591,20 +591,21 @@ pub const InferMoveErr = error {IllegalMove} || @import("search.zig").MoveErr;
 const genAllMoves = @import("movegen.zig").MoveFilter.Any.get();
 const search = @import("search.zig").default;
 pub fn inferPlayMove(board: *Board, fromIndex: u32, toIndex: u32, alloc: std.mem.Allocator) InferMoveErr!OldMove {
-    if (board.squares[fromIndex].colour != board.nextPlayer) return error.IllegalMove;
+    const colour = board.nextPlayer;
+    if (board.squares[fromIndex].colour != colour) return error.IllegalMove;
 
-    const isCapture = !board.squares[toIndex].empty() and board.squares[toIndex].colour != board.nextPlayer;
+    const isCapture = !board.squares[toIndex].empty() and board.squares[toIndex].colour != colour;
     var move: Move = .{ .from=@intCast(fromIndex), .to=@intCast(toIndex), .action=.none, .isCapture=isCapture};
     // TODO: ui should know when promoting so it can let you choose which piece to make. 
     if (board.squares[fromIndex].kind == .Pawn) {
         // TODO: factor out some canPromote function so magic numbers live in one place
-        const isPromote = (board.nextPlayer == .Black and toIndex <= 7) or (board.nextPlayer == .White and toIndex > (64-8));
+        const isPromote = (colour == .Black and toIndex <= 7) or (colour == .White and toIndex > (64-8));
         if (isPromote) {
             move.action = .{.promote = .Queen };
         } else {
             const toRank = @divFloor(toIndex, 8);
             const fromRank = @divFloor(fromIndex, 8);
-            const isForwardTwo = (board.nextPlayer == .Black and toRank == 4 and fromRank == 6) or (board.nextPlayer == .White and toRank == 3 and fromRank == 1);
+            const isForwardTwo = (colour == .Black and toRank == 4 and fromRank == 6) or (colour == .White and toRank == 3 and fromRank == 1);
             if (isForwardTwo) {
             move.action = .allowFrenchMove;
             } else {
@@ -612,7 +613,7 @@ pub fn inferPlayMove(board: *Board, fromIndex: u32, toIndex: u32, alloc: std.mem
                 const fromFile = @mod(fromIndex, 8);
                 if (toFile != fromFile and !move.isCapture){ // this will include invalid moves but that's checked below
                     move.isCapture = true;
-                    const captureIndex = ((if (board.nextPlayer == .White) toRank-1 else toRank+1)*8) + toFile;
+                    const captureIndex = ((if (colour == .White) toRank-1 else toRank+1)*8) + toFile;
                     move.action = .{ .useFrenchMove = @intCast(captureIndex) };
                 }
             }
@@ -622,8 +623,8 @@ pub fn inferPlayMove(board: *Board, fromIndex: u32, toIndex: u32, alloc: std.mem
         defer castles.deinit();
         const file: usize = @rem(fromIndex, 8);
         const rank: usize = @divFloor(fromIndex, 8);
-        try genAllMoves.tryCastle(&castles, board, @intCast(fromIndex), file, rank, board.nextPlayer, true);
-        try genAllMoves.tryCastle(&castles, board, @intCast(fromIndex), file, rank, board.nextPlayer, false);
+        try genAllMoves.tryCastle(&castles, board, @intCast(fromIndex), file, rank, colour, true);
+        try genAllMoves.tryCastle(&castles, board, @intCast(fromIndex), file, rank, colour, false);
         assert(castles.items.len <= 2);
         if (castles.items.len > 0 and castles.items[0].to == toIndex) {
             move = castles.items[0];
@@ -633,17 +634,16 @@ pub fn inferPlayMove(board: *Board, fromIndex: u32, toIndex: u32, alloc: std.mem
     }
 
     // Check if this is a legal move by the current player. 
-    const allMoves = try genAllMoves.possibleMoves(board, board.nextPlayer, alloc);
+    const allMoves = try genAllMoves.possibleMoves(board, colour, alloc);
     defer alloc.free(allMoves);
     for (allMoves) |m| {
         if (std.meta.eql(move, m)) break;
     } else {
-        std.debug.print("illigal: {any}\n", .{move});
         return error.IllegalMove;
     }
 
     const unMove = board.play(move);
-    if (try search.inCheck(board, board.nextPlayer, alloc)) {
+    if (try search.inCheck(board, colour, alloc)) {
         board.unplay(unMove);
         return error.IllegalMove;
     }

@@ -400,6 +400,12 @@ pub fn tryCastle(moves: *std.ArrayList(Move), board: *Board, i: usize, file: usi
             const rookTo: u6 = if (goingLeft) @intCast(rank*8 + (file - 1)) else @intCast(rank*8 + (file + 1));
             assert(board.squares[kingFrom].is(colour, .King));
             assert(board.squares[kingTo].empty());
+            if (!board.squares[rookFrom].is(colour, .Rook)) {
+                // TODO!
+                // std.debug.print("fail! {} {} {} ", .{board.castling, rookFrom, goingLeft});
+                // board.debugPrint();
+                return;
+            }
             assert(board.squares[rookFrom].is(colour, .Rook));
             assert(board.squares[rookTo].empty());
             const move: Move = .{

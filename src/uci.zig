@@ -2,6 +2,7 @@ const std = @import("std");
 const Board = @import("board.zig").Board;
 const Move = @import("board.zig").Move;
 const search = @import("search.zig").default;
+const Timer = @import("bench.zig").Timer;
 
 // TODO: split into uci.zig and fish.zig 
 
@@ -11,16 +12,17 @@ const UciCommand = union(enum) {
     AreYouReady,
     NewGame,
     SetPositionInitial,
-    SetPositionMoves: struct { board: *Board, moves: [] [5] u8},  // lifetime! don't save these pointers!
+    SetPositionMoves: struct { board: *Board, moves: [] [5] u8 },  // lifetime! don't save these pointers!
     Go,
     Stop,
+    SetOption: struct { name: [] const u8, value: [] const u8 }
 };
 
 const UciInfo = struct {
     depth: ?u64 = null,
     seldepth: ?u64 = null,
     multipv: ?u64 = null,
-    score_cp: ?u64 = null,
+    score_cp: ?i64 = null,
     nodes: ?u64 = null,
     nps: ?u64 = null,
     hashfull: ?u64 = null,
@@ -28,6 +30,8 @@ const UciInfo = struct {
     time: ?u64 = null,
     pv: ?[] const u8 = null, // algebraic notation moves seperated by spaces. Has the lifetime of the string it was parsed from!
     pvFirstMove: ?[5] u8 = null,  // If you just want the first move, and not need to deal with lifetimes.
+    mate: ?i64 = null,
+    cp: ?i64 = null,
 };
 
 // TODO: packed struct for move strings 
@@ -43,7 +47,7 @@ const UciResult = union(enum) {
     InitOk,
     ReadyOk,
     Info: UciInfo,
-    BestMove: [5] u8,
+    BestMove: ?[5] u8,
 
     pub fn parse(str: [] const u8) !UciResult {
         // TODO: this sucks
@@ -73,6 +77,13 @@ const UciResult = union(enum) {
                         result.tbhits = std.fmt.parseInt(u64, words.next() orelse break, 10) catch continue;
                     } else if (std.mem.eql(u8, word, "time")) {
                         result.time = std.fmt.parseInt(u64, words.next() orelse break, 10) catch continue;
+                    } else if (std.mem.eql(u8, word, "score")) {
+                        const units = words.next() orelse break;
+                        if (std.mem.eql(u8, units, "cp")) {
+                            result.cp = std.fmt.parseInt(i64, words.next() orelse break, 10) catch continue;
+                        } else if (std.mem.eql(u8, units, "mate")) {
+                            result.mate = std.fmt.parseInt(i64, words.next() orelse break, 10) catch continue;
+                        }
                     } else if (std.mem.eql(u8, word, "pv")) {
                         result.pv = str[words.index.?..str.len];
                         const first = words.next() orelse break;
@@ -92,7 +103,9 @@ const UciResult = union(enum) {
             var words = std.mem.splitScalar(u8, str, ' ');
             std.debug.assert(std.mem.eql(u8, words.next().?, "bestmove"));
             const first = words.next() orelse return error.UnknownUciStr;
-            if (first.len <= 5) {
+            if (std.mem.eql(u8, first, "(none)")) {
+                return .{.BestMove=null};
+            } else if (first.len <= 5) {
                 var move = std.mem.zeroes([5] u8);
                 @memcpy(move[0..first.len], first);
                 // TODO: this is ignoring the ponder request.
@@ -106,58 +119,136 @@ const UciResult = union(enum) {
 
 var general = (std.heap.GeneralPurposeAllocator(.{}){});
 
+const Stats = struct {
+    fishRandom: u64 = 0,
+    fishOnTime: u64 = 0,
+};
+
 pub fn main() !void {
     var alloc = general.allocator();
     var moveHistory = std.ArrayList([5] u8).init(alloc);
     var board = Board.initial();
     var fish = try Stockfish.init();
+    var stats: Stats = .{};
     
     try fish.send(.Init);
     fish.blockUntilRecieve(.InitOk);
+    try fish.send(.{.SetOption = .{ .name="UCI_LimitStrength", .value="true"}});
+    try fish.send(.{.SetOption = .{ .name="UCI_Elo", .value="1320"}});
+    try fish.send(.{.SetOption = .{ .name="Skill Level", .value="0"}});
     try fish.send(.NewGame);
     try fish.send(.AreYouReady);
     fish.blockUntilRecieve(.ReadyOk);
 
     board.debugPrint();
-
+    
+    var gt = Timer.start();
     while (true) {
-        try playUciMove(&fish, &board, &moveHistory);
+        playUciMove(&fish, &board, &moveHistory, &stats) catch |err| {
+            try logGameOver(err, &board, &moveHistory, gt, &stats);
+            break;
+        };
         board.debugPrint();
 
+        std.debug.print("[info]: I'm thinking.\n", .{});
+        var t = Timer.start();
         const move = search.bestMove(&board, board.nextPlayer) catch |err| {
-            switch (err) {
-                error.GameOver => {
-                    std.debug.print("Game Over!\n", .{});
-                    break;
-                },
-                else => return err,
-            }
+            try logGameOver(err, &board, &moveHistory, gt, &stats);
+            break;
         };
 
-        try moveHistory.append(try writeAlgebraic(move));
-        
+        const moveStr = try writeAlgebraic(move);
+        try moveHistory.append(moveStr);
         _ = board.play(move);
+        std.debug.print("[info]: I played {s} in {}ms.\n", .{moveStr, t.end()});
         board.debugPrint();
     }
     
-    
-
-
-    
     try fish.deinit();
 
-    std.debug.print("[    ]: Done!\n", .{});
+    std.debug.print("[info]: Done!\n", .{});
 }
 
-fn playUciMove(fish: *Stockfish, board: *Board, moveHistory: *std.ArrayList([5] u8)) !void {
+fn logGameOver(err: anyerror, board: *Board, moveHistory: *std.ArrayList([5] u8), gt: Timer, stats: *Stats) !void {
+    switch (err) {
+        error.GameOver => {
+            const result = try search.isGameOver(board, general.allocator());
+            const msg = switch (result) {
+                .Continue => "Game over but I can still move? This is a bug!", 
+                .Stalemate => "Draw (stalemate)",
+                .WhiteWins => "White (fish) wins.", 
+                .BlackWins => "Black (luke) wins."
+            };
+            std.debug.print("[info]: {s} The game lasted {} ply ({} ms).\n", .{msg, moveHistory.items.len, gt.end()});
+            std.debug.print("[info]: The fish played {}/{} moves randomly.\n", .{stats.fishRandom, stats.fishOnTime + stats.fishRandom});
+        },
+        else => return err,
+    }
+}
+
+fn playUciMove(fish: *Stockfish, board: *Board, moveHistory: *std.ArrayList([5] u8), stats: *Stats) !void {
     if (moveHistory.items.len == 0) {
         try fish.send(.SetPositionInitial);
     } else {
         try fish.send(.{.SetPositionMoves=.{ .board=board, .moves=moveHistory.items }});
     }
     try fish.send(.Go);
-    const moveStr = try getBestMove(fish, 10);
-    std.debug.print("move: {?s}\n", .{moveStr});
+
+    
+    const timeLimitMS = 1;
+    const moveStr = m: {
+        std.time.sleep(timeLimitMS * std.time.ns_per_ms);
+        try fish.send(.Stop);
+        std.time.sleep(5 * std.time.ns_per_ms);  // give it a moment to be able to stop
+
+        // Find the move it recommends after 2ms. 
+        var bestMove: ?[5] u8 = null;
+        var moveTime: u64 = 0;
+        while (true) {
+            const infoMsg = try fish.recieve();
+            switch (infoMsg) {
+                .Info => |info| {
+                    if (info.time) |time|{
+                        if (time <= timeLimitMS) {
+                            if (info.pvFirstMove) |move| {
+                                bestMove = move;
+                                moveTime = time;
+                            }
+                        }
+                    }
+                },
+                .BestMove => |bestmove| {
+                    try fish.send(.AreYouReady);
+                    fish.blockUntilRecieve(.ReadyOk);
+                    if (bestmove) |move|{
+                        if (bestMove == null) {
+                            const randomMove = try search.randomMove(board, board.nextPlayer, general.allocator()) ;
+                            const moveStr = try writeAlgebraic(randomMove);
+                            stats.fishRandom += 1;
+                            std.debug.print("[info]: The fish wanted to play {s} but it took too long so I randomly played {s} for it instead!\n", .{move, moveStr});
+                            break :m moveStr;
+                        } else {
+                            stats.fishOnTime += 1;
+                            std.debug.print("[info]: The fish played {s} in {}ms.\n", .{move, moveTime});
+                            break :m move;
+                        }
+                    } else  {
+                        std.debug.print("[info]: The fish knows it has no moves!\n", .{});
+                        return error.GameOver;
+                    }
+                },
+                else => continue,
+            }
+        }
+        try fish.send(.AreYouReady);
+        fish.blockUntilRecieve(.ReadyOk);
+        if (bestMove) |move| {
+            return move;
+        } else {
+            return error.NoMoveFound;
+        }
+    };
+
     const fromFile = try letterToFile(moveStr[0]);
     const fromRank = try letterToRank(moveStr[1]);
     const toFile = try letterToFile(moveStr[2]);
@@ -166,36 +257,6 @@ fn playUciMove(fish: *Stockfish, board: *Board, moveHistory: *std.ArrayList([5] 
     const toIndex = toRank*8 + toFile;
     _ = try @import("board.zig").inferPlayMove(board, fromIndex, toIndex, general.allocator());
     try moveHistory.append(moveStr);
-}
-
-fn getBestMove(fish: *Stockfish, timeLimitMS: u64) ![5] u8 {
-    std.time.sleep(timeLimitMS * std.time.ns_per_ms);
-    try fish.send(.Stop);
-    std.time.sleep(2 * std.time.ns_per_ms);  // give it a moment to be able to stop
-    try fish.send(.AreYouReady);
-
-    // Find the move it recommends after 2ms. 
-    var bestMove: ?[5] u8 = null;
-    while (true) {
-        const infoMsg = try fish.recieve();
-        switch (infoMsg) {
-            .Info => |info| {
-                if (info.time) |time|{
-                    if (time > timeLimitMS) break;
-                }
-                if (info.pvFirstMove) |move| {
-                    bestMove = move;
-                }
-            },
-            else => continue,
-        }
-    }
-    fish.blockUntilRecieve(.ReadyOk);
-    if (bestMove) |move| {
-        return move;
-    } else {
-        return error.NoMoveFound;
-    }
 }
 
 const Stockfish = struct {
@@ -252,6 +313,16 @@ fn sendUci(out: anytype, cmd: UciCommand) !void {
                 }
                 try letters.append(' ');
             }
+            try letters.append('\n');
+            std.debug.print("[luke]: {s}", .{letters.items});
+            return out.writeAll(letters.items);
+        },
+        .SetOption => |option| {
+            var letters = std.ArrayList(u8).init(general.allocator());
+            try letters.appendSlice("setoption name ");
+            try letters.appendSlice(option.name);
+            try letters.appendSlice(" value ");
+            try letters.appendSlice(option.value);
             try letters.append('\n');
             std.debug.print("[luke]: {s}", .{letters.items});
             return out.writeAll(letters.items);
@@ -355,8 +426,14 @@ fn writeAlgebraic(move: Move) ![5] u8 {
     
     switch (move.action) {
         .promote => |kind| {
-            _ = kind;
-            std.debug.panic("TODO", .{});
+            const char = @as(u8, switch (kind) {
+                .Queen => 'q',
+                .Knight => 'n',
+                .Rook => 'r',
+                .Bishop => 'b',
+                else => unreachable,
+            });
+            moveStr[4] = char;
         },
         else => {}
     }
@@ -380,7 +457,7 @@ fn rankToLetter(rank: u6) !u8 {
 }
 
 fn letterToRank(letter: u8) !u6 {
-    if (letter < '1' or letter > '7') return error.UnknownUciStr;
+    if (letter < '1' or letter > '8') return error.UnknownUciStr;
     return @intCast(letter - '1');
 }
 

@@ -77,6 +77,26 @@ pub fn inCheck(game: *Board, me: Colour, alloc: std.mem.Allocator) !bool {
     }
 }
 
+pub fn randomMove(game: *Board, me: Colour, alloc: std.mem.Allocator) !Move {
+    const moves = try genAllMoves.possibleMoves(game, me, alloc);
+    defer alloc.free(moves);
+    if (moves.len == 0) return error.GameOver;
+
+    var legalMoves = try std.ArrayList(Move).initCapacity(alloc, 50);
+    defer legalMoves.deinit();
+    
+    for (moves) |move| {
+        const unMove = game.play(move);
+        defer game.unplay(unMove);
+        if (try inCheck(game, me, alloc)) continue;
+        try legalMoves.append(move);
+    }
+
+    if (legalMoves.items.len == 0) return error.GameOver;
+    const choice = if (opts.beDeterministicForTest or legalMoves.items.len == 1) 0 else rng.uintLessThanBiased(usize, legalMoves.items.len);
+    return legalMoves.items[choice];
+}
+
 // This has its own loop because I actually need to know which move is best which walkEval doesn't return. 
 // Also means I can reset the temp allocator more often. 
 pub fn bestMove(game: *Board, me: Colour) !Move {
