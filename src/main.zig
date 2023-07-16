@@ -57,7 +57,7 @@ pub fn main() !void {
 
 // TODO: pruning does not work on maxDepth=2
 fn debugPrintBestMoves(fen: [] const u8, colour: board.Colour) !void {
-    const strat = moves.Strategy(.{ .beDeterministicForTest=true, .maxDepth=3});
+    const strat = search.Strategy(.{ .beDeterministicForTest=true, .maxDepth=3});
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     var quickAlloc = arena.allocator();
     defer std.debug.assert(arena.reset(.retain_capacity));
@@ -87,7 +87,7 @@ fn debugPrintBestMoves(fen: [] const u8, colour: board.Colour) !void {
 }
 
 fn debugPrintAllMoves(fen: [] const u8, colour: board.Colour) !void {
-    const strat = moves.Strategy(.{ .beDeterministicForTest=true, .maxDepth=3});
+    const strat = search.Strategy(.{ .beDeterministicForTest=true, .maxDepth=3});
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     var quickAlloc = arena.allocator();
     defer std.debug.assert(arena.reset(.retain_capacity));
@@ -99,7 +99,7 @@ fn debugPrintAllMoves(fen: [] const u8, colour: board.Colour) !void {
     std.debug.print("Initial Position:\n", .{});
     game.debugPrint();
     // TODO: check
-    const allMoves = try moves.genAllMoves.possibleMoves(&game, colour, alloc);
+    const allMoves = try search.genAllMoves.possibleMoves(&game, colour, alloc);
     std.debug.print("{} has {} possible moves.\n", .{colour, allMoves.len});
     try initial.expectEqual(&game); // undo move sanity check
     
@@ -131,7 +131,7 @@ fn debugPrintAllMoves(fen: [] const u8, colour: board.Colour) !void {
 fn debugPlayOne(game: *board.Board, i: usize, colour: board.Colour, rng: *std.rand.Random, stdout: anytype) !bool {
     _ = rng;
     try stdout.print("_________________\n", .{});
-    const allMoves = try moves.genAllMoves.possibleMoves(game, colour, alloc);
+    const allMoves = try search.genAllMoves.possibleMoves(game, colour, alloc);
     try stdout.print("{} has {} legal moves. \n", .{colour, allMoves.len});
     defer alloc.free(allMoves);
     if (allMoves.len == 0) {
@@ -139,7 +139,7 @@ fn debugPlayOne(game: *board.Board, i: usize, colour: board.Colour, rng: *std.ra
     }
 
     const start = std.time.nanoTimestamp();
-    const move = try moves.Strategy(.{ .beDeterministicForTest=true }).bestMove(game, colour);
+    const move = try search.Strategy(.{ .beDeterministicForTest=true }).bestMove(game, colour);
     try stdout.print("Found move in {}ms\n", .{@divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms))});
     try stdout.print("{} move {} is {}\n", .{colour, i, move});
     _ = game.play(move);

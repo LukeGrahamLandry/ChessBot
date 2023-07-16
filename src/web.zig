@@ -55,6 +55,7 @@ export fn playNextMove() i32 {
       switch (err) {
          error.OutOfMemory => return 1,
          error.GameOver => return if (nextColour == .White) 2 else 3,
+         error.ForceStop => return 1,
       }
    };
 
@@ -65,35 +66,34 @@ export fn playNextMove() i32 {
    return 0;
 }
 
-// TODO: this is a really slow way of doing this. dont need to collect the moves and dont need to check every starting piece 
 /// Returns a bit board showing which squares the piece in <from> can move to. 
 /// IN: internalBoard, nextColour
 export fn getPossibleMoves(from: i32) u64 {
    const piece = internalBoard.squares[@intCast(from)];
    if (piece.empty()) return 0;
    var result: u64 = 0;
-   const allMoves = genAllMoves.possibleMoves(&internalBoard, piece.colour, alloc) catch return 1;
-   defer alloc.free(allMoves);
-   for (allMoves) |move| {
-      if (@as(i32, move.from) == from) {
-         const unMove = internalBoard.play(move);
-         defer internalBoard.unplay(unMove);
-         if (search.inCheck(&internalBoard, piece.colour, alloc) catch return 1) continue;
-         result |= @as(u64, 1) << @intCast(move.to);
-      }
+   const file = @mod(from, 8);
+   const rank = @divFloor(from, 8);
+
+   var allMoves = std.ArrayList(Move).init(alloc);
+   genAllMoves.collectOnePieceMoves(&allMoves, &internalBoard, @intCast(from), @intCast(file), @intCast(rank)) catch return 1;
+   defer allMoves.deinit();
+   for (allMoves.items) |move| {
+      const unMove = internalBoard.play(move);
+      defer internalBoard.unplay(unMove);
+      if (search.inCheck(&internalBoard, piece.colour, alloc) catch return 1) continue;
+      result |= @as(u64, 1) << @intCast(move.to);
    }
    return result;
 }
 
 /// IN: fenView
 /// OUT: internalBoard, boardView, nextColour
-// TODO: this always sets next move to white but real fen contains that info. 
 export fn setFromFen(length: u32) bool {
    const fenSlice = fenView[0..@as(usize, length)];
    const temp = Board.fromFEN(fenSlice) catch return false;
    internalBoard = temp;
    boardView = @bitCast(internalBoard.squares);
-   nextColour = .White;  // TODO
    lastMove = null;
    return true;
 }
@@ -121,63 +121,13 @@ export fn getMaterialEval() i32 {
 /// OUT: internalBoard, boardView, nextColour
 export fn playHumanMove(fromIndex: u32, toIndex: u32) i32 {
    if (fromIndex >= 64 or toIndex >= 64) return 1;
-   if (internalBoard.squares[fromIndex].colour != nextColour) return 4;
-
-   const isCapture = !internalBoard.squares[toIndex].empty() and internalBoard.squares[toIndex].colour != nextColour;
-   var move: Move = .{ .from=@intCast(fromIndex), .to=@intCast(toIndex), .action=.none, .isCapture=isCapture};
-   // TODO: ui should know when promoting so it can let you choose which piece to make. 
-   if (internalBoard.squares[fromIndex].kind == .Pawn) {
-      // TODO: factor out some canPromote function so magic numbers live in one place
-      const isPromote = (nextColour == .Black and toIndex <= 7) or (nextColour == .White and toIndex > (64-8));
-      if (isPromote) {
-         move.action = .{.promote = .Queen };
-      } else {
-         const toRank = @divFloor(toIndex, 8);
-         const fromRank = @divFloor(fromIndex, 8);
-         const isForwardTwo = (nextColour == .Black and toRank == 4 and fromRank == 6) or (nextColour == .White and toRank == 3 and fromRank == 1);
-         if (isForwardTwo) {
-            move.action = .allowFrenchMove;
-         } else {
-            const toFile = @mod(toIndex, 8);
-            const fromFile = @mod(fromIndex, 8);
-            if (toFile != fromFile and !move.isCapture){ // this will include invalid moves but that's checked below
-               move.isCapture = true;
-               const captureIndex = ((if (nextColour == .White) toRank-1 else toRank+1)*8) + toFile;
-               move.action = .{ .useFrenchMove = @intCast(captureIndex) };
-            }
-         }
+   
+   lastMove = (@import("board.zig").inferPlayMove(&internalBoard, fromIndex, toIndex, alloc) catch |err| {
+      switch (err) {
+         error.IllegalMove => return 4,
+         else => return 1,
       }
-   } else if (internalBoard.squares[fromIndex].kind == .King) {
-      var castles = std.ArrayList(Move).init(alloc);
-      defer castles.deinit();
-      const file: usize = @rem(fromIndex, 8);
-      const rank: usize = @divFloor(fromIndex, 8);
-      genAllMoves.tryCastle(&castles, &internalBoard, @intCast(fromIndex), file, rank, nextColour, true) catch return 1;
-      genAllMoves.tryCastle(&castles, &internalBoard, @intCast(fromIndex), file, rank, nextColour, false) catch return 1;
-      assert(castles.items.len <= 2);
-      if (castles.items.len > 0 and castles.items[0].to == toIndex) {
-         move = castles.items[0];
-      } else if (castles.items.len > 1 and castles.items[1].to == toIndex) {
-         move = castles.items[1];
-      }
-   }
-
-   // Check if this is a legal move by the current player. 
-   const allMoves = genAllMoves.possibleMoves(&internalBoard, nextColour, alloc) catch return 1;
-   defer alloc.free(allMoves);
-   for (allMoves) |m| {
-      if (std.meta.eql(move, m)) break;
-   } else {
-      return 4;
-   }
-
-   const unMove = internalBoard.play(move);
-   if (search.inCheck(&internalBoard, nextColour, alloc) catch return 1) {
-      internalBoard.unplay(unMove);
-      return 4;
-   }
-
-   lastMove = move;
+   }).move;
    boardView = @bitCast(internalBoard.squares);
    nextColour = nextColour.other();
    return 0;

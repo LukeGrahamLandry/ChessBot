@@ -1,12 +1,13 @@
 const std = @import("std");
 
-fn assert(val: bool) void {
+inline fn assert(val: bool) void {
     std.debug.assert(val);
     // _ = val;
 }
 
 // Calling hasCorrectPositionsBits doesn't get optimised out in release mode when passed to std assert. But it does if passed to a function that discards it. 
-fn assertSlow(val: bool) void {
+// I think even this and inlining both doesn't fix that
+inline fn assertSlow(val: bool) void {
     // std.debug.assert(val);
     _ = val;
 }
@@ -313,6 +314,7 @@ pub const Board = struct {
                 assert(self.squares[captureIndex].is(colour.other(), .Pawn));
                 self.squares[move.to] = thisMove.original;
                 self.squares[move.from] = Piece.EMPTY;
+                self.simpleEval -= self.squares[captureIndex].eval();
                 self.squares[captureIndex] = Piece.EMPTY;
                 assert(move.isCapture and thisMove.taken.kind == .Empty);  // confusing
                 self.squares[captureIndex] = Piece.EMPTY;
@@ -353,6 +355,7 @@ pub const Board = struct {
             .allowFrenchMove => {},
             .useFrenchMove => |captureIndex| {
                 self.squares[captureIndex] = .{.kind=.Pawn, .colour=colour.other()};
+                self.simpleEval += self.squares[captureIndex].eval();
                 self.peicePositions.setBit(captureIndex, colour.other());
             }
         }
@@ -491,38 +494,40 @@ pub const Board = struct {
     }
 
     // Asserts to this don't get compiled out in release mode! It's like 10x faster with this commented out. 
-    pub fn hasCorrectPositionsBits(board: *const Board) bool {
+    pub inline fn hasCorrectPositionsBits(board: *const Board) bool {
+        _ = board;
         
-        const valid = v: {
-            var flag: u64 = 1;
-            for (board.squares) |piece| {
-                defer flag = flag << 1;
-                if (piece.kind == .Empty){
-                    if ((board.peicePositions.white & flag) != 0) break :v false;
-                    if ((board.peicePositions.black & flag) != 0) break :v false;
-                } else {
-                    if ((board.peicePositions.getFlag(piece.colour) & flag) == 0) break :v false;
-                }
-            }
+        // const valid = v: {
+        //     var flag: u64 = 1;
+        //     for (board.squares) |piece| {
+        //         defer flag = flag << 1;
+        //         if (piece.kind == .Empty){
+        //             if ((board.peicePositions.white & flag) != 0) break :v false;
+        //             if ((board.peicePositions.black & flag) != 0) break :v false;
+        //         } else {
+        //             if ((board.peicePositions.getFlag(piece.colour) & flag) == 0) break :v false;
+        //         }
+        //     }
 
-            // TODO: this is broken until I detect checkmate
-            // if (!board.squares[board.whiteKingIndex].is(.White, .King)) {
-            //     if (board.whiteKingIndex == 0) std.debug.print("whiteKingIndex=0, maybe not set?\n", .{});
-            //     break :v false;
-            // }
-            // if (!board.squares[board.blackKingIndex].is(.Black, .King)) {
-            //     if (board.blackKingIndex == 0) std.debug.print("blackKingIndex=0, maybe not set?\n", .{});
-            //     break :v false;
-            // }
-            break :v true;
-        };
+        //     // TODO: this is broken until I detect checkmate
+        //     // if (!board.squares[board.whiteKingIndex].is(.White, .King)) {
+        //     //     if (board.whiteKingIndex == 0) std.debug.print("whiteKingIndex=0, maybe not set?\n", .{});
+        //     //     break :v false;
+        //     // }
+        //     // if (!board.squares[board.blackKingIndex].is(.Black, .King)) {
+        //     //     if (board.blackKingIndex == 0) std.debug.print("blackKingIndex=0, maybe not set?\n", .{});
+        //     //     break :v false;
+        //     // }
+        //     if (board.simpleEval != @import("movegen.zig").MoveFilter.Any.get().slowSimpleEval(board)) break :v false;
+        //     break :v true;
+        // };
 
-        // if (!valid and !isWasm) {
-        //     board.debugPrint();
-        //     std.debug.print("white: {b}\nblack: {b}\neval={}. {} to move. kings: {} {}\n {}\n\n", .{board.peicePositions.white, board.peicePositions.black, board.simpleEval, board.nextPlayer, board.whiteKingIndex, board.blackKingIndex, board.castling});
-        // }
-        return valid;
-        // return true;
+        // // if (!valid and !isWasm) {
+        // //     board.debugPrint();
+        // //     std.debug.print("white: {b}\nblack: {b}\neval={}. {} to move. kings: {} {}\n {}\n\n", .{board.peicePositions.white, board.peicePositions.black, board.simpleEval, board.nextPlayer, board.whiteKingIndex, board.blackKingIndex, board.castling});
+        // // }
+        // return valid;
+        return true;
         
     }
 
@@ -573,8 +578,75 @@ pub const Move = struct {
     }
 };
 
+// TODO: report in ui
 pub const GameOver = enum {
     Continue, Stalemate, WhiteWins, BlackWins
 };
 
 const isWasm = @import("builtin").target.isWasm();
+
+pub const InferMoveErr = error {IllegalMove} || @import("search.zig").MoveErr;
+
+// TODO: don't like that im hard coding strategies here
+const genAllMoves = @import("movegen.zig").MoveFilter.Any.get();
+const search = @import("search.zig").default;
+pub fn inferPlayMove(board: *Board, fromIndex: u32, toIndex: u32, alloc: std.mem.Allocator) InferMoveErr!OldMove {
+    if (board.squares[fromIndex].colour != board.nextPlayer) return error.IllegalMove;
+
+    const isCapture = !board.squares[toIndex].empty() and board.squares[toIndex].colour != board.nextPlayer;
+    var move: Move = .{ .from=@intCast(fromIndex), .to=@intCast(toIndex), .action=.none, .isCapture=isCapture};
+    // TODO: ui should know when promoting so it can let you choose which piece to make. 
+    if (board.squares[fromIndex].kind == .Pawn) {
+        // TODO: factor out some canPromote function so magic numbers live in one place
+        const isPromote = (board.nextPlayer == .Black and toIndex <= 7) or (board.nextPlayer == .White and toIndex > (64-8));
+        if (isPromote) {
+            move.action = .{.promote = .Queen };
+        } else {
+            const toRank = @divFloor(toIndex, 8);
+            const fromRank = @divFloor(fromIndex, 8);
+            const isForwardTwo = (board.nextPlayer == .Black and toRank == 4 and fromRank == 6) or (board.nextPlayer == .White and toRank == 3 and fromRank == 1);
+            if (isForwardTwo) {
+            move.action = .allowFrenchMove;
+            } else {
+                const toFile = @mod(toIndex, 8);
+                const fromFile = @mod(fromIndex, 8);
+                if (toFile != fromFile and !move.isCapture){ // this will include invalid moves but that's checked below
+                    move.isCapture = true;
+                    const captureIndex = ((if (board.nextPlayer == .White) toRank-1 else toRank+1)*8) + toFile;
+                    move.action = .{ .useFrenchMove = @intCast(captureIndex) };
+                }
+            }
+        }
+    } else if (board.squares[fromIndex].kind == .King) {
+        var castles = std.ArrayList(Move).init(alloc);
+        defer castles.deinit();
+        const file: usize = @rem(fromIndex, 8);
+        const rank: usize = @divFloor(fromIndex, 8);
+        try genAllMoves.tryCastle(&castles, board, @intCast(fromIndex), file, rank, board.nextPlayer, true);
+        try genAllMoves.tryCastle(&castles, board, @intCast(fromIndex), file, rank, board.nextPlayer, false);
+        assert(castles.items.len <= 2);
+        if (castles.items.len > 0 and castles.items[0].to == toIndex) {
+            move = castles.items[0];
+        } else if (castles.items.len > 1 and castles.items[1].to == toIndex) {
+            move = castles.items[1];
+        }
+    }
+
+    // Check if this is a legal move by the current player. 
+    const allMoves = try genAllMoves.possibleMoves(board, board.nextPlayer, alloc);
+    defer alloc.free(allMoves);
+    for (allMoves) |m| {
+        if (std.meta.eql(move, m)) break;
+    } else {
+        std.debug.print("illigal: {any}\n", .{move});
+        return error.IllegalMove;
+    }
+
+    const unMove = board.play(move);
+    if (try search.inCheck(board, board.nextPlayer, alloc)) {
+        board.unplay(unMove);
+        return error.IllegalMove;
+    }
+
+    return unMove;
+}

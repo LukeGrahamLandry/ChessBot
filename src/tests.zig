@@ -176,8 +176,8 @@ fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, alloc: st
 pub fn runTestCountPossibleGames() !void {
     // https://en.wikipedia.org/wiki/Shannon_number
     try (PerftTest {
-        .possibleGames = &[_] u64 { 20, 400, 8902, 197281, 4865609, 119060324 },  // 3195901860 is too slow to deal with but also fails TODO
-        .possibleMates = &[_] u64 {  0,   0,    0,      8,     347,     10828 },  //     435767
+        .possibleGames = &[_] u64 { 20, 400, 8902, 197281, 4865609 },  // 119060324 slow but passes. 3195901860 is too slow to deal with but also fails TODO
+        .possibleMates = &[_] u64 {  0,   0,    0,      8,     347 },  //     10828                   435767
         .fen = @import("board.zig").INIT_FEN,
     }).run();
 }
@@ -213,8 +213,8 @@ const PerftTest = struct {
 test "perft 3" {
     // https://www.chessprogramming.org/Perft_Results
     try (PerftTest {
-        .possibleGames = &[_] u64 { 14, 191, 2812, 43238, 674624, 11030083, }, // 178633661 slow but passes
-        .possibleMates = &[_] u64 {  0,   0,    0,    17,      0,     2733,  }, // 87
+        .possibleGames = &[_] u64 { 14, 191, 2812, 43238, 674624 }, // 11030083, 178633661 slow but passes
+        .possibleMates = &[_] u64 {  0,   0,    0,    17,      0,  }, // 2733, 87
         .fen = "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w",
     }).run();
 }

@@ -1,6 +1,9 @@
+const WHITE = 0;
+const BLACK = 1;
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
-const minMoveTimeMs = 500;  // When computer vs computer, if the engine is faster than this, it will wait before playing again. 
+const ctx = document.getElementById("board").getContext("2d");
+// const minMoveTimeMs = 500;  // When computer vs computer, if the engine is faster than this, it will wait before playing again. 
 
 // TODO: select which colour is human or computer. button to switch mid game for testing. 
 // TODO: option to render black at the bottom
@@ -34,6 +37,10 @@ function tickGame() {
             break;
     }
 };
+
+function handleAskRestart() {
+    if (confirm("Reset the game to the initial position?")) handleRestart();
+}
 
 function handleRestart() {
     handlePause();
@@ -189,13 +196,13 @@ function drawBitBoard(targetSquaresFlag, colour) {
 }
 
 function drawBitBoardPair(magicEngineIndex) {
-    const a = Engine.getBitBoard(magicEngineIndex, 0);
-    const b = Engine.getBitBoard(magicEngineIndex, 1);
+    const w = Engine.getBitBoard(magicEngineIndex, WHITE);
+    const b = Engine.getBitBoard(magicEngineIndex, BLACK);
     for (let i=0n;i<64n;i++) {
         const flag = 1n << i;
-        if (a & b & flag) {
+        if (w & b & flag) {
             fillSquare(Number(i % 8n), Number(i / 8n), "purple", false);
-        } else if (a & flag) {
+        } else if (w & flag) {
             fillSquare(Number(i % 8n), Number(i / 8n), "red", false);
         } else if (b & flag) {
             fillSquare(Number(i % 8n), Number(i / 8n), "blue", false);
@@ -206,7 +213,7 @@ function drawBitBoardPair(magicEngineIndex) {
 function renderBoard() {
     const fen = getFenFromEngine();
     document.getElementById("fen").value = fen;
-    document.getElementById("player").innerText = Engine.isWhiteTurn() ? "White" : "Black";
+    document.getElementById("player").innerText = (Engine.isWhiteTurn() ? "White" : "Black") + "'s Turn";  // TODO: this is where winner/draw info will go
     document.getElementById("mEval").innerText = Engine.getMaterialEval();
 
     // TODO: If I really cared I could just render the diff instead of clearing the board
@@ -238,11 +245,15 @@ function renderBoard() {
             console.log("Invalid bitBoardInfo string.");
     }
 
-    // TODO: different colour square when its not that colour's turn because currently it's confusing 
     if (clicked != null) {
-        fillSquare(clicked[0], clicked[1], "yellow", true);
-        const targetSquaresFlag = Engine.getPossibleMoves(frToIndex(clicked[0], clicked[1]));
-        drawBitBoard(targetSquaresFlag, "lightblue");
+        const whitePieces = BigInt(Engine.getBitBoard(0, WHITE));
+        const blackPieces = BigInt(Engine.getBitBoard(0, BLACK));
+        const allPieces = whitePieces | blackPieces;
+        const clickedIndex = frToIndex(clicked[0], clicked[1]);
+        const targetSquaresFlag = Engine.getPossibleMoves(Number(clickedIndex));
+        const clickedFlag = 1n << BigInt(clickedIndex);
+        if ((allPieces & clickedFlag) != 0)fillSquare(clicked[0], clicked[1], "yellow", true);
+        drawBitBoard(targetSquaresFlag, (whitePieces & clickedFlag) ? "lightblue" : "red");
     }
     
     // TODO: why do I need to remake this slice every time?
@@ -259,14 +270,26 @@ function fillSquare(file, rank, colour, isSmall) {
     const squareSize = document.getElementById("board").width / 8;
     ctx.fillStyle = colour;
     if (isSmall) {
-        ctx.fillRect(file*squareSize + 10, (7-rank)*squareSize + 10, squareSize - 20, squareSize - 20);
+        const edge = squareSize * 0.25;
+        ctx.fillRect(file*squareSize + edge, (7-rank)*squareSize + edge, squareSize - edge*2, squareSize - edge*2);
     } else {
         ctx.fillRect(file*squareSize, (7-rank)*squareSize, squareSize, squareSize);
     }
 }
 
+function handleResize(){
+    const size = Math.min(Math.min(window.innerWidth, window.innerHeight) * 0.9, 600);
+    const board = document.getElementById("board");
+    board.style.width = "";
+    board.style.height = "";
+    board.width = size;
+    board.height = size; 
+    renderBoard();
+}
+
 window.chessJsReady = true;
 if (window.startChessIfReady !== undefined) window.startChessIfReady();
+
 
 //////////
 // The Zen of HashMap Lang;

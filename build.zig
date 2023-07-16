@@ -106,3 +106,6 @@ pub fn build(b: *std.Build) void {
     // Run the tests before bench to not report misleading numbers. 
     bench_run_step.dependOn(test_step);
 }
+
+// TODO
+// zig build-lib src/web.zig -target wasm32-freestanding -dynamic -rdynamic -O ReleaseFast && mv web.wasm web/main.wasm

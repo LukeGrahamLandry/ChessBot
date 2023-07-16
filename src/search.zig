@@ -7,9 +7,10 @@ const Kind = @import("board.zig").Kind;
 const Move = @import("board.zig").Move;
 const GameOver = @import("board.zig").GameOver;
 
+// TODO: carefully audit any use of usize because wasm is 32 bit!
 const isWasm = @import("builtin").target.isWasm();
 
-fn assert(val: bool) void {
+inline fn assert(val: bool) void {
     // if (val) @panic("lol nope");
     std.debug.assert(val);
     // _ = val;
@@ -22,8 +23,6 @@ pub const HashAlgo = enum {
     XxHash64,
     Murmur2_64,
     CityHash64,
-    // Slower because it does individual struct parts?
-    StdAuto,
 };
 
 pub const CheckAlgo = enum {
@@ -40,29 +39,23 @@ pub const genAllMoves = movegen.MoveFilter.Any.get();
 pub const StratOpts = struct {
     maxDepth: comptime_int = 3,  // TODO: should be runtime param to bestMove so wasm can change without increasing code size. 
     doPruning: bool = true, 
-    beDeterministicForTest: bool = true,  // Interesting that it's much faster with this =true. Rng is slow!
-    memoMapSizeMB: usize = 20,  // Zero means don't use memo map at all. 
-    memoMapFillPercent: usize = 60,  // TODO: this is unused in my memo table impl
+    beDeterministicForTest: bool = true,
+    memoMapSizeMB: u64 = 100,  // Zero means don't use memo map at all. 
     hashAlgo: HashAlgo = .CityHash64,
     checkDetection: CheckAlgo = .ReverseFromKing,
     followCaptureDepth: i32 = 5,
 };
 
-
-const MoveErr = error { GameOver, OutOfMemory };
+pub const MoveErr = error { GameOver, OutOfMemory, ForceStop };
 
 // TODO: script that tests different variations (compare speed and run correctness tests). 
 pub fn Strategy(comptime opts: StratOpts) type {
     return struct {  // Start Strategy. 
 
 pub const config = opts;
-comptime { 
-    assert(@sizeOf(Piece) == @sizeOf(u8)); 
-    assert(opts.memoMapFillPercent <= 100);
-}
-
 const useMemoMap = opts.memoMapSizeMB > 0;
 
+// None of this is thread safe!
 // This gets reset after each whole decision is done.
 var upperArena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 // This gets reset after checking each top level move. 
@@ -92,7 +85,6 @@ pub fn bestMove(game: *Board, me: Colour) !Move {
     const bestMoves = try allEqualBestMoves(game, me, alloc);
     defer bestMoves.deinit();
 
-    // assert(bestMoves.items.len > 0 and bestMoves.items.len <= moves.len);
     // You can't just pick a deterministic random because pruning might end up with a shorter list of equal moves. 
     // Always choosing the first should be fine because pruning just cuts off the search early.
     // Generating random numbers is quite slow, so don't do it if theres only 1 option anyway. 
@@ -101,7 +93,9 @@ pub fn bestMove(game: *Board, me: Colour) !Move {
 }
 
 var memoMap: ?MemoTable = null;
+pub var forceStop = false;
 
+// TODO: why am I returning an array list here but a slice from possibleMoves? 
 pub fn allEqualBestMoves(game: *Board, me: Colour, alloc: std.mem.Allocator) MoveErr!std.ArrayList(Move) {
     const moves = try genAllMoves.possibleMoves(game, me, alloc);
     defer alloc.free(moves);
@@ -111,6 +105,7 @@ pub fn allEqualBestMoves(game: *Board, me: Colour, alloc: std.mem.Allocator) Mov
     var bestMoves = try std.ArrayList(Move).initCapacity(alloc, 50);
 
     // TODO: I don't like that I can't init this outside. 
+    // Not using the arena alloc because this persists after the move is played so work can be reused.  
     if (memoMap == null) memoMap = try MemoTable.initWithCapacity(opts.memoMapSizeMB, std.heap.page_allocator);
     var memo = &memoMap.?;
     defer memo.deinit(alloc);
@@ -130,7 +125,7 @@ pub fn allEqualBestMoves(game: *Board, me: Colour, alloc: std.mem.Allocator) Mov
         } else if (value == bestVal) {
             try bestMoves.append(move);
         }
-        assert(movesArena.reset(.retain_capacity));
+        _ = movesArena.reset(.retain_capacity);
     }
 
     if (bestMoves.items.len == 0) return error.GameOver;
@@ -142,6 +137,8 @@ pub fn allEqualBestMoves(game: *Board, me: Colour, alloc: std.mem.Allocator) Mov
 // The eval of <game>, positive means <me> is winning, assuming it is <me>'s turn. 
 // Returns error.GameOver if there were no possible moves. 
 pub fn walkEval(game: *Board, me: Colour, remaining: i32, bigRemaining: i32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, count: *u64, memo: *MemoTable, comptime capturesOnly: bool) MoveErr!i32 {
+    if (forceStop) return error.ForceStop;
+
     // After alpha-beta, bigger starting cap, and not reallocating each move, this does make it faster. 
     // Makes Black move 4 end states go 16,000,000 -> 1,000,000
     // But now after better pruning it does almost nothing. 
@@ -178,7 +175,8 @@ pub fn walkEval(game: *Board, me: Colour, remaining: i32, bigRemaining: i32, bes
                     const val = walkEval(game, me.other(), opts.maxDepth, bigRemaining, bestWhiteEval, bestBlackEval, alloc, count, memo, true) catch |err| {
                     switch (err) {
                         error.OutOfMemory => return err,
-                        error.GameOver => break :v 1234567,
+                        error.GameOver => break :v 1234567,  // TODO: return mate in x score for the right side. just do it as like 1000000 + x. draw counts as good for the loosing side so like -301 for either so it auto perfers that if loosing by more than a piece?
+                        error.ForceStop => return error.ForceStop,
                     }
                 };
                 break :v -val;
@@ -189,6 +187,7 @@ pub fn walkEval(game: *Board, me: Colour, remaining: i32, bigRemaining: i32, bes
                 switch (err) {
                     error.OutOfMemory => return err,
                     error.GameOver => break :r 1234567,
+                    error.ForceStop => return error.ForceStop,
                 }
             };
             break :r -v;
@@ -200,8 +199,8 @@ pub fn walkEval(game: *Board, me: Colour, remaining: i32, bigRemaining: i32, bes
         }
     }
 
-    // TODO: don't bother storing it if it came from simpleEval sicne I capculate that incrementally so it's free to look up. that might change if i want to consider more complicated things like piece positions. 
     if (useMemoMap){
+        // Can never get here if forceStop=true. 
         memo.setAndOverwriteBucket(game, .{
             .eval = if (me == .White) bestVal else -bestVal,
             .remaining = remaining,
@@ -273,13 +272,12 @@ pub const MemoTable = struct {
     buffer: [] MemoEntry,
     bucketMask: u64,
 
-    pub fn initWithCapacity(comptime sizeMB: usize, alloc: std.mem.Allocator) !MemoTable {
+    pub fn initWithCapacity(comptime sizeMB: u64, alloc: std.mem.Allocator) !MemoTable {
         if (sizeMB == 0) @panic("MemoTable.initWithCapacity(0)");
-
-        const targetCapacity = (sizeMB * 1024 * 1024) / @sizeOf(MemoEntry);
-        // TODO WASM is 32 bit
-        const bits: u5 = @truncate(std.math.log2(targetCapacity));
-        const realCapacity = @as(usize, 1) << bits;
+        const targetCapacity: u64 = (sizeMB * 1024 * 1024) / @sizeOf(MemoEntry);
+        const bits: u6 = @intCast(std.math.log2(targetCapacity));
+        // WASM is 32 bit, make sure not to overflow a usize (4 GB). 
+        const realCapacity = @as(usize, 1) << @min(31, bits);
         if (!std.math.isPowerOfTwo(realCapacity)) std.debug.panic("MemoTable calculated size is {}, not a power of two!", .{realCapacity});
         var self = MemoTable { .buffer = try alloc.alloc(MemoEntry, realCapacity), .bucketMask = (realCapacity-1)};
         for (0..realCapacity) |i| {
@@ -301,7 +299,6 @@ pub const MemoTable = struct {
             .XxHash64 => std.hash.XxHash64.hash(0, data),
             .Murmur2_64 => std.hash.Murmur2_64.hash(data),
             .CityHash64 => std.hash.CityHash64.hash(data),
-            else => @compileError("hash algo not implemented"),
         };
         assert(hashcode != 0);  // collission with my empty bucket indicator
         return hashcode;

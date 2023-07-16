@@ -6,14 +6,16 @@
   </head>
   <body style="background-color: gray;">
     <div style="text-align: center;">
-        <canvas id="board" style="background:url(assets/board.svg); width: 30%;"> Your browser doesn't support canvas. Apperently it's 2004 where you live. </canvas>
+        <noscript> Your browser doesn't support JavaScript. Apperently it's 1995 where you live. </noscript>
+        <canvas id="board" style="background:url(assets/board.svg); width: 90%; max-width: 500px;"> Your browser doesn't support canvas. Apperently it's 2004 where you live. </canvas>
+        <div id="loading"> Loading... </div>
         <div id="controls">
-            <button onclick="handleRestart()"> Reset Board </button>
+           <div style="font-size: 2rem;" id="player"></div>
+            <button onclick="handleAskRestart()"> Reset Board </button>
             <button onclick="handlePause()" id="pause" disabled> Pause </button>
             <button onclick="handleResume()" id="resume"> Resume </button>
             <br> <br>
             FEN: <input type="text" id="fen" style="width: 350px;"> <button onclick="handleSetFromFen()">Set Board</button> <br>
-            <span id="player"></span>'s Turn. Material Eval: <span id="mEval"></span> <br>
             Info: <select id="bitboard" onchange="handleBitboardSelect()">
                 <option value="none">None</option>
                 <option value="all">All Piece Positions</option>
@@ -21,10 +23,9 @@
                 <option value="castle">Castling Rights</option>
                 <option value="french" selected>En Passant Target</option>
                 <option value="prev" selected>Last Move</option>
-                
             </select>
+            Material Eval: <span id="mEval"></span>.
         </div>
-        <div id="loading"> Loading... </div>
     </div>
     <pre id="letters"></pre>
   <script>
@@ -35,7 +36,9 @@
         if (!wasmReady || window.chessJsReady === undefined || !chessImg.complete) return;
 
         document.getElementById("loading").style.display = "none";
-        ctx.canvas.addEventListener("click", handleCanvasClick);
+        handleResize();
+        document.getElementById("board").addEventListener("click", handleCanvasClick);
+        addEventListener("resize", handleResize);
         handleRestart();
         handleBitboardSelect();
         renderBoard();
@@ -48,7 +51,7 @@
         wasmReady = true;
         window.startChessIfReady();
     }
-    if (typeof WebAssembly === "object") {
+    if (typeof WebAssembly === "object" && WebAssembly.instantiateStreaming !== undefined) {
         WebAssembly.instantiateStreaming(fetch("main.wasm"), {}).then(handleWasmLoaded);
     } else {
         document.getElementById("controls").style.display = "none";
@@ -58,12 +61,6 @@
     const chessImg = new Image();
     chessImg.src = "assets/pieces.svg";
     chessImg.onload = window.startChessIfReady;
-    const ctx = document.getElementById("board").getContext("2d");
-    // TODO: why does this still work when you resize the page later?
-    document.getElementById("board").height = document.getElementById("board").width;
-
-    // TODO: put this in build.zig
-    // zig build-lib src/web.zig -target wasm32-freestanding -dynamic -rdynamic -O ReleaseFast && mv web.wasm web/main.wasm
   </script>
   </body>
 </html>

@@ -31,7 +31,7 @@ pub fn simpleEval(game: *const Board) i32 {
     return game.simpleEval;
 }
 
-pub fn slowSimpleEval(game: *const Board) i32 {
+pub inline fn slowSimpleEval(game: *const Board) i32 {
     var result: i32 = 0;
     for (game.squares) |piece| {
         if (piece.kind == .Empty) continue;
@@ -215,7 +215,7 @@ fn maybePromote(moves: *std.ArrayList(Move), board: *const Board, fromIndex: usi
             try moves.append(move);
         }
     } else {
-        try moves.append(Move.irf(fromIndex, toFile, toRank, !check.empty() and check.colour != colour));
+        try moves.append(irf(fromIndex, toFile, toRank, !check.empty() and check.colour != colour));
     }
 }
 
@@ -230,12 +230,12 @@ fn trySlide(moves: *std.ArrayList(Move), board: *const Board, i: usize, checkFil
     }
 
     if (check.empty()) {
-        try moves.append(Move.irf(i, checkFile, checkRank, false));
+        try moves.append(irf(i, checkFile, checkRank, false));
         return false;
     } else if (check.colour == piece.colour) { 
         return true;
     } else {
-        var toPush = Move.irf(i, checkFile, checkRank, true);
+        var toPush = irf(i, checkFile, checkRank, true);
 
         // Have this be a comptime param that gets passed down so I can easily benchmark. 
         // This is a capture, we like that, put it first. Capturing more valuable pieces is also good. 
@@ -280,7 +280,7 @@ fn trySlide2(moves: *std.ArrayList(Move), board: *const Board, fromIndex: u6, to
     }
 
     if ((toFlag & other) != 0) {  // taking an enemy piece
-        var toPush = Move.ii(fromIndex, toIndexx, true);
+        var toPush = ii(fromIndex, toIndexx, true);
 
         // Have this be a comptime param that gets passed down so I can easily benchmark. 
         // This is a capture, we like that, put it first. Capturing more valuable pieces is also good. 
@@ -299,7 +299,7 @@ fn trySlide2(moves: *std.ArrayList(Move), board: *const Board, fromIndex: u6, to
     }
 
     // moving to empty square
-    try moves.append(Move.ii(fromIndex, toIndexx, false));
+    try moves.append(ii(fromIndex, toIndexx, false));
     return false;
 }
 
@@ -372,7 +372,7 @@ fn castlingIsLegal(board: *Board, i: usize, colour: Colour, comptime goingLeft: 
     const path = if (goingLeft) [_] usize {i-1, i-2, i-3} else [_] usize {i+1, i+2};
     for (path) |sq| {
         // TODO: do this without playing the move? It annoys me that this makes getPossibleMoves take a mutable board pointer (would also be fixed by doing it later with other legal move checks). 
-        const move = Move.ii(@intCast(i), @intCast(sq), false);
+        const move = ii(@intCast(i), @intCast(sq), false);
         const unMove = board.play(move);
         defer board.unplay(unMove);
         if (try reverseFromKingIsInCheck(board, colour)) return false;
@@ -425,7 +425,7 @@ fn tryHop(moves: *std.ArrayList(Move), board: *const Board, i: usize, checkFile:
     }
     
     if (check.empty() or check.colour != piece.colour) {
-        try moves.append(Move.irf(i, checkFile, checkRank, !check.empty()));
+        try moves.append(irf(i, checkFile, checkRank, !check.empty()));
     } 
 }
 
