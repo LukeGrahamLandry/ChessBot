@@ -3,11 +3,11 @@ const Board = @import("board.zig").Board;
 const Colour = @import("board.zig").Colour;
 const Piece = @import("board.zig").Piece;
 const Kind = @import("board.zig").Kind;
-const StratOpts = @import("moves.zig").StratOpts;
-const Strategy = @import("moves.zig").Strategy;
+const StratOpts = @import("search.zig").StratOpts;
+const Strategy = @import("search.zig").Strategy;
 const MoveFilter = @import("movegen.zig").MoveFilter;
 const reverseFromKingIsInCheck = @import("movegen.zig").reverseFromKingIsInCheck;
-const Move = @import("moves.zig").Move;
+const Move = @import("board.zig").Move;
 const assert = std.debug.assert;
 
 

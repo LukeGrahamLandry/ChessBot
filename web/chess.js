@@ -10,6 +10,7 @@ const minMoveTimeMs = 500;  // When computer vs computer, if the engine is faste
 // TODO: show checkmate, render captured pieces, show engine eval
 // TODO: each file should know the git hash and report the error if  something caches just one
 // TODO: show the line it thinks is best 
+// TODO: save game in local storage 
 
 let ticker = null;
 let boardFenHistory = [];

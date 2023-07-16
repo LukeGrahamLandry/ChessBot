@@ -4,6 +4,8 @@ const Board = @import("board.zig").Board;
 const Colour = @import("board.zig").Colour;
 const Piece = @import("board.zig").Piece;
 const Kind = @import("board.zig").Kind;
+const Move = @import("board.zig").Move;
+const GameOver = @import("board.zig").GameOver;
 
 const isWasm = @import("builtin").target.isWasm();
 
@@ -12,51 +14,6 @@ fn assert(val: bool) void {
     std.debug.assert(val);
     // _ = val;
 }
-
-// Today we learn this language sucks ass and gives you random garbage numbers if this is not 'packed' but only in release mode,
-// you'll never guess whether that breaks it in debug mode, but padding it out to two bytes works in both.
-// On one hand I respect it because God never intended to have non-byte aligned integers but I don't understand why the compiler doesn't just pad Move so it works. 
-// Can reproduce with minimal example so I think it's just a compiler bug. 
-// Same as this? https://github.com/ziglang/zig/issues/16392
-pub const CastleMove = packed struct { rookFrom: u6, rookTo: u6, fuck: u4 = 0 };
-
-// TODO: this seems much too big (8 bytes?). castling info is redunant cause other side can infer if king moves 2 squares, bool field is evil and redundant
-pub const Move = struct {
-    from: u6,
-    to: u6,
-    isCapture: bool,  // french move says true but to square isnt the captured one
-    action: union(enum(u3)) {
-        none,
-        promote: Kind,
-        castle: CastleMove,
-        allowFrenchMove,
-        useFrenchMove: u6  // capture index
-    },
-
-    // TODO: method that factors out bounds check from try methods then calls this? make sure not to do twice in slide loops.
-    pub fn irf(fromIndex: usize, toFile: usize, toRank: usize, isCapture: bool) Move {
-        // std.debug.assert(fromIndex < 64 and toFile < 8 and toRank < 8);
-        return .{
-            .from=@intCast(fromIndex),
-            .to = @intCast(toRank*8 + toFile),
-            .action = .none,
-            .isCapture=isCapture
-        };
-    }
-
-    pub fn ii(fromIndex: u6, toIndex: u6, isCapture: bool) Move {
-        return .{
-            .from=fromIndex,
-            .to = toIndex,
-            .action = .none,
-            .isCapture=isCapture
-        };
-    }
-};
-
-pub const GameOver = enum {
-    Continue, Stalemate, WhiteWins, BlackWins
-};
 
 pub const HashAlgo = enum {
     // These all operate on the byte array of squares.
@@ -384,6 +341,3 @@ pub const MemoTable = struct {
 };} // End Strategy. 
 
 pub const default = Strategy(.{});
-
-
-// TODO: prune test is broken because there's one where it gets to capture your king and it doesnt really know what mate is

@@ -1,6 +1,6 @@
 const std = @import("std");
 const board = @import("board.zig");
-const moves = @import("moves.zig");
+const search = @import("search.zig");
 var allocatorT = std.heap.GeneralPurposeAllocator(.{}){};
 var alloc = allocatorT.allocator();
 const Timer = @import("bench.zig").Timer;

@@ -1,5 +1,4 @@
 const std = @import("std");
-const Move = @import("moves.zig").Move;
 
 fn assert(val: bool) void {
     std.debug.assert(val);
@@ -555,6 +554,27 @@ pub const Board = struct {
             return error.TestExpectedEqual;
         }
     }
+};
+
+// !!!Compiler bug!!! https://github.com/ziglang/zig/issues/16392
+pub const CastleMove = packed struct { rookFrom: u6, rookTo: u6, fuck: u4 = 0 };
+
+// TODO: this seems much too big (8 bytes?). castling info is redunant cause other side can infer if king moves 2 squares, bool field is evil and redundant
+pub const Move = struct {
+    from: u6,
+    to: u6,
+    isCapture: bool,  // french move says true but to square isnt the captured one
+    action: union(enum(u3)) {
+        none,
+        promote: Kind,
+        castle: CastleMove,
+        allowFrenchMove,
+        useFrenchMove: u6  // capture index
+    }
+};
+
+pub const GameOver = enum {
+    Continue, Stalemate, WhiteWins, BlackWins
 };
 
 const isWasm = @import("builtin").target.isWasm();

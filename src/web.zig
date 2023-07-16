@@ -3,9 +3,9 @@ const assert = std.debug.assert;
 const Colour = @import("board.zig").Colour;
 const Board = @import("board.zig").Board;
 const Piece = @import("board.zig").Piece;
-const moves = @import("moves.zig").Strategy(.{});
-const genAllMoves = @import("moves.zig").genAllMoves;
-const Move = @import("moves.zig").Move;
+const search = @import("search.zig").Strategy(.{});
+const genAllMoves = @import("search.zig").genAllMoves;
+const Move = @import("board.zig").Move;
 
 comptime { assert(@sizeOf(Piece) == @sizeOf(u8)); }
 // TODO: want multiple games so give js opaque pointers instead.
@@ -51,7 +51,7 @@ export fn playRandomMove() i32 {
 /// IN: internalBoard, boardView, nextColour
 /// OUT: internalBoard, boardView, nextColour
 export fn playNextMove() i32 {
-   const move = moves.bestMove(&internalBoard, nextColour) catch |err| {
+   const move = search.bestMove(&internalBoard, nextColour) catch |err| {
       switch (err) {
          error.OutOfMemory => return 1,
          error.GameOver => return if (nextColour == .White) 2 else 3,
@@ -78,7 +78,7 @@ export fn getPossibleMoves(from: i32) u64 {
       if (@as(i32, move.from) == from) {
          const unMove = internalBoard.play(move);
          defer internalBoard.unplay(unMove);
-         if (moves.inCheck(&internalBoard, piece.colour, alloc) catch return 1) continue;
+         if (search.inCheck(&internalBoard, piece.colour, alloc) catch return 1) continue;
          result |= @as(u64, 1) << @intCast(move.to);
       }
    }
@@ -172,7 +172,7 @@ export fn playHumanMove(fromIndex: u32, toIndex: u32) i32 {
    }
 
    const unMove = internalBoard.play(move);
-   if (moves.inCheck(&internalBoard, nextColour, alloc) catch return 1) {
+   if (search.inCheck(&internalBoard, nextColour, alloc) catch return 1) {
       internalBoard.unplay(unMove);
       return 4;
    }

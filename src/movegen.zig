@@ -10,8 +10,8 @@ const Board = @import("board.zig").Board;
 const Colour = @import("board.zig").Colour;
 const Piece = @import("board.zig").Piece;
 const Kind = @import("board.zig").Kind;
-const StratOpts = @import("moves.zig").StratOpts;
-const Move = @import("moves.zig").Move;
+const StratOpts = @import("search.zig").StratOpts;
+const Move = @import("board.zig").Move;
 
 pub const MoveFilter = enum {
     Any, CapturesOnly, KingCapturesOnly,
@@ -662,4 +662,24 @@ pub fn reverseFromKingIsInCheck(game: *Board, me: Colour) !bool {
         break :check false;
     };
     return isInCheck;
+}
+
+// TODO: method that factors out bounds check from try methods then calls this? make sure not to do twice in slide loops.
+pub fn irf(fromIndex: usize, toFile: usize, toRank: usize, isCapture: bool) Move {
+    // std.debug.assert(fromIndex < 64 and toFile < 8 and toRank < 8);
+    return .{
+        .from=@intCast(fromIndex),
+        .to = @intCast(toRank*8 + toFile),
+        .action = .none,
+        .isCapture=isCapture
+    };
+}
+
+pub fn ii(fromIndex: u6, toIndex: u6, isCapture: bool) Move {
+    return .{
+        .from=fromIndex,
+        .to = toIndex,
+        .action = .none,
+        .isCapture=isCapture
+    };
 }

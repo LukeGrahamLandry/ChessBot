@@ -1,6 +1,6 @@
 const std = @import("std");
 const board = @import("board.zig");
-const moves = @import("moves.zig");
+const search = @import("search.zig");
 var allocatorT = std.heap.GeneralPurposeAllocator(.{}){};
 var alloc = allocatorT.allocator();
 
@@ -15,9 +15,9 @@ pub fn main() !void {
     // std.debug.print("Tests Passed! \n", .{});
 
     std.debug.print("Warmup...", .{});
-    _ = try checkGameTime(moves.Strategy(.{ .beDeterministicForTest=true }), count);
+    _ = try checkGameTime(search.Strategy(.{ .beDeterministicForTest=true }), count);
     std.debug.print(" Ready!\nDefault...\n", .{});
-    const first = try checkGameTime(moves.Strategy(.{ .beDeterministicForTest=true }), count);
+    const first = try checkGameTime(search.Strategy(.{ .beDeterministicForTest=true }), count);
     std.debug.print("- [   ] (1.00x) default finished in {}ms.\n", .{first});
 
     // // Before: Timing these this way is safe because they don't effect move ordering so always plays the same game.

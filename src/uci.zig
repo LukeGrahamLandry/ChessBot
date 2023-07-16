@@ -1,9 +1,14 @@
 const std = @import("std");
+const Board = @import("board.zig").Board;
 
 // https://gist.github.com/DOBRO/2592c6dad754ba67e6dcaec8c90165bf
 const UciCommand = union(enum) {
     Init,
     AreYouReady,
+    NewGame,
+    SetPosition, // : Board,
+    Go,
+    Stop
 };
 
 const UciResult = union(enum) {
@@ -29,8 +34,22 @@ pub fn main() !void {
     
     fish.send(.Init);
     fish.blockUntilRecieve(.InitOk);
+    fish.send(.NewGame);
     fish.send(.AreYouReady);
     fish.blockUntilRecieve(.ReadyOk);
+    fish.send(.SetPosition);
+    fish.send(.Go);
+
+
+    for (0..50) |_| {
+        _ = fish.recieve() catch continue;
+    }
+    fish.send(.Stop);
+    fish.send(.AreYouReady);
+    fish.blockUntilRecieve(.ReadyOk);
+    for (0..50) |_| {
+        _ = fish.recieve() catch continue;
+    }
     try fish.deinit();
 
     std.debug.print("[    ]: Done!\n", .{});
@@ -45,6 +64,7 @@ const Stockfish = struct {
         stockFishProcess.stdout_behavior = .Pipe;
         stockFishProcess.stderr_behavior = .Pipe;
         stockFishProcess.stdout = std.io.getStdIn();
+        // TODO: helpful error message if stockfish isnt installed. 
         try stockFishProcess.spawn();
         return .{ .process=stockFishProcess };
     }
@@ -67,9 +87,15 @@ const Stockfish = struct {
 };
 
 fn sendUci(out: anytype, cmd: UciCommand) void {
+    var buf: [1000]u8 = undefined;
+    _ = buf;
     const msg = switch (cmd) {
         .Init => "uci\n",
         .AreYouReady => "isready\n",
+        .NewGame => "ucinewgame\n",
+        .SetPosition => "position startpos\n",
+        .Go => "go\n",
+        .Stop => "stop\n",
     };
 
     std.debug.print("[luke]: {s}\n", .{msg});
