@@ -23,6 +23,7 @@ var notTheRng = std.rand.DefaultPrng.init(0);
 var rng = notTheRng.random();
 
 extern fn jsConsoleLog(ptr: [*]const u8, len: usize) void;
+extern fn jsAlert(ptr: [*]const u8, len: usize) void; // TODO: use for assertions if enabled
 
 // TODO: log something whenever returning an error code.
 pub fn consolePrint(comptime fmt: []const u8, args: anytype) void {

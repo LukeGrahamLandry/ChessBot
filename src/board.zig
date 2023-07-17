@@ -2,10 +2,11 @@ const std = @import("std");
 const Magic = @import("magic.zig");
 const print = if (@import("builtin").target.isWasm()) @import("web.zig").consolePrint else std.debug.print;
 
-inline fn assert(val: bool) void {
-    std.debug.assert(val);
-    // _ = val;
-}
+const assert = std.debug.assert;
+// inline fn assert(val: bool) void {
+//     std.debug.assert(val);
+//     // _ = val;
+// }
 
 // Calling hasCorrectPositionsBits doesn't get optimised out in release mode when passed to std assert. But it does if passed to a function that discards it.
 // I think even this and inlining both doesn't fix that
@@ -656,6 +657,7 @@ pub const Move = struct {
         useFrenchMove: u6, // capture index
     },
     bonus: i8 = 0, // positive is good for the player moving.
+    // evalGuess: i32 = 0,
 };
 
 // TODO: report in ui

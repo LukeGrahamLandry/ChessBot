@@ -26,10 +26,10 @@ fn testPruning(fen: []const u8, me: Colour) !void {
     game.nextPlayer = me; // TODO
     var t = Timer.start();
     const slow = try testSlow.bestMove(&game, me, null);
-    const t1 = t.end();
+    const t1 = t.get();
     t = Timer.start();
     const fast = try testFast.bestMove(&game, me, null);
-    const t2 = t.end();
+    const t2 = t.get();
 
     if (!std.meta.eql(slow, fast)) {
         print("Moves did not match.\nInitial ({} to move):\n", .{me});

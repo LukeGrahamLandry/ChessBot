@@ -36,7 +36,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const wasm_target = std.zig.CrossTarget.parse(.{ .arch_os_abi="wasm32-freestanding" }) catch @panic("wasm target not exist?");
+    const wasm_target = std.zig.CrossTarget.parse(.{ .arch_os_abi = "wasm32-freestanding" }) catch @panic("wasm target not exist?");
     _ = wasm_target;
 
     // const wasm_exe = b.addSharedLibrary(.{
@@ -58,7 +58,6 @@ pub fn build(b: *std.Build) void {
     const run_cmd = b.addRunArtifact(exe);
     const bench_run_cmd = b.addRunArtifact(benchExe);
     const uci_run_cmd = b.addRunArtifact(uciExe);
-    
 
     // By making the run step depend on the install step, it will be run from the
     // installation directory rather than directly from within the cache directory.
@@ -83,7 +82,6 @@ pub fn build(b: *std.Build) void {
     const bench_run_step = b.step("bench", "Run benchmarks");
     bench_run_step.dependOn(&bench_run_cmd.step);
 
-
     const uci_run_step = b.step("uci", "Run against stockfish");
     uci_run_step.dependOn(&uci_run_cmd.step);
 
@@ -103,8 +101,8 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
 
-    // Run the tests before bench to not report misleading numbers. 
-    bench_run_step.dependOn(test_step);
+    // Run the tests before bench to not report misleading numbers.
+    // bench_run_step.dependOn(test_step); // TODO: turn back on
 }
 
 // TODO

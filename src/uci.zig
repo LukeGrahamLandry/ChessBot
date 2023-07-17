@@ -48,7 +48,7 @@ pub fn main() !void {
         print("[info]: {} = {}.\n", .{ key, results.get(key) orelse 0 });
     }
     print("[info]: errors = {}.\n", .{failed});
-    const time = gt.end();
+    const time = gt.get();
     print("[info]: Done! Played {} games in {}ms.\n", .{ gameCount, time });
     try fish.deinit();
 }
@@ -78,7 +78,7 @@ pub fn playOneGame(fish: *Stockfish, gameIndex: usize, gamesTotal: u32) !GameOve
         const moveStr = try writeAlgebraic(move);
         try moveHistory.append(moveStr);
         _ = board.play(move);
-        print("[info]: I played {s} in {}ms.\n", .{ moveStr, t.end() });
+        print("[info]: I played {s} in {}ms.\n", .{ moveStr, t.get() });
         board.debugPrint();
 
         playUciMove(fish, &board, &moveHistory, &stats) catch |err| {
@@ -93,7 +93,8 @@ pub fn playOneGame(fish: *Stockfish, gameIndex: usize, gamesTotal: u32) !GameOve
 
 var buffer = std.io.bufferedWriter(std.io.getStdOut());
 pub fn print(comptime fmt: []const u8, args: anytype) void {
-    // buffer.writer().print(fmt, args) catch return;  // TODO: need to change debugPrint() to be buffered
+    // TODO: need to change debugPrint() to be buffered. unify all print/assert functions?
+    // buffer.writer().print(fmt, args) catch return;
     std.debug.print(fmt, args);
 }
 
@@ -224,7 +225,7 @@ fn logGameOver(err: anyerror, board: *Board, moveHistory: *std.ArrayList([5]u8),
                 .WhiteWins => "White (luke) wins.",
                 .BlackWins => "Black (fish) wins.",
             };
-            const time = gt.end();
+            const time = gt.get();
             print("[info]: {s} The game lasted {} ply ({} ms). \n", .{ msg, moveHistory.items.len, time });
             print("[info]: The fish played {}/{} moves randomly.\n", .{ stats.fishRandom, stats.fishOnTime + stats.fishRandom });
             return result;
@@ -291,6 +292,12 @@ fn playUciMove(fish: *Stockfish, board: *Board, moveHistory: *std.ArrayList([5]u
         unreachable;
     };
 
+    try playAlgebraic(board, moveStr);
+    try moveHistory.append(moveStr);
+}
+
+pub fn playAlgebraic(board: *Board, moveStr: [5]u8) !void {
+    // TODO: promote
     const fromFile = try letterToFile(moveStr[0]);
     const fromRank = try letterToRank(moveStr[1]);
     const toFile = try letterToFile(moveStr[2]);
@@ -298,7 +305,6 @@ fn playUciMove(fish: *Stockfish, board: *Board, moveHistory: *std.ArrayList([5]u
     const fromIndex = fromRank * 8 + fromFile;
     const toIndex = toRank * 8 + toFile;
     _ = try @import("board.zig").inferPlayMove(board, fromIndex, toIndex, general.allocator());
-    try moveHistory.append(moveStr);
 }
 
 const Stockfish = struct {

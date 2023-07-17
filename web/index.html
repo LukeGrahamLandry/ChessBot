@@ -57,6 +57,11 @@
                 const msgBuffer = new Uint8Array(Engine.memory.buffer, ptr, len);
                 const msgStr = textDecoder.decode(msgBuffer);
                 console.log(msgStr);
+            },
+            jsAlert: function (ptr, len) {
+                const msgBuffer = new Uint8Array(Engine.memory.buffer, ptr, len);
+                const msgStr = textDecoder.decode(msgBuffer);
+                alert(msgStr);
             }
         }
     }

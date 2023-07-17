@@ -6,6 +6,7 @@ const Kind = @import("board.zig").Kind;
 const Move = @import("board.zig").Move;
 const GameOver = @import("board.zig").GameOver;
 const Magic = @import("magic.zig");
+const Timer = @import("bench.zig").Timer;
 const print = if (@import("builtin").target.isWasm()) @import("web.zig").consolePrint else std.debug.print;
 
 // TODO: carefully audit any use of usize because wasm is 32 bit!
@@ -42,7 +43,7 @@ pub const StratOpts = struct {
     memoMapSizeMB: u64 = 80, // Zero means don't use memo map at all.
     hashAlgo: HashAlgo = .CityHash64,
     checkDetection: CheckAlgo = .ReverseFromKing,
-    followCaptureDepth: i32 = 5,
+    followCaptureDepth: i32 = 0,
     // TODO: how many levels to sort. which algo to use. whether to use memo map.
 };
 
@@ -128,6 +129,39 @@ pub fn Strategy(comptime opts: StratOpts) type {
             return bestMoves.items[choice];
         }
 
+        pub fn bestMoveIterative(game: *Board, me: Colour, maxDepth: ?i32, timeLimitMs: i128) !Move {
+            _ = timeLimitMs;
+            const t = Timer.start();
+            var alloc = upperArena.allocator();
+            defer assert(upperArena.reset(.retain_capacity));
+            if (memoMap == null) memoMap = try MemoTable.initWithCapacity(opts.memoMapSizeMB, std.heap.page_allocator);
+            var memo = &memoMap.?;
+
+            const topLevelMoves = try genAllMoves.possibleMoves(game, me, alloc);
+            defer topLevelMoves.deinit();
+            sortMoves(game, topLevelMoves);
+
+            var stats: Stats = .{};
+            for (2..(maxDepth orelse opts.maxDepth) + 1) |depth| {
+                for (topLevelMoves) |*move| {
+                    const unMove = game.play(move);
+                    defer game.unplay(unMove);
+                    if (try inCheck(game, me, alloc)) {
+                        move.valueGuess = IM_MATED_EVAL;
+                        continue;
+                    }
+                    move.valueGuess = -try walkEval(game, me.other(), depth, @min(opts.followCaptureDepth, depth), LOWEST_EVAL, LOWEST_EVAL, movesArena.allocator(), &stats, memo, false); // TODO: need to catch
+                }
+            }
+            _ = t;
+
+            return topLevelMoves.items[0];
+        }
+
+        fn greaterThanGuess(game: *Board, a: Move, b: Move) bool {
+            return quickEvalMove(game, a) > quickEvalMove(game, b);
+        }
+
         var memoMap: ?MemoTable = null;
         pub var forceStop = false;
 
@@ -147,7 +181,6 @@ pub fn Strategy(comptime opts: StratOpts) type {
             // Not using the arena alloc because this persists after the move is played so work can be reused.
             if (memoMap == null) memoMap = try MemoTable.initWithCapacity(opts.memoMapSizeMB, std.heap.page_allocator);
             var memo = &memoMap.?;
-            defer memo.deinit(alloc);
 
             const moves = try genAllMoves.possibleMoves(game, me, alloc);
             defer alloc.free(moves);
@@ -164,7 +197,7 @@ pub fn Strategy(comptime opts: StratOpts) type {
                 const unMove = game.play(move);
                 defer game.unplay(unMove);
                 if (try inCheck(game, me, alloc)) continue;
-                const value = -try walkEval(game, me.other(), depth, @min(opts.followCaptureDepth, depth), -99999999, -99999999, movesArena.allocator(), &stats, memo, false); // TODO: need to catch
+                const value = -try walkEval(game, me.other(), depth, @min(opts.followCaptureDepth, depth), LOWEST_EVAL, LOWEST_EVAL, movesArena.allocator(), &stats, memo, false); // TODO: need to catch
                 if (value > bestVal) {
                     bestVal = value;
                     bestMoves.clearRetainingCapacity();
@@ -206,7 +239,7 @@ pub fn Strategy(comptime opts: StratOpts) type {
             var bestBlackEval = bestBlackEvalIn;
 
             const moveGen = genAllMoves;
-            const moves = try moveGen.possibleMoves(game, me, alloc);
+            var moves = try moveGen.possibleMoves(game, me, alloc);
             defer alloc.free(moves);
             if (moves.len == 0) {
                 // <me> can't make any moves. Either got checkmated or its a draw.
@@ -217,13 +250,64 @@ pub fn Strategy(comptime opts: StratOpts) type {
                     return Magic.DRAW_EVAL;
                 }
             }
-            if (remaining == opts.maxDepth) sortMoves(game, moves);
+
+            var heapctx: Context = .{ .items = moves, .sub_ctx = game };
+            _ = heapctx;
+            if (remaining > 0) {
+                sortMoves(game, moves);
+
+                // for (0..@min(moves.len, 4)) |start| {
+                //     var bestGuess: usize = 0;
+                //     var bestGuessVal: i32 = LOWEST_EVAL;
+                //     for (moves[start..], start..) |move, i| {
+                //         const val = quickEvalMove(game, move);
+                //         if (val > bestGuessVal) {
+                //             bestGuessVal = val;
+                //             bestGuess = i;
+                //         }
+                //     }
+                //     std.mem.swap(Move, &moves[start], &moves[bestGuess]);
+                // }
+
+                // stdheap_make(0, moves.len, heapctx);
+            }
 
             var bestVal: i32 = LOWEST_EVAL;
-            for (moves) |move| {
+            var checksSkipped: usize = 0;
+            var startEvaling: usize = 0;
+            // var i = moves.len - 1;
+            for (0..moves.len) |m| {
+                // if (remaining > 0 and i > 0) {
+                //     stdheap_pop(0, i, heapctx);
+                //     i -= 1;
+                // }
+
+                // ~Same speed as full insertion sort
+                // if (remaining > 0 and m < 5) {
+                //     var bestGuess: usize = 0;
+                //     var bestGuessVal: i32 = LOWEST_EVAL;
+                //     for (moves[m..], m..) |move, i| {
+                //         const val = quickEvalMove(game, move);
+                //         if (val > bestGuessVal) {
+                //             bestGuessVal = val;
+                //             bestGuess = i;
+                //         }
+                //     }
+                //     std.mem.swap(Move, &moves[m], &moves[bestGuess]);
+                // }
+
+                const move = moves[m];
+                // const move = moves[moves.len - 1 - m]; // heap goes the other way
+                // if (remaining > 0) {
+                //     print("{}. e={}\n", .{ m, quickEvalMove(game, move) });
+                // }
                 const unMove = game.play(move);
                 defer game.unplay(unMove);
-                if (try inCheck(game, me, alloc)) continue;
+                if (try inCheck(game, me, alloc)) {
+                    checksSkipped += 1;
+                    continue;
+                }
+                startEvaling += 1;
 
                 const value = if (capturesOnly and !(move.isCapture)) v: {
                     // TODO: this isnt quite what I want. That move wasn't a capture but that doesn't mean that the new board is safe.
@@ -257,7 +341,69 @@ pub fn Strategy(comptime opts: StratOpts) type {
                 });
             }
 
+            const legal = moves.len - checksSkipped;
+            _ = legal;
+            // if (remaining > 0 and !capturesOnly) print("remaining: {}. {} moves. {} walked.\n", .{ remaining, legal, startEvaling });
+
             return bestVal;
+        }
+
+        const Context = struct {
+            items: []Move,
+            sub_ctx: *Board,
+
+            pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
+                return eLessThan(ctx.sub_ctx, ctx.items[a], ctx.items[b]);
+            }
+
+            pub fn swap(ctx: @This(), a: usize, b: usize) void {
+                return std.mem.swap(Move, &ctx.items[a], &ctx.items[b]);
+            }
+        };
+
+        fn stdheap_pop(a: usize, i: usize, context: anytype) void {
+            // pop maximal elements from the heap.
+            context.swap(a, i);
+            stdheap_siftDown(a, a, i, context);
+        }
+
+        fn stdheap_make(a: usize, b: usize, context: anytype) void {
+            assert(a <= b);
+            // build the heap in linear time.
+            var i = a + (b - a) / 2;
+            while (i > a) {
+                i -= 1;
+                stdheap_siftDown(a, i, b, context);
+            }
+        }
+        fn stdheap_siftDown(a: usize, target: usize, b: usize, context: anytype) void {
+            var cur = target;
+            while (true) {
+                // When we don't overflow from the multiply below, the following expression equals (2*cur) - (2*a) + a + 1
+                // The `+ a + 1` is safe because:
+                //  for `a > 0` then `2a >= a + 1`.
+                //  for `a = 0`, the expression equals `2*cur+1`. `2*cur` is an even number, therefore adding 1 is safe.
+                var child = (std.math.mul(usize, cur - a, 2) catch break) + a + 1;
+
+                // stop if we overshot the boundary
+                if (!(child < b)) break;
+
+                // `next_child` is at most `b`, therefore no overflow is possible
+                const next_child = child + 1;
+
+                // store the greater child in `child`
+                if (next_child < b and context.lessThan(child, next_child)) {
+                    child = next_child;
+                }
+
+                // stop if the Heap invariant holds at `cur`.
+                if (context.lessThan(child, cur)) break;
+
+                // swap `cur` with the greater child,
+                // move one step down, and continue sifting.
+                context.swap(child, cur);
+                cur = child;
+            }
         }
 
         // This is in it's own function because it's used in the special upper loop and the walkEval.
@@ -280,14 +426,19 @@ pub fn Strategy(comptime opts: StratOpts) type {
             return false;
         }
 
+        // TODO: try putting move values in parralel array so i dont need to keep re-playing move?
         fn quickEvalMove(game: *Board, move: Move) i32 {
             const unMove = game.play(move);
             defer game.unplay(unMove);
             // if (memoMap.?.get(game)) |cached| {
-            //     return cached.eval * direction;
+            //     return cached.eval * game.nextPlayer.other().dir();
             // } else {
             return game.simpleEval * game.nextPlayer.other().dir();
             // }
+        }
+
+        fn eLessThan(game: *Board, a: Move, b: Move) bool {
+            return quickEvalMove(game, a) < quickEvalMove(game, b);
         }
 
         fn greaterThan(game: *Board, a: Move, b: Move) bool {
@@ -300,8 +451,6 @@ pub fn Strategy(comptime opts: StratOpts) type {
         // But using it at the very top shouldn't even work because I'm not pruning?
         // It also feels like its playing better so maybe my pruning is broken.
         // Sorting makes early moves slower.
-        // TODO: need reproducible bench by replaying the same game over again. remember to reset table between runs
-        // TODO: my own heap sort that only sorts the first x elements?
         fn sortMoves(game: *Board, moves: []Move) void {
             // Flipped because assending.
             std.sort.insertion(Move, moves, game, greaterThan);
