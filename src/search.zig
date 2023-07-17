@@ -38,18 +38,36 @@ pub const StratOpts = struct {
     maxDepth: comptime_int = 3, // TODO: should be runtime param to bestMove so wasm can change without increasing code size.
     doPruning: bool = true,
     beDeterministicForTest: bool = true,
-    memoMapSizeMB: u64 = 100, // Zero means don't use memo map at all.
+    memoMapSizeMB: u64 = 80, // Zero means don't use memo map at all.
     hashAlgo: HashAlgo = .CityHash64,
     checkDetection: CheckAlgo = .ReverseFromKing,
     followCaptureDepth: i32 = 5,
+    // TODO: how many levels to sort. which algo to use. whether to use memo map.
 };
 
 pub const MoveErr = error{ GameOver, OutOfMemory, ForceStop, Overflow };
 
+// These numbers are for one bestMove call, not cumulative.
+pub const Stats = struct {
+    comptime use: bool = true,
+    memoHits: u64 = 0, // Tried to evaluate a board and it was already in the memo table with a high enough depth.
+    // memoAdditions: u64 = 0, // Added a board to the memo table.
+    // memoCollissions: u64 = 0, // Added a board and overwrite a previous value. Since the table is never reset, this will trend towards 100% of memoAdditions. TODO: make this useful
+    leafBoardsSeen: u64 = 0, // Ran out of depth and checked the simpleEval of a board.
+    gameOversSeen: u64 = 0,
+};
+
+const IM_MATED_EVAL = -(@as(i32, 1) << 24); // Add distance to prefer sooner mates
+const LOWEST_EVAL = -(@as(i32, 1) << 25);
+const DRAW_EVAL = -400; // Draws are bad if you're up material but good if you're down materal. Slight preference against because that's more fun.
+
+comptime {
+    std.debug.assert(LOWEST_EVAL < IM_MATED_EVAL);
+}
+
 // TODO: script that tests different variations (compare speed and run correctness tests).
 pub fn Strategy(comptime opts: StratOpts) type {
     return struct { // Start Strategy.
-
         pub const config = opts;
         const useMemoMap = opts.memoMapSizeMB > 0;
 
@@ -97,10 +115,10 @@ pub fn Strategy(comptime opts: StratOpts) type {
 
         // This has its own loop because I actually need to know which move is best which walkEval doesn't return.
         // Also means I can reset the temp allocator more often.
-        pub fn bestMove(game: *Board, me: Colour) !Move {
+        pub fn bestMove(game: *Board, me: Colour, depth: ?i32) !Move {
             var alloc = upperArena.allocator();
             defer assert(upperArena.reset(.retain_capacity));
-            const bestMoves = try allEqualBestMoves(game, me, alloc);
+            const bestMoves = try allEqualBestMoves(game, me, alloc, depth orelse opts.maxDepth);
             defer bestMoves.deinit();
 
             // You can't just pick a deterministic random because pruning might end up with a shorter list of equal moves.
@@ -113,16 +131,17 @@ pub fn Strategy(comptime opts: StratOpts) type {
         var memoMap: ?MemoTable = null;
         pub var forceStop = false;
 
+        pub fn resetMemoTable() void {
+            if (useMemoMap) {
+                for (0..memoMap.?.buffer.len) |i| {
+                    memoMap.?.buffer[i] = std.mem.zeroes(MemoEntry);
+                }
+            }
+        }
+
         // TODO: why am I returning an array list here but a slice from possibleMoves?
-        pub fn allEqualBestMoves(game: *Board, me: Colour, alloc: std.mem.Allocator) MoveErr!std.ArrayList(Move) {
+        pub fn allEqualBestMoves(game: *Board, me: Colour, alloc: std.mem.Allocator, depth: i32) MoveErr!std.ArrayList(Move) {
             if (game.halfMoveDraw >= 100) return error.GameOver; // Draw
-
-            const moves = try genAllMoves.possibleMoves(game, me, alloc);
-            defer alloc.free(moves);
-            if (moves.len == 0) return error.GameOver;
-
-            // No deinit because returned
-            var bestMoves = try std.ArrayList(Move).initCapacity(alloc, 50);
 
             // TODO: I don't like that I can't init this outside.
             // Not using the arena alloc because this persists after the move is played so work can be reused.
@@ -130,14 +149,22 @@ pub fn Strategy(comptime opts: StratOpts) type {
             var memo = &memoMap.?;
             defer memo.deinit(alloc);
 
+            const moves = try genAllMoves.possibleMoves(game, me, alloc);
+            defer alloc.free(moves);
+            if (moves.len == 0) return error.GameOver;
+            // sortMoves(game, moves);  // There's no pruning here so this should do nothing?
+
+            // No deinit because returned
+            var bestMoves = try std.ArrayList(Move).initCapacity(alloc, 50);
+
             // TODO: use memo at top level? once it persists longer it must be helpful
-            var bestVal: i32 = -1000000;
-            var count: u64 = 0;
+            var bestVal: i32 = LOWEST_EVAL;
+            var stats: Stats = .{};
             for (moves) |move| {
                 const unMove = game.play(move);
                 defer game.unplay(unMove);
                 if (try inCheck(game, me, alloc)) continue;
-                const value = -try walkEval(game, me.other(), opts.maxDepth, opts.followCaptureDepth, -99999999, -99999999, movesArena.allocator(), &count, memo, false); // TODO: need to catch
+                const value = -try walkEval(game, me.other(), depth, @min(opts.followCaptureDepth, depth), -99999999, -99999999, movesArena.allocator(), &stats, memo, false); // TODO: need to catch
                 if (value > bestVal) {
                     bestVal = value;
                     bestMoves.clearRetainingCapacity();
@@ -149,6 +176,8 @@ pub fn Strategy(comptime opts: StratOpts) type {
             }
 
             if (bestMoves.items.len == 0) return error.GameOver;
+            // assert(stats.memoAdditions >= stats.memoCollissions);
+            if (comptime stats.use) print("Move {}, eval {}. Depth {} (+{} for captures) saw {} leaf boards with {} memo hits.\n", .{ game.fullMoves + 1, bestVal, depth, @min(opts.followCaptureDepth, depth), stats.leafBoardsSeen, stats.memoHits });
             return bestMoves;
         }
 
@@ -156,13 +185,16 @@ pub fn Strategy(comptime opts: StratOpts) type {
         // The alpha-beta values effect lower layers, not higher layers, so passed by value.
         // The eval of <game>, positive means <me> is winning, assuming it is <me>'s turn.
         // Returns error.GameOver if there were no possible moves or for 50 move rule.
-        pub fn walkEval(game: *Board, me: Colour, remaining: i32, bigRemaining: i32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, count: *u64, memo: *MemoTable, comptime capturesOnly: bool) MoveErr!i32 {
+        pub fn walkEval(game: *Board, me: Colour, remaining: i32, bigRemaining: i32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, stats: *Stats, memo: *MemoTable, comptime capturesOnly: bool) error{ OutOfMemory, ForceStop, Overflow }!i32 {
             if (forceStop) return error.ForceStop;
-            if (game.halfMoveDraw >= 100) return 0; // Draw
+            if (game.halfMoveDraw >= 100) return DRAW_EVAL;
 
             if (useMemoMap) {
+                // TODO: It would be really good to be able to reuse what we did on the last search if they played the move we thought they would.
+                //       This remaining checks stops that but also seems nesisary for correctness.
                 if (memo.get(game)) |cached| {
                     if (cached.remaining >= remaining) {
+                        if (comptime stats.use) stats.memoHits += 1;
                         return if (me == .White) cached.eval else -cached.eval;
                     }
                     // TODO: should save the best move from that position at the old low depth and use it as the start for the search
@@ -176,9 +208,18 @@ pub fn Strategy(comptime opts: StratOpts) type {
             const moveGen = genAllMoves;
             const moves = try moveGen.possibleMoves(game, me, alloc);
             defer alloc.free(moves);
-            if (moves.len == 0) return error.GameOver;
+            if (moves.len == 0) {
+                // <me> can't make any moves. Either got checkmated or its a draw.
+                if (comptime stats.use) stats.gameOversSeen += 1;
+                if (try inCheck(game, me, alloc)) {
+                    return IM_MATED_EVAL - remaining;
+                } else {
+                    return DRAW_EVAL;
+                }
+            }
+            if (remaining == opts.maxDepth) sortMoves(game, moves);
 
-            var bestVal: i32 = -1000000;
+            var bestVal: i32 = LOWEST_EVAL;
             for (moves) |move| {
                 const unMove = game.play(move);
                 defer game.unplay(unMove);
@@ -187,25 +228,17 @@ pub fn Strategy(comptime opts: StratOpts) type {
                 const value = if (capturesOnly and !(move.isCapture)) v: {
                     // TODO: this isnt quite what I want. That move wasn't a capture but that doesn't mean that the new board is safe.
                     // The problem I'm trying to solve is if you simpleEval on a board where captures are possible, the eval will be totally different next move.
+                    if (comptime stats.use) stats.leafBoardsSeen += 1;
                     break :v if (me == .White) genAllMoves.simpleEval(game) else -genAllMoves.simpleEval(game);
                 } else if (remaining <= 0) v: {
                     if (!capturesOnly) {
-                        const val = walkEval(game, me.other(), opts.maxDepth, bigRemaining, bestWhiteEval, bestBlackEval, alloc, count, memo, true) catch |err| {
-                            switch (err) {
-                                error.GameOver => break :v 1234567, // TODO: return mate in x score for the right side. just do it as like 1000000 + x. draw counts as good for the loosing side so like -301 for either so it auto perfers that if loosing by more than a piece?
-                                else => return err,
-                            }
-                        };
+                        const val = try walkEval(game, me.other(), bigRemaining, bigRemaining, bestWhiteEval, bestBlackEval, alloc, stats, memo, true);
                         break :v -val;
                     }
+                    if (comptime stats.use) stats.leafBoardsSeen += 1;
                     break :v if (me == .White) genAllMoves.simpleEval(game) else -genAllMoves.simpleEval(game);
                 } else r: {
-                    const v = walkEval(game, me.other(), remaining - 1, bigRemaining, bestWhiteEval, bestBlackEval, alloc, count, memo, capturesOnly) catch |err| {
-                        switch (err) {
-                            error.GameOver => break :r 1234567,
-                            else => return err,
-                        }
-                    };
+                    const v = try walkEval(game, me.other(), remaining - 1, bigRemaining, bestWhiteEval, bestBlackEval, alloc, stats, memo, capturesOnly);
                     break :r -v;
                 };
 
@@ -217,6 +250,7 @@ pub fn Strategy(comptime opts: StratOpts) type {
 
             if (useMemoMap) {
                 // Can never get here if forceStop=true.
+                // if (comptime stats.use) stats.memoAdditions += 1;
                 memo.setAndOverwriteBucket(game, .{
                     .eval = if (me == .White) bestVal else -bestVal,
                     .remaining = remaining,
@@ -244,6 +278,34 @@ pub fn Strategy(comptime opts: StratOpts) type {
                 },
             }
             return false;
+        }
+
+        fn quickEvalMove(game: *Board, move: Move) i32 {
+            const direction: i32 = if (game.nextPlayer == .White) 1 else -1;
+            const unMove = game.play(move);
+            defer game.unplay(unMove);
+            // if (memoMap.?.get(game)) |cached| {
+            //     return cached.eval * direction;
+            // } else {
+            return game.simpleEval * direction;
+            // }
+        }
+
+        fn greaterThan(game: *Board, a: Move, b: Move) bool {
+            return quickEvalMove(game, a) > quickEvalMove(game, b);
+        }
+
+        // Sorting at every depth is much slower.
+        // But sorting just at the very top is much faster because it means you can prune very effectivly.
+        // I thought it was because of reusing work from the memo table but just using simple eval is same speed. (only testing up to move 8).
+        // But using it at the very top shouldn't even work because I'm not pruning?
+        // It also feels like its playing better so maybe my pruning is broken.
+        // Sorting makes early moves slower.
+        // TODO: need reproducible bench by replaying the same game over again. remember to reset table between runs
+        // TODO: my own heap sort that only sorts the first x elements?
+        fn sortMoves(game: *Board, moves: []Move) void {
+            // Flipped because assending.
+            std.sort.insertion(Move, moves, game, greaterThan);
         }
 
         // TODO: this could be faster if it didn't generate every possible move first
@@ -287,7 +349,7 @@ pub fn Strategy(comptime opts: StratOpts) type {
             bucketMask: u64,
 
             pub fn initWithCapacity(comptime sizeMB: u64, alloc: std.mem.Allocator) !MemoTable {
-                if (sizeMB == 0) @panic("MemoTable.initWithCapacity(0)");
+                if (sizeMB == 0) return MemoTable{ .buffer = try alloc.alloc(MemoEntry, 0), .bucketMask = 0 };
                 const targetCapacity: u64 = (sizeMB * 1024 * 1024) / @sizeOf(MemoEntry);
                 const bits: u6 = @intCast(std.math.log2(targetCapacity));
                 // WASM is 32 bit, make sure not to overflow a usize (4 GB).
@@ -297,6 +359,8 @@ pub fn Strategy(comptime opts: StratOpts) type {
                 for (0..realCapacity) |i| {
                     self.buffer[i] = std.mem.zeroes(MemoEntry);
                 }
+                const realSizeMB = realCapacity * @sizeOf(MemoEntry) / 1024 / 1024;
+                print("Memo table capacity is {} ({} MB).\n", .{ realCapacity, realSizeMB });
                 return self;
             }
 

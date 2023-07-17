@@ -457,6 +457,7 @@ pub const Board = struct {
         if (fen[i] != ' ') return error.InvalidFen;
         i += 1;
 
+        // TODO: parse the rest
         // Castling
 
         // En-passant

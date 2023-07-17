@@ -3,43 +3,71 @@ const Board = @import("board.zig").Board;
 const Move = @import("board.zig").Move;
 const search = @import("search.zig").default;
 const Timer = @import("bench.zig").Timer;
+const GameOver = @import("board.zig").GameOver;
 
 // TODO: split into uci.zig and fish.zig
 // TODO: for just using support wasm32-wasi and wasm-freestanding (browser by exposing a uci_send(ptr, len) and uci_recieve(ptr, maxLen)->len function).
 
-pub fn main() !void {
-    var alloc = general.allocator();
-    var moveHistory = std.ArrayList([5]u8).init(alloc);
-    var board = Board.initial();
-    var fish = try Stockfish.init();
-    var stats: Stats = .{};
+const fishTimeLimitMS = 1;
+const maxMoves = 200;
+const gameCount = 100;
 
+pub fn main() !void {
+    var fish = try Stockfish.init();
     try fish.send(.Init);
     fish.blockUntilRecieve(.InitOk);
     try fish.send(.{ .SetOption = .{ .name = "UCI_LimitStrength", .value = "true" } });
     try fish.send(.{ .SetOption = .{ .name = "UCI_Elo", .value = "1320" } });
     try fish.send(.{ .SetOption = .{ .name = "Skill Level", .value = "0" } });
+
+    var gt = Timer.start();
+    var failed: u32 = 0;
+    var results = std.AutoHashMap(GameOver, u32).init(general.allocator());
+    for (0..gameCount) |g| {
+        if (g != 0) {
+            for (std.enums.values(GameOver)) |key| {
+                print("[info]: {} = {}.\n", .{ key, results.get(key) orelse 0 });
+            }
+        }
+
+        const result = playOneGame(&fish, g, gameCount) catch |err| {
+            failed += 1;
+            print("[info]: Game failed! {}\n", .{err});
+            search.resetMemoTable();
+            continue;
+        };
+        search.resetMemoTable();
+        const count = (results.get(result) orelse 0) + 1;
+        try results.put(result, count);
+    }
+
+    print("[info]: Done! Played {} games in {}ms.\n", .{ gameCount, gt.end() });
+    try fish.deinit();
+}
+
+pub fn playOneGame(fish: *Stockfish, gameIndex: u32, gamesTotal: u32) !GameOver {
     try fish.send(.NewGame);
     try fish.send(.AreYouReady);
     fish.blockUntilRecieve(.ReadyOk);
 
+    var alloc = general.allocator();
+    var moveHistory = std.ArrayList([5]u8).init(alloc);
+    var gt = Timer.start();
+    var board = Board.initial();
+    var stats: Stats = .{};
     board.debugPrint();
 
-    var gt = Timer.start();
-    const maxMoves = 200;
     for (0..maxMoves) |i| {
-        print("[info]: Move {}. \n", .{i});
-        playUciMove(&fish, &board, &moveHistory, &stats) catch |err| {
-            try logGameOver(err, &board, &moveHistory, gt, &stats);
-            break;
+        print("[info]: Move {}. Game {}/{}.\n", .{ i, gameIndex, gamesTotal });
+        playUciMove(fish, &board, &moveHistory, &stats) catch |err| {
+            return try logGameOver(err, &board, &moveHistory, gt, &stats);
         };
         board.debugPrint();
 
         print("[info]: I'm thinking.\n", .{});
         var t = Timer.start();
-        const move = search.bestMove(&board, board.nextPlayer) catch |err| {
-            try logGameOver(err, &board, &moveHistory, gt, &stats);
-            break;
+        const move = search.bestMove(&board, board.nextPlayer, null) catch |err| {
+            return try logGameOver(err, &board, &moveHistory, gt, &stats);
         };
 
         const moveStr = try writeAlgebraic(move);
@@ -49,12 +77,10 @@ pub fn main() !void {
         board.debugPrint();
     } else {
         print("[info]: Played {} moves each. Stopping the game because nobody cares. \n", .{maxMoves});
+        return error.GameTooLong;
     }
-
-    try fish.deinit();
-
-    print("[info]: Done!\n", .{});
 }
+
 var buffer = std.io.bufferedWriter(std.io.getStdOut());
 pub fn print(comptime fmt: []const u8, args: anytype) void {
     // buffer.writer().print(fmt, args) catch return;  // TODO: need to change debugPrint() to be buffered
@@ -177,7 +203,7 @@ const Stats = struct {
     fishOnTime: u64 = 0,
 };
 
-fn logGameOver(err: anyerror, board: *Board, moveHistory: *std.ArrayList([5]u8), gt: Timer, stats: *Stats) !void {
+fn logGameOver(err: anyerror, board: *Board, moveHistory: *std.ArrayList([5]u8), gt: Timer, stats: *Stats) !GameOver {
     switch (err) {
         error.GameOver => {
             const result = try search.isGameOver(board, general.allocator());
@@ -190,6 +216,7 @@ fn logGameOver(err: anyerror, board: *Board, moveHistory: *std.ArrayList([5]u8),
             };
             print("[info]: {s} The game lasted {} ply ({} ms).\n", .{ msg, moveHistory.items.len, gt.end() });
             print("[info]: The fish played {}/{} moves randomly.\n", .{ stats.fishRandom, stats.fishOnTime + stats.fishRandom });
+            return result;
         },
         else => return err,
     }
@@ -198,16 +225,17 @@ fn logGameOver(err: anyerror, board: *Board, moveHistory: *std.ArrayList([5]u8),
 fn playUciMove(fish: *Stockfish, board: *Board, moveHistory: *std.ArrayList([5]u8), stats: *Stats) !void {
     if (board.halfMoveDraw >= 100) return error.GameOver; // Draw
 
-    const timeLimitMS = 1;
+    try fish.send(.AreYouReady);
+    fish.blockUntilRecieve(.ReadyOk);
     if (moveHistory.items.len == 0) {
         try fish.send(.SetPositionInitial);
     } else {
         try fish.send(.{ .SetPositionMoves = .{ .board = board, .moves = moveHistory.items } });
     }
-    try fish.send(.{ .Go = .{ .maxSearchTimeMs = timeLimitMS } });
+    try fish.send(.{ .Go = .{ .maxSearchTimeMs = fishTimeLimitMS } });
 
     const moveStr = m: {
-        std.time.sleep(timeLimitMS * std.time.ns_per_ms);
+        std.time.sleep(fishTimeLimitMS * std.time.ns_per_ms);
         try fish.send(.Stop);
         std.time.sleep(5 * std.time.ns_per_ms); // give it a moment to be able to stop
 
@@ -218,7 +246,7 @@ fn playUciMove(fish: *Stockfish, board: *Board, moveHistory: *std.ArrayList([5]u
             switch (infoMsg) {
                 .Info => |info| {
                     if (info.time) |time| {
-                        if (time <= timeLimitMS) {
+                        if (time <= fishTimeLimitMS) {
                             if (info.pvFirstMove) |move| {
                                 bestMove = move;
                                 moveTime = time;
@@ -249,13 +277,7 @@ fn playUciMove(fish: *Stockfish, board: *Board, moveHistory: *std.ArrayList([5]u
                 else => continue,
             }
         }
-        try fish.send(.AreYouReady);
-        fish.blockUntilRecieve(.ReadyOk);
-        if (bestMove) |move| {
-            return move;
-        } else {
-            return error.NoMoveFound;
-        }
+        unreachable;
     };
 
     const fromFile = try letterToFile(moveStr[0]);

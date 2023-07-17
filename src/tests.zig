@@ -8,12 +8,16 @@ const Strategy = @import("search.zig").Strategy;
 const MoveFilter = @import("movegen.zig").MoveFilter;
 const reverseFromKingIsInCheck = @import("movegen.zig").reverseFromKingIsInCheck;
 const Move = @import("board.zig").Move;
+const Stats = @import("search.zig").Stats;
 const assert = std.debug.assert;
 const print = std.debug.print;
 
 // TODO: tests dont pass on maxDepth=2
-const testFast = Strategy(.{ .beDeterministicForTest = true, .checkDetection = .Ignore, .doPruning = true, .maxDepth = 3 });
-const testSlow = Strategy(.{ .beDeterministicForTest = true, .checkDetection = .Ignore, .doPruning = false, .maxDepth = 3 });
+// These don't use the memo table because I think that's allowed to change evals.
+// TODO: still doesnt pass tho
+const testFast = Strategy(.{ .beDeterministicForTest = true, .checkDetection = .Ignore, .doPruning = true, .maxDepth = 3, .memoMapSizeMB = 0 });
+const testSlow = Strategy(.{ .beDeterministicForTest = true, .checkDetection = .Ignore, .doPruning = false, .maxDepth = 3, .memoMapSizeMB = 0 });
+const testNoMemo = Strategy(.{ .beDeterministicForTest = true, .maxDepth = 3, .memoMapSizeMB = 0 });
 const Timer = @import("bench.zig").Timer;
 
 // TODO: this should be generic over a the strategies to compare.
@@ -21,10 +25,10 @@ fn testPruning(fen: []const u8, me: Colour) !void {
     var game = try Board.fromFEN(fen);
     game.nextPlayer = me; // TODO
     var t = Timer.start();
-    const slow = try testSlow.bestMove(&game, me);
+    const slow = try testSlow.bestMove(&game, me, null);
     const t1 = t.end();
     t = Timer.start();
-    const fast = try testFast.bestMove(&game, me);
+    const fast = try testFast.bestMove(&game, me, null);
     const t2 = t.end();
 
     if (!std.meta.eql(slow, fast)) {
@@ -77,21 +81,21 @@ test "bestMoves eval equal" {
             initial.nextPlayer = me; // TODO
             var game = try Board.fromFEN(fen);
             game.nextPlayer = me; // TODO
-            const bestMoves = try testFast.allEqualBestMoves(&game, me, quickAlloc);
+            const bestMoves = try testNoMemo.allEqualBestMoves(&game, me, quickAlloc, testNoMemo.config.maxDepth);
 
             const allMoves = try MoveFilter.Any.get().possibleMoves(&game, me, quickAlloc);
             try std.testing.expect(allMoves.len >= bestMoves.items.len); // sanity
 
-            var memo = try testFast.MemoTable.initWithCapacity(10, quickAlloc);
+            var memo = try testNoMemo.MemoTable.initWithCapacity(0, quickAlloc);
             var expectedEval: ?i32 = null;
             for (bestMoves.items, 0..) |move, i| {
                 const unMove = game.play(move);
                 defer game.unplay(unMove);
-                try std.testing.expect(!(try testFast.inCheck(&game, me, quickAlloc)));
+                try std.testing.expect(!(try testNoMemo.inCheck(&game, me, quickAlloc)));
 
-                var thing: usize = 0;
+                var thing: Stats = .{};
                 // pay attention to negative sign
-                const eval = -(try testFast.walkEval(&game, me.other(), testFast.config.maxDepth, testFast.config.followCaptureDepth, -99999999, -99999999, quickAlloc, &thing, &memo, false));
+                const eval = -(try testNoMemo.walkEval(&game, me.other(), testNoMemo.config.maxDepth, testNoMemo.config.followCaptureDepth, -99999999, -99999999, quickAlloc, &thing, &memo, false));
                 if (expectedEval) |expected| {
                     if (eval != expected) {
                         print("{} best moves but evals did not match.\nInitial ({} to move):\n", .{ bestMoves.items.len, me });

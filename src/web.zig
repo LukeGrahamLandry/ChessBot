@@ -37,6 +37,7 @@ export fn restartGame() void {
     boardView = @bitCast(internalBoard.squares);
     nextColour = .White;
     lastMove = null;
+    print("{}", .{search.config});
 }
 
 /// Returns 0->continue, 1->error, 2->black wins, 3->white wins.
@@ -63,7 +64,7 @@ export fn playRandomMove() i32 {
 /// IN: internalBoard, boardView, nextColour
 /// OUT: internalBoard, boardView, nextColour
 export fn playNextMove() i32 {
-    const move = search.bestMove(&internalBoard, nextColour) catch |err| {
+    const move = search.bestMove(&internalBoard, nextColour, null) catch |err| {
         switch (err) {
             error.GameOver => return if (nextColour == .White) 2 else 3,
             else => return 1,
