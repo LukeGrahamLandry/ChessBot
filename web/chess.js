@@ -44,6 +44,7 @@ function handleAskRestart() {
 
 function handleRestart() {
     handlePause();
+    console.log(boardFenHistory);
     Engine.restartGame();
     boardFenHistory = [getFenFromEngine()];
     renderBoard();

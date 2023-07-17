@@ -80,7 +80,7 @@ Using ArenaAllocator(PageAllocator) was 9.5x as fast as TestingAllocator for dep
         
     //     // These parameters are backwards because it can't infer type from a comptime_int. This seems dumb. 
     //     // try std.testing.expectEqual(countPossibleGames(&game, .White, i), expected);
-    //     std.debug.print("Explored Depth {} in {}ms.\n", .{i, @divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms))});
+    //     print("Explored Depth {} in {}ms.\n", .{i, @divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms))});
     // }
 ```
 

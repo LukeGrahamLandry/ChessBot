@@ -51,8 +51,17 @@
         wasmReady = true;
         window.startChessIfReady();
     }
+    const callbacks = { 
+        env: {
+            jsConsoleLog: function (ptr, len) {
+                const msgBuffer = new Uint8Array(Engine.memory.buffer, ptr, len);
+                const msgStr = textDecoder.decode(msgBuffer);
+                console.log(msgStr);
+            }
+        }
+    }
     if (typeof WebAssembly === "object" && WebAssembly.instantiateStreaming !== undefined) {
-        WebAssembly.instantiateStreaming(fetch("main.wasm"), {}).then(handleWasmLoaded);
+        WebAssembly.instantiateStreaming(fetch("main.wasm"), callbacks).then(handleWasmLoaded);
     } else {
         document.getElementById("controls").style.display = "none";
         document.getElementById("loading").innerText = "Your browser doesn't support WASM. Apperently it's 2015 where you live.";
