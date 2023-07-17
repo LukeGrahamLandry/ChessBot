@@ -1,4 +1,5 @@
 const std = @import("std");
+const Magic = @import("magic.zig");
 // const assert = std.debug.assert;
 
 const print = if (@import("builtin").target.isWasm()) @import("web.zig").consolePrint else std.debug.print;
@@ -118,7 +119,7 @@ pub fn MoveGenStrategy(comptime filter: MoveFilter) type {
 
         pub fn pawnForwardTwo(fromIndex: usize, toFile: usize, toRank: usize) Move {
             // std.debug.assert(fromIndex < 64 and toFile < 8 and toRank < 8);
-            return .{ .from = @intCast(fromIndex), .to = @intCast(toRank * 8 + toFile), .action = .allowFrenchMove, .isCapture = false };
+            return .{ .from = @intCast(fromIndex), .to = @intCast(toRank * 8 + toFile), .action = .allowFrenchMove, .isCapture = false, .bonus = Magic.PUSH_PAWN * 2 };
         }
 
         fn pawnMove(moves: *std.ArrayList(Move), board: *const Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
@@ -170,7 +171,7 @@ pub fn MoveGenStrategy(comptime filter: MoveFilter) type {
                     const endIndex = targetRank * 8 + targetFile;
                     const captureIndex = ((if (colour == .White) targetRank - 1 else targetRank + 1) * 8) + targetFile;
                     assert(board.squares[captureIndex].is(colour.other(), .Pawn));
-                    try moves.append(.{ .from = @intCast(i), .to = @intCast(endIndex), .action = .{ .useFrenchMove = @intCast(captureIndex) }, .isCapture = true });
+                    try moves.append(.{ .from = @intCast(i), .to = @intCast(endIndex), .action = .{ .useFrenchMove = @intCast(captureIndex) }, .isCapture = true, .bonus = Magic.PUSH_PAWN });
                 },
             }
         }
@@ -186,7 +187,7 @@ pub fn MoveGenStrategy(comptime filter: MoveFilter) type {
             }
 
             if ((colour == .Black and toRank == 0) or (colour == .White and toRank == 7)) {
-                var move: Move = .{ .from = @intCast(fromIndex), .to = @intCast(toRank * 8 + toFile), .action = .{ .promote = .Queen }, .isCapture = !check.empty() and check.colour != colour };
+                var move: Move = .{ .from = @intCast(fromIndex), .to = @intCast(toRank * 8 + toFile), .action = .{ .promote = .Queen }, .isCapture = !check.empty() and check.colour != colour, .bonus = Magic.PUSH_PAWN };
                 // Queen promotions are so good that we don't even care about preserving order of the old stuff.
                 // TODO: that's wrong cause mate
                 if (moves.items.len > 0) {
@@ -203,7 +204,7 @@ pub fn MoveGenStrategy(comptime filter: MoveFilter) type {
                     try moves.append(move);
                 }
             } else {
-                try moves.append(irf(fromIndex, toFile, toRank, !check.empty() and check.colour != colour));
+                try moves.append(irfPawn(fromIndex, toFile, toRank, !check.empty() and check.colour != colour));
             }
         }
 
@@ -642,6 +643,11 @@ pub fn reverseFromKingIsInCheck(game: *Board, me: Colour) !bool {
 pub fn irf(fromIndex: usize, toFile: usize, toRank: usize, isCapture: bool) Move {
     // std.debug.assert(fromIndex < 64 and toFile < 8 and toRank < 8);
     return .{ .from = @intCast(fromIndex), .to = @intCast(toRank * 8 + toFile), .action = .none, .isCapture = isCapture };
+}
+
+pub fn irfPawn(fromIndex: usize, toFile: usize, toRank: usize, isCapture: bool) Move {
+    // std.debug.assert(fromIndex < 64 and toFile < 8 and toRank < 8);
+    return .{ .from = @intCast(fromIndex), .to = @intCast(toRank * 8 + toFile), .action = .none, .isCapture = isCapture, .bonus = Magic.PUSH_PAWN };
 }
 
 pub fn ii(fromIndex: u6, toIndex: u6, isCapture: bool) Move {

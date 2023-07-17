@@ -14,6 +14,7 @@ const ctx = document.getElementById("board").getContext("2d");
 // TODO: each file should know the git hash and report the error if  something caches just one
 // TODO: show the line it thinks is best 
 // TODO: save game in local storage 
+// TODO: checkbox for "ummmm, I push pawn!", voice lines would be cool 
 
 let ticker = null;
 let boardFenHistory = [];

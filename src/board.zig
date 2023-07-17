@@ -1,4 +1,5 @@
 const std = @import("std");
+const Magic = @import("magic.zig");
 const print = if (@import("builtin").target.isWasm()) @import("web.zig").consolePrint else std.debug.print;
 
 inline fn assert(val: bool) void {
@@ -42,6 +43,11 @@ pub const Colour = enum(u1) {
 
     pub fn other(self: Colour) Colour {
         return @enumFromInt(~@intFromEnum(self));
+    }
+
+    pub inline fn dir(self: Colour) i32 {
+        // 0 -> 1, 1 -> -1
+        return 1 - 2 * @as(i32, @intFromEnum(self));
     }
 };
 
@@ -255,6 +261,7 @@ pub const Board = struct {
         const colour = thisMove.original.colour;
         self.simpleEval -= thisMove.taken.eval();
         self.frenchMove = .none;
+        self.simpleEval += move.bonus * colour.dir();
 
         self.peicePositions.unsetBit(move.from, colour);
         if (!thisMove.taken.empty()) self.peicePositions.unsetBit(move.to, thisMove.taken.colour);
@@ -263,15 +270,21 @@ pub const Board = struct {
         if (colour == .Black) self.fullMoves += 1;
         self.halfMoveDraw += 1;
         if (move.isCapture) self.halfMoveDraw = 0;
-        if (thisMove.original.kind == .King) {
-            switch (colour) {
-                .Black => self.blackKingIndex = move.to,
-                .White => self.whiteKingIndex = move.to,
-            }
+        switch (thisMove.original.kind) {
+            .King => {
+                switch (colour) {
+                    .Black => self.blackKingIndex = move.to,
+                    .White => self.whiteKingIndex = move.to,
+                }
+            },
+            .Pawn => {
+                self.halfMoveDraw = 0;
+            },
+            else => {},
         }
-        if (thisMove.original.kind == .Pawn) self.halfMoveDraw = 0;
 
         // Most of the time, nobody can castle. Handle that case in the fewest branches.
+        // TODO: punish for loosing castling rights
         if (self.castling.any()) {
             if (thisMove.original.kind == .King) {
                 // If you move your king, you can't castle on either side.
@@ -325,6 +338,7 @@ pub const Board = struct {
                 self.squares[info.rookTo] = .{ .colour = colour, .kind = .Rook };
                 self.squares[info.rookFrom] = Piece.EMPTY;
                 assert(!move.isCapture and (thisMove.taken.kind == .Empty));
+                self.simpleEval += Magic.CASTLE_REWARD * colour.dir();
             },
             .allowFrenchMove => {
                 assert(self.squares[move.from].is(colour, .Pawn));
@@ -363,6 +377,7 @@ pub const Board = struct {
         self.frenchMove = move.frenchMove;
         self.simpleEval += move.taken.eval();
         self.halfMoveDraw = move.oldHalfMoveDraw;
+        self.simpleEval -= move.move.bonus * colour.dir();
         switch (move.move.action) {
             .none => {},
             .promote => |_| {
@@ -379,6 +394,7 @@ pub const Board = struct {
                 self.peicePositions.unsetBit(info.rookTo, colour);
                 self.squares[info.rookTo] = .{ .colour = .White, .kind = .Empty };
                 self.squares[info.rookFrom] = .{ .colour = colour, .kind = .Rook };
+                self.simpleEval -= Magic.CASTLE_REWARD * colour.dir();
             },
             .allowFrenchMove => {},
             .useFrenchMove => |captureIndex| {
@@ -395,11 +411,15 @@ pub const Board = struct {
         if (!move.taken.empty()) self.peicePositions.setBit(move.move.to, move.taken.colour);
         self.peicePositions.unsetBit(move.move.to, colour);
         if (colour == .Black) self.fullMoves -= 1;
-        if (move.original.kind == .King) {
-            switch (colour) {
-                .Black => self.blackKingIndex = move.move.from,
-                .White => self.whiteKingIndex = move.move.from,
-            }
+
+        switch (move.original.kind) {
+            .King => {
+                switch (colour) {
+                    .Black => self.blackKingIndex = move.move.from,
+                    .White => self.whiteKingIndex = move.move.from,
+                }
+            },
+            else => {},
         }
 
         self.nextPlayer = self.nextPlayer.other();
@@ -635,6 +655,7 @@ pub const Move = struct {
         allowFrenchMove,
         useFrenchMove: u6, // capture index
     },
+    bonus: i8 = 0, // positive is good for the player moving.
 };
 
 // TODO: report in ui
@@ -693,13 +714,18 @@ pub fn inferPlayMove(board: *Board, fromIndex: u32, toIndex: u32, alloc: std.mem
     // Check if this is a legal move by the current player.
     const allMoves = try genAllMoves.possibleMoves(board, colour, alloc);
     defer alloc.free(allMoves);
+    var realMove: Move = undefined;
     for (allMoves) |m| {
-        if (std.meta.eql(move, m)) break;
+        // TODO: this is all you need, dont bother with all that shit above. just use <m> below
+        if (std.meta.eql(move.from, m.from) and std.meta.eql(move.to, m.to)) {
+            realMove = m;
+            break;
+        }
     } else {
         return error.IllegalMove;
     }
 
-    const unMove = board.play(move);
+    const unMove = board.play(realMove);
     if (try search.inCheck(board, colour, alloc)) {
         board.unplay(unMove);
         return error.IllegalMove;

@@ -7,6 +7,7 @@ const GameOver = @import("board.zig").GameOver;
 
 // TODO: split into uci.zig and fish.zig
 // TODO: for just using support wasm32-wasi and wasm-freestanding (browser by exposing a uci_send(ptr, len) and uci_recieve(ptr, maxLen)->len function).
+// TODO: threads!!! 8x speed = goooood times.
 
 const fishTimeLimitMS = 1;
 const maxMoves = 200;
@@ -28,6 +29,8 @@ pub fn main() !void {
             for (std.enums.values(GameOver)) |key| {
                 print("[info]: {} = {}.\n", .{ key, results.get(key) orelse 0 });
             }
+            print("[info]: errors = {}.\n", .{failed});
+            print("[info]: errors = {}.\n", .{failed});
         }
 
         const result = playOneGame(&fish, g, gameCount) catch |err| {
@@ -41,11 +44,18 @@ pub fn main() !void {
         try results.put(result, count);
     }
 
-    print("[info]: Done! Played {} games in {}ms.\n", .{ gameCount, gt.end() });
+    for (std.enums.values(GameOver)) |key| {
+        print("[info]: {} = {}.\n", .{ key, results.get(key) orelse 0 });
+    }
+    print("[info]: errors = {}.\n", .{failed});
+    const time = gt.end();
+    print("[info]: Done! Played {} games in {}ms.\n", .{ gameCount, time });
     try fish.deinit();
 }
 
-pub fn playOneGame(fish: *Stockfish, gameIndex: u32, gamesTotal: u32) !GameOver {
+// TODO: output pgn
+// TODO: alternate who plays white
+pub fn playOneGame(fish: *Stockfish, gameIndex: usize, gamesTotal: u32) !GameOver {
     try fish.send(.NewGame);
     try fish.send(.AreYouReady);
     fish.blockUntilRecieve(.ReadyOk);
@@ -59,11 +69,6 @@ pub fn playOneGame(fish: *Stockfish, gameIndex: u32, gamesTotal: u32) !GameOver 
 
     for (0..maxMoves) |i| {
         print("[info]: Move {}. Game {}/{}.\n", .{ i, gameIndex, gamesTotal });
-        playUciMove(fish, &board, &moveHistory, &stats) catch |err| {
-            return try logGameOver(err, &board, &moveHistory, gt, &stats);
-        };
-        board.debugPrint();
-
         print("[info]: I'm thinking.\n", .{});
         var t = Timer.start();
         const move = search.bestMove(&board, board.nextPlayer, null) catch |err| {
@@ -74,6 +79,11 @@ pub fn playOneGame(fish: *Stockfish, gameIndex: u32, gamesTotal: u32) !GameOver 
         try moveHistory.append(moveStr);
         _ = board.play(move);
         print("[info]: I played {s} in {}ms.\n", .{ moveStr, t.end() });
+        board.debugPrint();
+
+        playUciMove(fish, &board, &moveHistory, &stats) catch |err| {
+            return try logGameOver(err, &board, &moveHistory, gt, &stats);
+        };
         board.debugPrint();
     } else {
         print("[info]: Played {} moves each. Stopping the game because nobody cares. \n", .{maxMoves});
@@ -211,10 +221,11 @@ fn logGameOver(err: anyerror, board: *Board, moveHistory: *std.ArrayList([5]u8),
                 .Continue => "Game over but player can still move? This is a bug!",
                 .Stalemate => "Draw (stalemate).",
                 .FiftyMoveDraw => "Draw (50 move rule).",
-                .WhiteWins => "White (fish) wins.",
-                .BlackWins => "Black (luke) wins.",
+                .WhiteWins => "White (luke) wins.",
+                .BlackWins => "Black (fish) wins.",
             };
-            print("[info]: {s} The game lasted {} ply ({} ms).\n", .{ msg, moveHistory.items.len, gt.end() });
+            const time = gt.end();
+            print("[info]: {s} The game lasted {} ply ({} ms). \n", .{ msg, moveHistory.items.len, time });
             print("[info]: The fish played {}/{} moves randomly.\n", .{ stats.fishRandom, stats.fishOnTime + stats.fishRandom });
             return result;
         },

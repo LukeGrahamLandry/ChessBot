@@ -5,6 +5,7 @@ const Piece = @import("board.zig").Piece;
 const Kind = @import("board.zig").Kind;
 const Move = @import("board.zig").Move;
 const GameOver = @import("board.zig").GameOver;
+const Magic = @import("magic.zig");
 const print = if (@import("builtin").target.isWasm()) @import("web.zig").consolePrint else std.debug.print;
 
 // TODO: carefully audit any use of usize because wasm is 32 bit!
@@ -59,7 +60,6 @@ pub const Stats = struct {
 
 const IM_MATED_EVAL = -(@as(i32, 1) << 24); // Add distance to prefer sooner mates
 const LOWEST_EVAL = -(@as(i32, 1) << 25);
-const DRAW_EVAL = -400; // Draws are bad if you're up material but good if you're down materal. Slight preference against because that's more fun.
 
 comptime {
     std.debug.assert(LOWEST_EVAL < IM_MATED_EVAL);
@@ -187,7 +187,7 @@ pub fn Strategy(comptime opts: StratOpts) type {
         // Returns error.GameOver if there were no possible moves or for 50 move rule.
         pub fn walkEval(game: *Board, me: Colour, remaining: i32, bigRemaining: i32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, stats: *Stats, memo: *MemoTable, comptime capturesOnly: bool) error{ OutOfMemory, ForceStop, Overflow }!i32 {
             if (forceStop) return error.ForceStop;
-            if (game.halfMoveDraw >= 100) return DRAW_EVAL;
+            if (game.halfMoveDraw >= 100) return Magic.DRAW_EVAL;
 
             if (useMemoMap) {
                 // TODO: It would be really good to be able to reuse what we did on the last search if they played the move we thought they would.
@@ -214,7 +214,7 @@ pub fn Strategy(comptime opts: StratOpts) type {
                 if (try inCheck(game, me, alloc)) {
                     return IM_MATED_EVAL - remaining;
                 } else {
-                    return DRAW_EVAL;
+                    return Magic.DRAW_EVAL;
                 }
             }
             if (remaining == opts.maxDepth) sortMoves(game, moves);
@@ -281,13 +281,12 @@ pub fn Strategy(comptime opts: StratOpts) type {
         }
 
         fn quickEvalMove(game: *Board, move: Move) i32 {
-            const direction: i32 = if (game.nextPlayer == .White) 1 else -1;
             const unMove = game.play(move);
             defer game.unplay(unMove);
             // if (memoMap.?.get(game)) |cached| {
             //     return cached.eval * direction;
             // } else {
-            return game.simpleEval * direction;
+            return game.simpleEval * game.nextPlayer.other().dir();
             // }
         }
 
