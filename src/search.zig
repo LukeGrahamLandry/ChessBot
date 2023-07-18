@@ -186,17 +186,17 @@ pub fn Strategy(comptime opts: StratOpts) type {
                     // If we ran out of time, just return the best result from the last search.
                     if (std.time.nanoTimestamp() >= endTime) {
                         if (thinkTime == -1) sortMoves(game, topLevelMoves); // haven't even done one search, be slightly better than random.
-                        print("Out of time. Using move from depth {} ({}ms)\n", .{ depth - 1, @divFloor(thinkTime, std.time.ns_per_ms) });
+                        // print("Out of time. Using move from depth {} ({}ms)\n", .{ depth - 1, @divFloor(thinkTime, std.time.ns_per_ms) });
                         return topLevelMoves[0];
                     }
                 }
 
                 std.sort.insertionContext(0, topLevelMoves.len, PairContext{ .moves = topLevelMoves, .evals = evalGuesses.items });
                 thinkTime = std.time.nanoTimestamp() - startTime;
-                print("Searched depth {} in {} ms.\n", .{ depth, @divFloor(thinkTime, std.time.ns_per_ms) });
+                // print("Searched depth {} in {} ms.\n", .{ depth, @divFloor(thinkTime, std.time.ns_per_ms) });
             }
 
-            print("Reached max depth {} in {}ms.\n", .{ maxDepth orelse opts.maxDepth, @divFloor(thinkTime, std.time.ns_per_ms) });
+            // print("Reached max depth {} in {}ms.\n", .{ maxDepth orelse opts.maxDepth, @divFloor(thinkTime, std.time.ns_per_ms) });
             return topLevelMoves[0];
         }
 

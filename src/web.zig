@@ -32,6 +32,12 @@ pub fn consolePrint(comptime fmt: []const u8, args: anytype) void {
     jsConsoleLog(str.ptr, str.len);
 }
 
+pub fn alertPrint(comptime fmt: []const u8, args: anytype) void {
+    var buffer: [2048]u8 = undefined;
+    var str = std.fmt.bufPrint(&buffer, fmt, args) catch "Error while printing!";
+    jsAlert(str.ptr, str.len);
+}
+
 /// OUT: internalBoard, boardView, nextColour
 export fn restartGame() void {
     internalBoard = Board.initial();
@@ -193,4 +199,10 @@ export fn getBitBoard(magicEngineIndex: u32, colourIndex: u32) u64 {
 
 export fn isWhiteTurn() bool {
     return nextColour == .White;
+}
+
+export fn loadOpeningBook(ptr: [*]u32, len: usize) bool {
+    _ = len;
+    _ = ptr;
+    alertPrint("TODO: implement loadOpeningBook", .{});
 }

@@ -13,8 +13,8 @@ const fishTimeLimitMS = 2;
 const maxMoves = 500;
 const gameCount = 100;
 const fishLevel = 0;
-const myTimeLimitMS = 500;
-const myMaxDepth = 30;
+const myTimeLimitMS = 1000;
+const myMaxDepth = 4;
 
 pub fn main() !void {
     const fishLevelStr = try std.fmt.allocPrint(general.allocator(), "{}", .{fishLevel});
@@ -71,6 +71,7 @@ pub fn playOneGame(fish: *Stockfish, gameIndex: usize, gamesTotal: u32) !GameOve
         print("[info]: Move {}. Game {}/{}.\n", .{ i, gameIndex, gamesTotal });
         print("[info]: I'm thinking.\n", .{});
         var t = Timer.start();
+        // TODO: iterative is wrong. bestMove plays faster and better. because of the pruning memo table thing?
         const move = search.bestMoveIterative(&board, board.nextPlayer, myMaxDepth, myTimeLimitMS) catch |err| {
             return try logGameOver(err, &board, &moveHistory, gt, &stats);
         };
