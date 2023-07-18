@@ -43,6 +43,7 @@ pub const StratOpts = struct {
     memoMapSizeMB: u64 = 80, // Zero means don't use memo map at all.
     hashAlgo: HashAlgo = .CityHash64,
     checkDetection: CheckAlgo = .ReverseFromKing,
+    // TODO: High numbers play worse?? i know im doing it wrong but i thought it would still be better. or maybe its cripplefish fuck up
     followCaptureDepth: i32 = 0,
     // TODO: how many levels to sort. which algo to use. whether to use memo map.
 };
@@ -51,7 +52,7 @@ pub const MoveErr = error{ GameOver, OutOfMemory, ForceStop, Overflow };
 
 // These numbers are for one bestMove call, not cumulative.
 pub const Stats = struct {
-    comptime use: bool = true,
+    comptime use: bool = false,
     memoHits: u64 = 0, // Tried to evaluate a board and it was already in the memo table with a high enough depth.
     // memoAdditions: u64 = 0, // Added a board to the memo table.
     // memoCollissions: u64 = 0, // Added a board and overwrite a previous value. Since the table is never reset, this will trend towards 100% of memoAdditions. TODO: make this useful
@@ -139,6 +140,8 @@ pub fn Strategy(comptime opts: StratOpts) type {
 
             const topLevelMoves = try genAllMoves.possibleMoves(game, me, alloc);
             defer topLevelMoves.deinit();
+            var evalGuesses = std.ArrayList(i32).init(alloc);
+            defer evalGuesses.deinit();
             sortMoves(game, topLevelMoves);
 
             var stats: Stats = .{};
@@ -147,20 +150,35 @@ pub fn Strategy(comptime opts: StratOpts) type {
                     const unMove = game.play(move);
                     defer game.unplay(unMove);
                     if (try inCheck(game, me, alloc)) {
-                        move.valueGuess = IM_MATED_EVAL;
+                        try evalGuesses.append(IM_MATED_EVAL);
                         continue;
                     }
-                    move.valueGuess = -try walkEval(game, me.other(), depth, @min(opts.followCaptureDepth, depth), LOWEST_EVAL, LOWEST_EVAL, movesArena.allocator(), &stats, memo, false); // TODO: need to catch
+                    const eval = -try walkEval(game, me.other(), depth, @min(opts.followCaptureDepth, depth), LOWEST_EVAL, LOWEST_EVAL, movesArena.allocator(), &stats, memo, false); // TODO: need to catch
+                    try evalGuesses.append(eval);
                 }
+
+                std.sort.insertionContext(0, topLevelMoves.len, .{ .moves = topLevelMoves, .evals = evalGuesses });
+                evalGuesses.clearRetainingCapacity();
             }
             _ = t;
 
             return topLevelMoves.items[0];
         }
 
-        fn greaterThanGuess(game: *Board, a: Move, b: Move) bool {
-            return quickEvalMove(game, a) > quickEvalMove(game, b);
-        }
+        const PairContext = struct {
+            moves: []Move,
+            evals: []i32,
+
+            // Flipped cause accending
+            pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
+                return ctx.evals[a] > ctx.evals[b];
+            }
+
+            pub fn swap(ctx: @This(), a: usize, b: usize) void {
+                std.mem.swap(Move, &ctx.moves[a], &ctx.moves[b]);
+                std.mem.swap(Move, &ctx.evals[a], &ctx.evals[b]);
+            }
+        };
 
         var memoMap: ?MemoTable = null;
         pub var forceStop = false;
@@ -185,7 +203,7 @@ pub fn Strategy(comptime opts: StratOpts) type {
             const moves = try genAllMoves.possibleMoves(game, me, alloc);
             defer alloc.free(moves);
             if (moves.len == 0) return error.GameOver;
-            // sortMoves(game, moves);  // There's no pruning here so this should do nothing?
+            sortMoves(game, moves);
 
             // No deinit because returned
             var bestMoves = try std.ArrayList(Move).initCapacity(alloc, 50);
@@ -193,15 +211,18 @@ pub fn Strategy(comptime opts: StratOpts) type {
             // TODO: use memo at top level? once it persists longer it must be helpful
             var bestVal: i32 = LOWEST_EVAL;
             var stats: Stats = .{};
+            var bestWhiteEval = LOWEST_EVAL;
+            var bestBlackEval = LOWEST_EVAL;
             for (moves) |move| {
                 const unMove = game.play(move);
                 defer game.unplay(unMove);
                 if (try inCheck(game, me, alloc)) continue;
-                const value = -try walkEval(game, me.other(), depth, @min(opts.followCaptureDepth, depth), LOWEST_EVAL, LOWEST_EVAL, movesArena.allocator(), &stats, memo, false); // TODO: need to catch
+                const value = -try walkEval(game, me.other(), depth, @min(opts.followCaptureDepth, depth), bestWhiteEval, bestBlackEval, movesArena.allocator(), &stats, memo, false); // TODO: need to catch
                 if (value > bestVal) {
                     bestVal = value;
                     bestMoves.clearRetainingCapacity();
                     try bestMoves.append(move);
+                    if (opts.doPruning and checkAlphaBeta(bestVal, me, &bestWhiteEval, &bestBlackEval)) break;
                 } else if (value == bestVal) {
                     try bestMoves.append(move);
                 }
@@ -250,57 +271,14 @@ pub fn Strategy(comptime opts: StratOpts) type {
                     return Magic.DRAW_EVAL;
                 }
             }
-
-            var heapctx: Context = .{ .items = moves, .sub_ctx = game };
-            _ = heapctx;
             if (remaining > 0) {
                 sortMoves(game, moves);
-
-                // for (0..@min(moves.len, 4)) |start| {
-                //     var bestGuess: usize = 0;
-                //     var bestGuessVal: i32 = LOWEST_EVAL;
-                //     for (moves[start..], start..) |move, i| {
-                //         const val = quickEvalMove(game, move);
-                //         if (val > bestGuessVal) {
-                //             bestGuessVal = val;
-                //             bestGuess = i;
-                //         }
-                //     }
-                //     std.mem.swap(Move, &moves[start], &moves[bestGuess]);
-                // }
-
-                // stdheap_make(0, moves.len, heapctx);
             }
 
             var bestVal: i32 = LOWEST_EVAL;
             var checksSkipped: usize = 0;
             var startEvaling: usize = 0;
-            // var i = moves.len - 1;
-            for (0..moves.len) |m| {
-                // if (remaining > 0 and i > 0) {
-                //     stdheap_pop(0, i, heapctx);
-                //     i -= 1;
-                // }
-
-                // ~Same speed as full insertion sort
-                // if (remaining > 0 and m < 5) {
-                //     var bestGuess: usize = 0;
-                //     var bestGuessVal: i32 = LOWEST_EVAL;
-                //     for (moves[m..], m..) |move, i| {
-                //         const val = quickEvalMove(game, move);
-                //         if (val > bestGuessVal) {
-                //             bestGuessVal = val;
-                //             bestGuess = i;
-                //         }
-                //     }
-                //     std.mem.swap(Move, &moves[m], &moves[bestGuess]);
-                // }
-
-                const move = moves[m];
-                // const move = moves[moves.len - 1 - m]; // heap goes the other way
-                // if (remaining > 0) {
-                //     print("{}. e={}\n", .{ m, quickEvalMove(game, move) });
-                // }
+            for (moves) |move| {
                 const unMove = game.play(move);
                 defer game.unplay(unMove);
                 if (try inCheck(game, me, alloc)) {
@@ -348,64 +326,6 @@ pub fn Strategy(comptime opts: StratOpts) type {
             return bestVal;
         }
 
-        const Context = struct {
-            items: []Move,
-            sub_ctx: *Board,
-
-            pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
-                return eLessThan(ctx.sub_ctx, ctx.items[a], ctx.items[b]);
-            }
-
-            pub fn swap(ctx: @This(), a: usize, b: usize) void {
-                return std.mem.swap(Move, &ctx.items[a], &ctx.items[b]);
-            }
-        };
-
-        fn stdheap_pop(a: usize, i: usize, context: anytype) void {
-            // pop maximal elements from the heap.
-            context.swap(a, i);
-            stdheap_siftDown(a, a, i, context);
-        }
-
-        fn stdheap_make(a: usize, b: usize, context: anytype) void {
-            assert(a <= b);
-            // build the heap in linear time.
-            var i = a + (b - a) / 2;
-            while (i > a) {
-                i -= 1;
-                stdheap_siftDown(a, i, b, context);
-            }
-        }
-        fn stdheap_siftDown(a: usize, target: usize, b: usize, context: anytype) void {
-            var cur = target;
-            while (true) {
-                // When we don't overflow from the multiply below, the following expression equals (2*cur) - (2*a) + a + 1
-                // The `+ a + 1` is safe because:
-                //  for `a > 0` then `2a >= a + 1`.
-                //  for `a = 0`, the expression equals `2*cur+1`. `2*cur` is an even number, therefore adding 1 is safe.
-                var child = (std.math.mul(usize, cur - a, 2) catch break) + a + 1;
-
-                // stop if we overshot the boundary
-                if (!(child < b)) break;
-
-                // `next_child` is at most `b`, therefore no overflow is possible
-                const next_child = child + 1;
-
-                // store the greater child in `child`
-                if (next_child < b and context.lessThan(child, next_child)) {
-                    child = next_child;
-                }
-
-                // stop if the Heap invariant holds at `cur`.
-                if (context.lessThan(child, cur)) break;
-
-                // swap `cur` with the greater child,
-                // move one step down, and continue sifting.
-                context.swap(child, cur);
-                cur = child;
-            }
-        }
-
         // This is in it's own function because it's used in the special upper loop and the walkEval.
         /// Returns true if the move is so good we should stop considering this branch.
         fn checkAlphaBeta(bestVal: i32, me: Colour, bestWhiteEval: *i32, bestBlackEval: *i32) bool {
@@ -435,10 +355,6 @@ pub fn Strategy(comptime opts: StratOpts) type {
             // } else {
             return game.simpleEval * game.nextPlayer.other().dir();
             // }
-        }
-
-        fn eLessThan(game: *Board, a: Move, b: Move) bool {
-            return quickEvalMove(game, a) < quickEvalMove(game, b);
         }
 
         fn greaterThan(game: *Board, a: Move, b: Move) bool {

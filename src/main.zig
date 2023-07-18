@@ -8,14 +8,14 @@ const print = if (@import("builtin").target.isWasm()) @import("web.zig").console
 
 pub fn main() !void {
     // const t = Timer.start();
-    for (0..1) |_| {
-        try @import("tests.zig").runTestCountPossibleGames();
-    }
+    // for (0..1) |_| {
+    //     try @import("tests.zig").runTestCountPossibleGames();
+    // }
     // print("Ran perft in {}ms\n", .{t.end()});
 
-    // const stdout_file = std.io.getStdOut().writer();
-    // var bw = std.io.bufferedWriter(stdout_file);
-    // const stdout = bw.writer();
+    const stdout_file = std.io.getStdOut().writer();
+    var bw = std.io.bufferedWriter(stdout_file);
+    const stdout = bw.writer();
 
     // try debugPrintAllMoves("8/8/8/8/8/8/8/6PR", .White);
     // try debugPrintAllMoves("rnb1kb1r/1p1ppppp/1qp2n2/p7/1PPP4/8/P3PPPP/R1BQKBNR", .Black);
@@ -29,26 +29,26 @@ pub fn main() !void {
     // rnbqkbnr/pp1ppppp/2p5/8/1N6/8/PPPPPPPP/R1BQKBNR
     // rbbqk2r/p2p1ppp/nB1P3n/4p2P/PPp1PPP1/8/8/RN1QKBNR .Black
 
-    // var game = board.Board.initial();
+    var game = board.Board.initial();
 
     // // TODO: this is always the same sequence because I'm not seeding it.
     // // try std.os.getrandom(buffer: []u8)
     // // TODO: can't chain because it decides to be const and can't shadow names so now I have to think of two names? this can't be right
-    // var notTheRng = std.rand.DefaultPrng.init(0);
-    // var rng = notTheRng.random();
-    // const ss = try game.displayString(alloc);
-    // try stdout.print("{s}\n", .{ss});
+    var notTheRng = std.rand.DefaultPrng.init(0);
+    var rng = notTheRng.random();
+    const ss = try game.displayString(alloc);
+    try stdout.print("{s}\n", .{ss});
     // const start = std.time.nanoTimestamp();
-    // for (0..15) |i| {  // TODO: this number is half the one in bench.zig
-    //     if (!try debugPlayOne(&game, i, .White, &rng, stdout)) {
-    //         break;
-    //     }
-    //     try bw.flush();
-    //     if (!try debugPlayOne(&game, i, .Black, &rng, stdout)) {
-    //         break;
-    //     }
-    //     try bw.flush();
-    // }
+    for (0..500) |i| { // TODO: this number is half the one in bench.zig
+        if (!try debugPlayOne(&game, i, .White, &rng, stdout)) {
+            break;
+        }
+        try bw.flush();
+        if (!try debugPlayOne(&game, i, .Black, &rng, stdout)) {
+            break;
+        }
+        try bw.flush();
+    }
     // try stdout.print("Finished in {}ms.\n", .{@divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms))});
 
     // try bw.flush();

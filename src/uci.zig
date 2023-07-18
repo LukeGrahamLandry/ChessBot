@@ -9,33 +9,30 @@ const GameOver = @import("board.zig").GameOver;
 // TODO: for just using support wasm32-wasi and wasm-freestanding (browser by exposing a uci_send(ptr, len) and uci_recieve(ptr, maxLen)->len function).
 // TODO: threads!!! 8x speed = goooood times.
 
-const fishTimeLimitMS = 1;
-const maxMoves = 200;
+const fishTimeLimitMS = 2;
+const maxMoves = 500;
 const gameCount = 100;
+const fishLevel = 0;
 
 pub fn main() !void {
+    const fishLevelStr = try std.fmt.allocPrint(general.allocator(), "{}", .{fishLevel});
+    defer general.allocator().free(fishLevelStr);
     var fish = try Stockfish.init();
     try fish.send(.Init);
     fish.blockUntilRecieve(.InitOk);
-    try fish.send(.{ .SetOption = .{ .name = "UCI_LimitStrength", .value = "true" } });
-    try fish.send(.{ .SetOption = .{ .name = "UCI_Elo", .value = "1320" } });
-    try fish.send(.{ .SetOption = .{ .name = "Skill Level", .value = "0" } });
+    try fish.send(.{ .SetOption = .{ .name = "Skill Level", .value = fishLevelStr } });
 
     var gt = Timer.start();
     var failed: u32 = 0;
     var results = std.AutoHashMap(GameOver, u32).init(general.allocator());
     for (0..gameCount) |g| {
         if (g != 0) {
-            for (std.enums.values(GameOver)) |key| {
-                print("[info]: {} = {}.\n", .{ key, results.get(key) orelse 0 });
-            }
-            print("[info]: errors = {}.\n", .{failed});
-            print("[info]: errors = {}.\n", .{failed});
+            std.debug.print("[info]: Win {}. Lose {}. Draw {}. Error {}.\n", .{ results.get(.WhiteWins) orelse 0, results.get(.BlackWins) orelse 0, (results.get(.Stalemate) orelse 0) + (results.get(.FiftyMoveDraw) orelse 0), failed });
         }
-
+        std.debug.print("Game {}/{}.\n", .{ g, gameCount });
         const result = playOneGame(&fish, g, gameCount) catch |err| {
             failed += 1;
-            print("[info]: Game failed! {}\n", .{err});
+            std.debug.print("[info]: Game failed! {}\n", .{err});
             search.resetMemoTable();
             continue;
         };
@@ -44,12 +41,9 @@ pub fn main() !void {
         try results.put(result, count);
     }
 
-    for (std.enums.values(GameOver)) |key| {
-        print("[info]: {} = {}.\n", .{ key, results.get(key) orelse 0 });
-    }
-    print("[info]: errors = {}.\n", .{failed});
     const time = gt.get();
-    print("[info]: Done! Played {} games in {}ms.\n", .{ gameCount, time });
+    std.debug.print("[info]: Done! Played {} games in {}ms.\n", .{ gameCount, time });
+    std.debug.print("[info]: Win {}. Lose {}. Draw {}. Error {}.\n", .{ results.get(.WhiteWins) orelse 0, results.get(.BlackWins) orelse 0, (results.get(.Stalemate) orelse 0) + (results.get(.FiftyMoveDraw) orelse 0), failed });
     try fish.deinit();
 }
 
@@ -65,7 +59,7 @@ pub fn playOneGame(fish: *Stockfish, gameIndex: usize, gamesTotal: u32) !GameOve
     var gt = Timer.start();
     var board = Board.initial();
     var stats: Stats = .{};
-    board.debugPrint();
+    // board.debugPrint();
 
     for (0..maxMoves) |i| {
         print("[info]: Move {}. Game {}/{}.\n", .{ i, gameIndex, gamesTotal });
@@ -79,12 +73,12 @@ pub fn playOneGame(fish: *Stockfish, gameIndex: usize, gamesTotal: u32) !GameOve
         try moveHistory.append(moveStr);
         _ = board.play(move);
         print("[info]: I played {s} in {}ms.\n", .{ moveStr, t.get() });
-        board.debugPrint();
+        // board.debugPrint();
 
         playUciMove(fish, &board, &moveHistory, &stats) catch |err| {
             return try logGameOver(err, &board, &moveHistory, gt, &stats);
         };
-        board.debugPrint();
+        // board.debugPrint();
     } else {
         print("[info]: Played {} moves each. Stopping the game because nobody cares. \n", .{maxMoves});
         return error.GameTooLong;
@@ -93,9 +87,11 @@ pub fn playOneGame(fish: *Stockfish, gameIndex: usize, gamesTotal: u32) !GameOve
 
 var buffer = std.io.bufferedWriter(std.io.getStdOut());
 pub fn print(comptime fmt: []const u8, args: anytype) void {
+    _ = args;
+    _ = fmt;
     // TODO: need to change debugPrint() to be buffered. unify all print/assert functions?
     // buffer.writer().print(fmt, args) catch return;
-    std.debug.print(fmt, args);
+    // std.debug.print(fmt, args);
 }
 
 // https://gist.github.com/DOBRO/2592c6dad754ba67e6dcaec8c90165bf
@@ -226,8 +222,8 @@ fn logGameOver(err: anyerror, board: *Board, moveHistory: *std.ArrayList([5]u8),
                 .BlackWins => "Black (fish) wins.",
             };
             const time = gt.get();
-            print("[info]: {s} The game lasted {} ply ({} ms). \n", .{ msg, moveHistory.items.len, time });
-            print("[info]: The fish played {}/{} moves randomly.\n", .{ stats.fishRandom, stats.fishOnTime + stats.fishRandom });
+            std.debug.print("[info]: {s} The game lasted {} ply ({} ms). \n", .{ msg, moveHistory.items.len, time });
+            if (stats.fishRandom != 0) std.debug.print("[info]: The fish played {}/{} moves randomly.\n", .{ stats.fishRandom, stats.fishOnTime + stats.fishRandom });
             return result;
         },
         else => return err,
@@ -247,10 +243,6 @@ fn playUciMove(fish: *Stockfish, board: *Board, moveHistory: *std.ArrayList([5]u
     try fish.send(.{ .Go = .{ .maxSearchTimeMs = fishTimeLimitMS } });
 
     const moveStr = m: {
-        std.time.sleep(fishTimeLimitMS * std.time.ns_per_ms);
-        try fish.send(.Stop);
-        std.time.sleep(5 * std.time.ns_per_ms); // give it a moment to be able to stop
-
         var bestMove: ?[5]u8 = null;
         var moveTime: u64 = 0;
         while (true) {
@@ -263,6 +255,8 @@ fn playUciMove(fish: *Stockfish, board: *Board, moveHistory: *std.ArrayList([5]u
                                 bestMove = move;
                                 moveTime = time;
                             }
+                        } else {
+                            try fish.send(.Stop);
                         }
                     }
                 },
@@ -339,7 +333,7 @@ const Stockfish = struct {
 };
 
 fn sendUci(out: anytype, cmd: UciCommand) !void {
-    var letters = try std.BoundedArray(u8, 2048).init(0); // Don't want to deal with passing down an allocator.
+    var letters = try std.BoundedArray(u8, 8192).init(0); // Don't want to deal with passing down an allocator.
     switch (cmd) {
         .Init => try letters.appendSlice("uci"),
         .AreYouReady => try letters.appendSlice("isready"),
@@ -385,7 +379,7 @@ fn sendUci(out: anytype, cmd: UciCommand) !void {
 }
 
 fn recieveUci(in: anytype) !UciResult {
-    var buf: [1000]u8 = undefined;
+    var buf: [8192]u8 = undefined;
     var resultStream = std.io.fixedBufferStream(&buf);
     // Don't care about the max because fixedBufferStream will give a write error if it overflows.
     try in.streamUntilDelimiter(resultStream.writer(), '\n', null);
