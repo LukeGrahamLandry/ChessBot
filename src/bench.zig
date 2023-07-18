@@ -67,7 +67,7 @@ fn replayGame(gameStr: []const u8) !std.ArrayList(board.Move) {
     var game = board.Board.initial();
     var bestMoves = std.ArrayList(board.Move).init(alloc);
     while (true) {
-        try bestMoves.append(try strat.bestMove(&game, game.nextPlayer, null));
+        try bestMoves.append(try strat.bestMoveIterative(&game, game.nextPlayer, 4, 5000));
 
         const word = moves.next() orelse break;
         std.debug.assert(word.len == 4 or word.len == 5);
@@ -78,7 +78,7 @@ fn replayGame(gameStr: []const u8) !std.ArrayList(board.Move) {
         try @import("uci.zig").playAlgebraic(&game, moveStr);
     }
 
-    print("Finished game in {}ms.", .{t.get()});
+    print("Finished game in {}ms.\n", .{t.get()});
     return bestMoves;
 }
 

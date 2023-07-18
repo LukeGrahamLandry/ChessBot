@@ -171,7 +171,7 @@ pub fn MoveGenStrategy(comptime filter: MoveFilter) type {
                     const endIndex = targetRank * 8 + targetFile;
                     const captureIndex = ((if (colour == .White) targetRank - 1 else targetRank + 1) * 8) + targetFile;
                     assert(board.squares[captureIndex].is(colour.other(), .Pawn));
-                    try moves.append(.{ .from = @intCast(i), .to = @intCast(endIndex), .action = .{ .useFrenchMove = @intCast(captureIndex) }, .isCapture = true, .bonus = Magic.PUSH_PAWN });
+                    try moves.append(.{ .from = @intCast(i), .to = @intCast(endIndex), .action = .{ .useFrenchMove = @intCast(captureIndex) }, .isCapture = true });
                 },
             }
         }

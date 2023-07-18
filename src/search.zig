@@ -37,14 +37,14 @@ pub const genCapturesOnly = movegen.MoveFilter.CapturesOnly.get();
 pub const genAllMoves = movegen.MoveFilter.Any.get();
 
 pub const StratOpts = struct {
-    maxDepth: comptime_int = 3, // TODO: should be runtime param to bestMove so wasm can change without increasing code size.
+    maxDepth: comptime_int = 4, // TODO: should be runtime param to bestMove so wasm can change without increasing code size.
     doPruning: bool = true,
     beDeterministicForTest: bool = true,
-    memoMapSizeMB: u64 = 80, // Zero means don't use memo map at all.
+    memoMapSizeMB: u64 = 1000, // Zero means don't use memo map at all.
     hashAlgo: HashAlgo = .CityHash64,
     checkDetection: CheckAlgo = .ReverseFromKing,
     // TODO: High numbers play worse?? i know im doing it wrong but i thought it would still be better. or maybe its cripplefish fuck up
-    followCaptureDepth: i32 = 0,
+    followCaptureDepth: i32 = -12345, // TODO: unused
     // TODO: how many levels to sort. which algo to use. whether to use memo map.
 };
 
@@ -130,39 +130,74 @@ pub fn Strategy(comptime opts: StratOpts) type {
             return bestMoves.items[choice];
         }
 
-        pub fn bestMoveIterative(game: *Board, me: Colour, maxDepth: ?i32, timeLimitMs: i128) !Move {
-            _ = timeLimitMs;
-            const t = Timer.start();
+        pub fn bestMoveIterative(game: *Board, me: Colour, maxDepth: ?usize, timeLimitMs: i128) !Move {
+            const startTime = std.time.nanoTimestamp();
+            const endTime = startTime + (timeLimitMs * std.time.ns_per_ms);
             var alloc = upperArena.allocator();
-            defer assert(upperArena.reset(.retain_capacity));
+            defer _ = upperArena.reset(.retain_capacity);
             if (memoMap == null) memoMap = try MemoTable.initWithCapacity(opts.memoMapSizeMB, std.heap.page_allocator);
             var memo = &memoMap.?;
 
-            const topLevelMoves = try genAllMoves.possibleMoves(game, me, alloc);
-            defer topLevelMoves.deinit();
+            var topLevelMoves = try genAllMoves.possibleMoves(game, me, alloc);
+            defer alloc.free(topLevelMoves);
+
+            // TODO: this is extra plays but only at top level.
+            // Remove illigal moves.
+            var m: usize = 0;
+            while (m < topLevelMoves.len) {
+                const move = topLevelMoves[m];
+                const unMove = game.play(move);
+                defer game.unplay(unMove);
+                if (try inCheck(game, me, alloc)) {
+                    // TODO: leak but arena
+                    std.mem.swap(Move, &topLevelMoves[topLevelMoves.len - 1], &topLevelMoves[m]);
+                    topLevelMoves.len -= 1;
+                } else {
+                    m += 1;
+                }
+            }
+            if (topLevelMoves.len == 0) return error.GameOver;
+
             var evalGuesses = std.ArrayList(i32).init(alloc);
             defer evalGuesses.deinit();
-            sortMoves(game, topLevelMoves);
-
+            // sortMoves(game, topLevelMoves);
+            for (topLevelMoves) |move| {
+                try evalGuesses.append(quickEvalMove(game, move));
+            }
             var stats: Stats = .{};
-            for (2..(maxDepth orelse opts.maxDepth) + 1) |depth| {
-                for (topLevelMoves) |*move| {
+            var thinkTime: i128 = -1;
+            for (1..@as(usize, @intCast((maxDepth orelse opts.maxDepth) + 1))) |depth| {
+                var bestWhiteEval = LOWEST_EVAL;
+                var bestBlackEval = LOWEST_EVAL;
+                var bestVal: i32 = LOWEST_EVAL;
+                for (topLevelMoves, 0..) |move, i| {
                     const unMove = game.play(move);
                     defer game.unplay(unMove);
-                    if (try inCheck(game, me, alloc)) {
-                        try evalGuesses.append(IM_MATED_EVAL);
-                        continue;
+                    const eval = -try walkEval(game, me.other(), @intCast(depth), LOWEST_EVAL, LOWEST_EVAL, movesArena.allocator(), &stats, memo, false); // TODO: need to catch
+                    evalGuesses.items[i] = eval;
+
+                    if (eval > bestVal) {
+                        bestVal = eval;
+                        if (opts.doPruning and checkAlphaBeta(bestVal, me, &bestWhiteEval, &bestBlackEval)) {
+                            break;
+                        }
                     }
-                    const eval = -try walkEval(game, me.other(), depth, @min(opts.followCaptureDepth, depth), LOWEST_EVAL, LOWEST_EVAL, movesArena.allocator(), &stats, memo, false); // TODO: need to catch
-                    try evalGuesses.append(eval);
+
+                    // If we ran out of time, just return the best result from the last search.
+                    if (std.time.nanoTimestamp() >= endTime) {
+                        if (thinkTime == -1) sortMoves(game, topLevelMoves); // haven't even done one search, be slightly better than random.
+                        print("Out of time. Using move from depth {} ({}ms)\n", .{ depth - 1, @divFloor(thinkTime, std.time.ns_per_ms) });
+                        return topLevelMoves[0];
+                    }
                 }
 
-                std.sort.insertionContext(0, topLevelMoves.len, .{ .moves = topLevelMoves, .evals = evalGuesses });
-                evalGuesses.clearRetainingCapacity();
+                std.sort.insertionContext(0, topLevelMoves.len, PairContext{ .moves = topLevelMoves, .evals = evalGuesses.items });
+                thinkTime = std.time.nanoTimestamp() - startTime;
+                print("Searched depth {} in {} ms.\n", .{ depth, @divFloor(thinkTime, std.time.ns_per_ms) });
             }
-            _ = t;
 
-            return topLevelMoves.items[0];
+            print("Reached max depth {} in {}ms.\n", .{ maxDepth orelse opts.maxDepth, @divFloor(thinkTime, std.time.ns_per_ms) });
+            return topLevelMoves[0];
         }
 
         const PairContext = struct {
@@ -176,7 +211,7 @@ pub fn Strategy(comptime opts: StratOpts) type {
 
             pub fn swap(ctx: @This(), a: usize, b: usize) void {
                 std.mem.swap(Move, &ctx.moves[a], &ctx.moves[b]);
-                std.mem.swap(Move, &ctx.evals[a], &ctx.evals[b]);
+                std.mem.swap(i32, &ctx.evals[a], &ctx.evals[b]);
             }
         };
 
@@ -186,7 +221,7 @@ pub fn Strategy(comptime opts: StratOpts) type {
         pub fn resetMemoTable() void {
             if (useMemoMap) {
                 for (0..memoMap.?.buffer.len) |i| {
-                    memoMap.?.buffer[i] = std.mem.zeroes(MemoEntry);
+                    memoMap.?.buffer[i].hash = 0;
                 }
             }
         }
@@ -217,12 +252,14 @@ pub fn Strategy(comptime opts: StratOpts) type {
                 const unMove = game.play(move);
                 defer game.unplay(unMove);
                 if (try inCheck(game, me, alloc)) continue;
-                const value = -try walkEval(game, me.other(), depth, @min(opts.followCaptureDepth, depth), bestWhiteEval, bestBlackEval, movesArena.allocator(), &stats, memo, false); // TODO: need to catch
+                const value = -try walkEval(game, me.other(), depth, bestWhiteEval, bestBlackEval, movesArena.allocator(), &stats, memo, false); // TODO: need to catch
                 if (value > bestVal) {
                     bestVal = value;
                     bestMoves.clearRetainingCapacity();
                     try bestMoves.append(move);
-                    if (opts.doPruning and checkAlphaBeta(bestVal, me, &bestWhiteEval, &bestBlackEval)) break;
+                    if (opts.doPruning and checkAlphaBeta(bestVal, me, &bestWhiteEval, &bestBlackEval)) {
+                        break;
+                    }
                 } else if (value == bestVal) {
                     try bestMoves.append(move);
                 }
@@ -239,45 +276,52 @@ pub fn Strategy(comptime opts: StratOpts) type {
         // The alpha-beta values effect lower layers, not higher layers, so passed by value.
         // The eval of <game>, positive means <me> is winning, assuming it is <me>'s turn.
         // Returns error.GameOver if there were no possible moves or for 50 move rule.
-        pub fn walkEval(game: *Board, me: Colour, remaining: i32, bigRemaining: i32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, stats: *Stats, memo: *MemoTable, comptime capturesOnly: bool) error{ OutOfMemory, ForceStop, Overflow }!i32 {
+        // TODO: redo my captures only thing to be lookForPiece and only simpleEval if no captures on the board
+        pub fn walkEval(game: *Board, me: Colour, remaining: i32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, stats: *Stats, memo: *MemoTable, comptime capturesOnly: bool) error{ OutOfMemory, ForceStop, Overflow }!i32 {
             if (forceStop) return error.ForceStop;
             if (game.halfMoveDraw >= 100) return Magic.DRAW_EVAL;
 
-            if (useMemoMap) {
+            // Want to mutate copies of values from parameters.
+            var bestWhiteEval = bestWhiteEvalIn;
+            var bestBlackEval = bestBlackEvalIn;
+
+            var cacheHit: ?MemoValue = null;
+            if (useMemoMap and remaining > 0) {
                 // TODO: It would be really good to be able to reuse what we did on the last search if they played the move we thought they would.
                 //       This remaining checks stops that but also seems nesisary for correctness.
                 if (memo.get(game)) |cached| {
                     if (cached.remaining >= remaining) {
                         if (comptime stats.use) stats.memoHits += 1;
-                        return if (me == .White) cached.eval else -cached.eval;
+                        // if (cached.kind == .Exact) return cached.eval * me.dir();
+                        return cached.eval * me.dir();
                     }
-                    // TODO: should save the best move from that position at the old low depth and use it as the start for the search
+                    cacheHit = cached;
                 }
             }
-
-            // Want to mutate values from parameters.
-            var bestWhiteEval = bestWhiteEvalIn;
-            var bestBlackEval = bestBlackEvalIn;
 
             const moveGen = genAllMoves;
             var moves = try moveGen.possibleMoves(game, me, alloc);
             defer alloc.free(moves);
-            if (moves.len == 0) {
-                // <me> can't make any moves. Either got checkmated or its a draw.
-                if (comptime stats.use) stats.gameOversSeen += 1;
-                if (try inCheck(game, me, alloc)) {
-                    return IM_MATED_EVAL - remaining;
-                } else {
-                    return Magic.DRAW_EVAL;
+
+            // if (remaining > 0) {
+            // sortMoves(game, moves);
+            // This is as good as sorting when using the iterative one but probably worse otherwise.
+            if (cacheHit) |cached| {
+                for (0..moves.len) |i| {
+                    if (moves[i].from == cached.move.from and moves[i].to == cached.move.to) {
+                        std.mem.swap(Move, &moves[0], &moves[i]);
+                        break;
+                    }
                 }
             }
-            if (remaining > 0) {
-                sortMoves(game, moves);
-            }
+            // }
 
             var bestVal: i32 = LOWEST_EVAL;
             var checksSkipped: usize = 0;
             var startEvaling: usize = 0;
+            // var memoKind: MemoNodeKind = .Exact;
+            var foundMove: ?Move = null;
+            var noLegalMoves = true;
             for (moves) |move| {
                 const unMove = game.play(move);
                 defer game.unplay(unMove);
@@ -286,41 +330,49 @@ pub fn Strategy(comptime opts: StratOpts) type {
                     continue;
                 }
                 startEvaling += 1;
+                noLegalMoves = false;
 
-                const value = if (capturesOnly and !(move.isCapture)) v: {
-                    // TODO: this isnt quite what I want. That move wasn't a capture but that doesn't mean that the new board is safe.
-                    // The problem I'm trying to solve is if you simpleEval on a board where captures are possible, the eval will be totally different next move.
+                const value = if (remaining <= 0) v: {
                     if (comptime stats.use) stats.leafBoardsSeen += 1;
-                    break :v if (me == .White) genAllMoves.simpleEval(game) else -genAllMoves.simpleEval(game);
-                } else if (remaining <= 0) v: {
-                    if (!capturesOnly) {
-                        const val = try walkEval(game, me.other(), bigRemaining, bigRemaining, bestWhiteEval, bestBlackEval, alloc, stats, memo, true);
-                        break :v -val;
-                    }
-                    if (comptime stats.use) stats.leafBoardsSeen += 1;
-                    break :v if (me == .White) genAllMoves.simpleEval(game) else -genAllMoves.simpleEval(game);
+                    break :v genAllMoves.simpleEval(game) * me.dir();
                 } else r: {
-                    const v = try walkEval(game, me.other(), remaining - 1, bigRemaining, bestWhiteEval, bestBlackEval, alloc, stats, memo, capturesOnly);
+                    const v = try walkEval(game, me.other(), remaining - 1, bestWhiteEval, bestBlackEval, alloc, stats, memo, capturesOnly);
                     break :r -v;
                 };
 
                 if (value > bestVal) {
+                    foundMove = move;
                     bestVal = value;
-                    if (opts.doPruning and checkAlphaBeta(bestVal, me, &bestWhiteEval, &bestBlackEval)) break;
+                    if (opts.doPruning and checkAlphaBeta(bestVal, me, &bestWhiteEval, &bestBlackEval)) {
+                        // memoKind = .Pruned;
+                        break;
+                    }
                 }
             }
 
-            if (useMemoMap) {
-                // Can never get here if forceStop=true.
-                // if (comptime stats.use) stats.memoAdditions += 1;
-                memo.setAndOverwriteBucket(game, .{
-                    .eval = if (me == .White) bestVal else -bestVal,
-                    .remaining = remaining,
-                });
+            if (noLegalMoves) {
+                // <me> can't make any moves. Either got checkmated or its a draw.
+                if (comptime stats.use) stats.gameOversSeen += 1;
+                if (try inCheck(game, me, alloc)) {
+                    return IM_MATED_EVAL - remaining;
+                } else {
+                    return Magic.DRAW_EVAL;
+                }
             }
 
-            const legal = moves.len - checksSkipped;
-            _ = legal;
+            if (useMemoMap and remaining > 0) {
+                // Can never get here if forceStop=true.
+                // if (comptime stats.use) stats.memoAdditions += 1;
+                memo.setAndOverwriteBucket(game, .{ .eval = bestVal * me.dir(), .remaining = @intCast(remaining), .move = foundMove.? }); //, .kind = memoKind, .move = foundMove.? });
+            }
+
+            // const legal = moves.len - checksSkipped;
+            // _ = legal;
+            // const kindStr = switch (memoKind) {
+            //     .Exact => "Exact",
+            //     .Pruned => "Pruned",
+            // };
+            // if (remaining > 0) print("{} moves. {} walked. {s}. eval={}. bestWhiteEval={}. bestBlackEval={}.\n", .{ moves.len - checksSkipped, startEvaling, kindStr, bestVal, bestWhiteEval, bestBlackEval });
             // if (remaining > 0 and !capturesOnly) print("remaining: {}. {} moves. {} walked.\n", .{ remaining, legal, startEvaling });
 
             return bestVal;
@@ -350,11 +402,11 @@ pub fn Strategy(comptime opts: StratOpts) type {
         fn quickEvalMove(game: *Board, move: Move) i32 {
             const unMove = game.play(move);
             defer game.unplay(unMove);
-            // if (memoMap.?.get(game)) |cached| {
-            //     return cached.eval * game.nextPlayer.other().dir();
-            // } else {
-            return game.simpleEval * game.nextPlayer.other().dir();
-            // }
+            if (memoMap.?.get(game)) |cached| {
+                return cached.eval * game.nextPlayer.other().dir();
+            } else {
+                return game.simpleEval * game.nextPlayer.other().dir();
+            }
         }
 
         fn greaterThan(game: *Board, a: Move, b: Move) bool {
@@ -374,16 +426,15 @@ pub fn Strategy(comptime opts: StratOpts) type {
 
         // TODO: this could be faster if it didn't generate every possible move first
         pub fn hasAnyLegalMoves(game: *Board, alloc: std.mem.Allocator) !bool {
-            const moves = try genAllMoves.possibleMoves(game, game.nextPlayer, alloc);
+            const colour = game.nextPlayer;
+            const moves = try genAllMoves.possibleMoves(game, colour, alloc);
             defer alloc.free(moves);
             if (moves.len == 0) return false;
 
             for (moves) |move| {
                 const unMove = game.play(move);
                 defer game.unplay(unMove);
-                if (try inCheck(game, game.nextPlayer, alloc)) continue;
-                break;
-            } else {
+                if (try inCheck(game, colour, alloc)) continue;
                 return true;
             }
             return false;
@@ -397,13 +448,16 @@ pub fn Strategy(comptime opts: StratOpts) type {
         }
 
         pub const MemoEntry = struct {
-            squares: [64]Piece,
+            // squares: [64]Piece,
             hash: u64,
             value: MemoValue,
         };
 
+        // TODO: this needs to be used somehow. surely you can treat the pruned evals the same as exact ones
+        const MemoNodeKind = union(enum) { Exact, UpperBound, LowerBound };
+
         // TODO: can I store some sort of alpha beta info here as well? try just putting the number in once I have skill testing
-        pub const MemoValue = struct { eval: i32, remaining: i32 };
+        pub const MemoValue = struct { eval: i32, remaining: i16, move: Move }; // , kind: MemoNodeKind };
 
         // Sets overwrite if their buckets collide so never have to worry about it filling up with old boards.
         // That also means there's no chain of bucket collissions to follow when reading a value.
@@ -421,7 +475,7 @@ pub fn Strategy(comptime opts: StratOpts) type {
                 if (!std.math.isPowerOfTwo(realCapacity)) std.debug.panic("MemoTable calculated size is {}, not a power of two!", .{realCapacity});
                 var self = MemoTable{ .buffer = try alloc.alloc(MemoEntry, realCapacity), .bucketMask = (realCapacity - 1) };
                 for (0..realCapacity) |i| {
-                    self.buffer[i] = std.mem.zeroes(MemoEntry);
+                    self.buffer[i].hash = 0;
                 }
                 const realSizeMB = realCapacity * @sizeOf(MemoEntry) / 1024 / 1024;
                 print("Memo table capacity is {} ({} MB).\n", .{ realCapacity, realSizeMB });
@@ -434,6 +488,7 @@ pub fn Strategy(comptime opts: StratOpts) type {
 
             // This is relies on empty squares having a definied colour so they bytes match! TODO: test that stays true
             pub fn hash(key: *const Board) u64 {
+                // TODO: include castling/french move.
                 const data = std.mem.asBytes(&key.squares);
                 const hashcode = switch (comptime opts.hashAlgo) {
                     .Wyhash => std.hash.Wyhash.hash(0, data),
@@ -455,7 +510,7 @@ pub fn Strategy(comptime opts: StratOpts) type {
                 const hashcode = hash(key);
                 const bucket: usize = @intCast(hashcode & self.bucketMask);
                 self.buffer[bucket] = .{
-                    .squares = key.squares,
+                    // .squares = key.squares,
                     .hash = hashcode,
                     .value = value,
                 };
@@ -465,10 +520,11 @@ pub fn Strategy(comptime opts: StratOpts) type {
                 const hashcode = hash(key);
                 const bucket: usize = @intCast(hashcode & self.bucketMask);
                 if (self.buffer[bucket].hash == hashcode) {
-                    if (!eql(key, &self.buffer[bucket])) {
-                        if (!isWasm) @panic("hash collission (not a problem, just debugging)"); // TODO: does this every happen? how confident am I?
-                        return null;
-                    }
+                    // fuck it, we ball, 2^64 is basically infinity
+                    // if (!eql(key, &self.buffer[bucket])) {
+                    //     if (!isWasm) @panic("hash collission (not a problem, just debugging)"); // TODO: does this every happen? how confident am I?
+                    //     return null;
+                    // }
                     return self.buffer[bucket].value;
                 } else {
                     return null;

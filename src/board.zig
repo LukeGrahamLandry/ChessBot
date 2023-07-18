@@ -658,6 +658,11 @@ pub const Move = struct {
     },
     bonus: i8 = 0, // positive is good for the player moving.
     // evalGuess: i32 = 0,
+
+    /// This assumes they are made in the same position.
+    pub fn eql(a: Move, b: Move) bool {
+        return a.from == b.from and a.to == b.to;
+    }
 };
 
 // TODO: report in ui
