@@ -25,7 +25,10 @@
                 <option value="prev" selected>Last Move</option>
             </select>
             Material Eval: <span id="mEval"></span>. 
-            <button onclick="handleDrawTree()">Show Tree Walk</button>
+            <button onclick="handleDrawTree()">Show Tree Walk</button> <br>
+            <input type="range" id="depth" value="5" min="2" max="7" style="width: 50%;"> Max Depth: <span id="showdepth"></span>. <br>
+            <input type="range" id="time" value="200" min="200" max="10000" style="width: 50%;">  Max Time: <span id="showtime"></span> ms.<br> <br>
+            <textarea id="log" style="width: 80%;" rows="4"></textarea>
         </div>
     </div>
     <pre id="letters"></pre>
@@ -43,6 +46,9 @@
         handleRestart();
         handleBitboardSelect();
         renderBoard();
+        document.getElementById("depth").addEventListener("input", handleSettingsChange);
+        document.getElementById("time").addEventListener("input", handleSettingsChange);
+        handleSettingsChange();
     }
 
     var Engine;
@@ -58,6 +64,8 @@
                 const msgBuffer = new Uint8Array(Engine.memory.buffer, ptr, len);
                 const msgStr = textDecoder.decode(msgBuffer);
                 console.log(msgStr);
+                document.getElementById("log").value += msgStr;
+                document.getElementById("log").scrollTop = document.getElementById("log").scrollHeight;
             },
             jsAlert: function (ptr, len) {
                 const msgBuffer = new Uint8Array(Engine.memory.buffer, ptr, len);

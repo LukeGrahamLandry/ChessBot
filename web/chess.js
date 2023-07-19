@@ -378,9 +378,18 @@ function jsDrawLineMove(ptr, len, evall, depth, index, alpha, beta) {
     document.body.appendChild(btn);
 }
 
+let maxTimeMs = 0;
+let maxDepth = 0;
+function handleSettingsChange() {
+    maxTimeMs = document.getElementById("time").value;
+    document.getElementById("showtime").innerText = maxTimeMs;
+    maxDepth = document.getElementById("depth").value;
+    document.getElementById("showdepth").innerText = maxDepth;
+    Engine.changeSettings(maxTimeMs, maxDepth);
+}
+
 window.chessJsReady = true;
 if (window.startChessIfReady !== undefined) window.startChessIfReady();
-
 
 //////////
 // The Zen of HashMap Lang;

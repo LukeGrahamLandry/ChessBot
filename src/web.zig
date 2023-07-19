@@ -56,7 +56,10 @@ export fn restartGame() void {
 /// IN: internalBoard, boardView, nextColour
 /// OUT: internalBoard, boardView, nextColour
 export fn playRandomMove() i32 {
-    const allMoves = genAllMoves.possibleMoves(&internalBoard, nextColour, alloc) catch return 1;
+    const allMoves = genAllMoves.possibleMoves(&internalBoard, nextColour, alloc) catch |err| {
+        logErr(err);
+        return 1;
+    };
     defer alloc.free(allMoves);
     if (allMoves.len == 0) {
         return if (nextColour == .White) 2 else 3;
@@ -81,11 +84,12 @@ export fn playNextMove() i32 {
         lines.?.deinit();
     }
 
-    const move = search.bestMoveIterative(&internalBoard, nextColour, 50, 200, &lines) catch |err| {
+    const move = search.bestMoveIterative(&internalBoard, nextColour, maxDepth, maxTimeMs, &search.NoTrackLines.I) catch |err| {
         switch (err) {
             error.GameOver => return if (nextColour == .White) 2 else 3,
-            else => return 1,
+            else => logErr(err),
         }
+        return 1;
     };
 
     // consolePrint("{} next moves.", .{lines.?.children.items.len});
@@ -107,12 +111,18 @@ export fn getPossibleMoves(from: i32) u64 {
     const rank = @divFloor(from, 8);
 
     var allMoves = std.ArrayList(Move).init(alloc);
-    genAllMoves.collectOnePieceMoves(&allMoves, &internalBoard, @intCast(from), @intCast(file), @intCast(rank)) catch return 1;
+    genAllMoves.collectOnePieceMoves(&allMoves, &internalBoard, @intCast(from), @intCast(file), @intCast(rank)) catch |err| {
+        logErr(err);
+        return 1;
+    };
     defer allMoves.deinit();
     for (allMoves.items) |move| {
         const unMove = internalBoard.play(move);
         defer internalBoard.unplay(unMove);
-        if (search.inCheck(&internalBoard, piece.colour, alloc) catch return 1) continue;
+        if (search.inCheck(&internalBoard, piece.colour, alloc) catch |err| {
+            logErr(err);
+            return 1;
+        }) continue;
         result |= @as(u64, 1) << @intCast(move.to);
     }
     return result;
@@ -122,7 +132,10 @@ export fn getPossibleMoves(from: i32) u64 {
 /// OUT: internalBoard, boardView, nextColour
 export fn setFromFen(length: u32) bool {
     const fenSlice = fenView[0..@as(usize, length)];
-    const temp = Board.fromFEN(fenSlice) catch return false;
+    const temp = Board.fromFEN(fenSlice) catch |err| {
+        logErr(err);
+        return false;
+    };
     internalBoard = temp;
     boardView = @bitCast(internalBoard.squares);
     lastMove = null;
@@ -134,7 +147,10 @@ export fn setFromFen(length: u32) bool {
 /// OUT: fenView
 // TODO: unnecessary allocation just to memcpy.
 export fn getFen() u32 {
-    const fen = internalBoard.toFEN(alloc) catch return 0;
+    const fen = internalBoard.toFEN(alloc) catch |err| {
+        logErr(err);
+        return 0;
+    };
     defer alloc.free(fen);
     assert(fen.len <= fenView.len);
     @memcpy(fenView[0..fen.len], fen);
@@ -156,12 +172,17 @@ export fn playHumanMove(fromIndex: u32, toIndex: u32) i32 {
     lastMove = (@import("board.zig").inferPlayMove(&internalBoard, fromIndex, toIndex, alloc) catch |err| {
         switch (err) {
             error.IllegalMove => return 4,
-            else => return 1,
+            else => logErr(err),
         }
+        return 1;
     }).move;
     boardView = @bitCast(internalBoard.squares);
     nextColour = nextColour.other();
     return 0;
+}
+
+fn logErr(err: anyerror) void {
+    print("Error: {}", .{err});
 }
 
 // TODO: one for illigal moves (because check)
@@ -247,7 +268,7 @@ export fn getNextLineMoves(indices: [*]const u32, len: u32) void {
         var lineGame = current.game;
         var children = current.children.items;
         for (0..len) |depth| {
-            if (children.len <= indices[depth]) alertPrint("Invalid index {} at depth {}", .{indices[depth], depth});
+            if (children.len <= indices[depth]) alertPrint("Invalid index {} at depth {}", .{ indices[depth], depth });
             const node = children[indices[depth]];
             children = node.children.items;
 
@@ -259,13 +280,21 @@ export fn getNextLineMoves(indices: [*]const u32, len: u32) void {
             var txt = node.move.text() catch return;
             jsDrawLineMove(&txt, 4, node.eval, node.remaining, i, node.alpha, node.beta);
         }
-        
+
         internalBoard = lineGame;
         nextColour = internalBoard.nextPlayer;
         boardView = @bitCast(internalBoard.squares);
     } else {
         consolePrint("No lines", .{});
     }
+}
+
+var maxDepth: u32 = 0;
+var maxTimeMs: u32 = 0;
+// This will always be called at the beginning
+export fn changeSettings(_maxTimeMs: u32, _maxDepth: u32) void {
+    maxDepth = _maxDepth;
+    maxTimeMs = _maxTimeMs;
 }
 
 extern fn jsDrawLineMove(ptr: [*]const u8, len: usize, eval: i32, remaining: u32, index: u32, alpha: i32, beta: i32) void;

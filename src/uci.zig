@@ -92,6 +92,7 @@ pub fn playOneGame(fish: *Stockfish, gameIndex: usize, gamesTotal: u32) !GameOve
         // board.debugPrint();
     } else {
         print("[info]: Played {} moves each. Stopping the game because nobody cares. \n", .{config.maxMoves});
+        board.debugPrint();
         return error.GameTooLong;
     }
 }
@@ -240,82 +241,59 @@ fn logGameOver(err: anyerror, board: *Board, moveHistory: *std.ArrayList([5]u8),
 }
 
 fn playUciMove(fish: *Stockfish, board: *Board, moveHistory: *std.ArrayList([5]u8), stats: *Stats) !void {
-    for (0..5) |attempt| {
-        try fish.send(.AreYouReady);
-        fish.blockUntilRecieve(.ReadyOk);
-        if (moveHistory.items.len == 0) {
-            try fish.send(.SetPositionInitial);
-        } else {
-            try fish.send(.{ .SetPositionMoves = .{ .board = board, .moves = moveHistory.items } });
-        }
-        try fish.send(.{ .Go = .{ .maxSearchTimeMs = config.fishTimeLimitMS } });
+    try fish.send(.AreYouReady);
+    fish.blockUntilRecieve(.ReadyOk);
+    if (moveHistory.items.len == 0) {
+        try fish.send(.SetPositionInitial);
+    } else {
+        try fish.send(.{ .SetPositionMoves = .{ .board = board, .moves = moveHistory.items } });
+    }
+    try fish.send(.{ .Go = .{ .maxSearchTimeMs = config.fishTimeLimitMS } });
 
-        const moveStr = m: {
-            var bestMove: ?[5]u8 = null;
-            var moveTime: u64 = 0;
-            while (true) {
-                const infoMsg = try fish.recieve();
-                switch (infoMsg) {
-                    .Info => |info| {
-                        if (info.time) |time| {
-                            if (time <= config.fishTimeLimitMS) {
-                                if (info.pvFirstMove) |move| {
-                                    bestMove = move;
-                                    moveTime = time;
-                                }
-                            } else {
-                                try fish.send(.Stop);
-                            }
-                        }
-                    },
-                    .BestMove => |bestmove| {
-                        try fish.send(.AreYouReady);
-                        fish.blockUntilRecieve(.ReadyOk);
-                        if (bestmove) |move| {
-                            if (bestMove == null) {
-                                const randomMove = try search.randomMove(board, board.nextPlayer, general.allocator());
-                                const moveStr = try writeAlgebraic(randomMove);
-                                stats.fishRandom += 1;
-                                print("[info]: The fish wanted to play {s} but it took too long so I randomly played {s} for it instead!\n", .{ move, moveStr });
-                                break :m moveStr;
-                            } else {
-                                stats.fishOnTime += 1;
-                                print("[info]: The fish played {s} in {}ms.\n", .{ move, moveTime });
-                                break :m move;
+    const moveStr = m: {
+        var bestMove: ?[5]u8 = null;
+        var moveTime: u64 = 0;
+        while (true) {
+            const infoMsg = try fish.recieve();
+            switch (infoMsg) {
+                .Info => |info| {
+                    if (info.time) |time| {
+                        if (time <= config.fishTimeLimitMS) {
+                            if (info.pvFirstMove) |move| {
+                                bestMove = move;
+                                moveTime = time;
                             }
                         } else {
-                            print("[info]: The fish knows it has no moves!\n", .{});
-                            return error.GameOver;
+                            try fish.send(.Stop);
                         }
-                    },
-                    else => continue,
-                }
+                    }
+                },
+                .BestMove => |bestmove| {
+                    if (bestmove) |move| {
+                        if (bestMove == null) {
+                            const randomMove = try search.randomMove(board, board.nextPlayer, general.allocator());
+                            const moveStr = try writeAlgebraic(randomMove);
+                            stats.fishRandom += 1;
+                            print("[info]: The fish wanted to play {s} but it took too long so I randomly played {s} for it instead!\n", .{ move, moveStr });
+                            break :m moveStr;
+                        } else {
+                            stats.fishOnTime += 1;
+                            print("[info]: The fish played {s} in {}ms.\n", .{ move, moveTime });
+                            break :m move;
+                        }
+                    } else {
+                        print("[info]: The fish knows it has no moves!\n", .{});
+                        return error.GameOver;
+                    }
+                },
+                else => continue,
             }
-            unreachable;
-        };
-
-        playAlgebraic(board, moveStr) catch |err| {
-            // I wonder if the fish played for the wrong player if its mated and you ask it to go anyway.
-            if (err == error.IllegalMove) {
-                const state = try search.isGameOver(board, general.allocator());
-                if (state != .Continue) return error.GameOver;
-                board.debugPrint();
-                shouldPrint = true;
-                print("[info]: Fish played illigal move {s}. Trying again.\n", .{moveStr});
-                continue;
-            }
-        };
-        if (attempt > 0) {
-            print("[info]: Fish got its shit together and played legal move {s}.\n", .{moveStr});
-            shouldPrint = false;
         }
-        try moveHistory.append(moveStr);
-        return;
-    }
+        unreachable;
+    };
 
-    print("[info]: The fish didn't get its shit together.\n", .{});
-    shouldPrint = false;
-    return error.IllegalMove;
+    try playAlgebraic(board, moveStr);
+    try moveHistory.append(moveStr);
 }
 
 pub fn playAlgebraic(board: *Board, moveStr: [5]u8) !void {
@@ -361,7 +339,7 @@ const Stockfish = struct {
 };
 
 fn sendUci(out: anytype, cmd: UciCommand) !void {
-    var letters = try std.BoundedArray(u8, 8192).init(0); // Don't want to deal with passing down an allocator.
+    var letters = try std.BoundedArray(u8, 16384).init(0); // Don't want to deal with passing down an allocator.
     switch (cmd) {
         .Init => try letters.appendSlice("uci"),
         .AreYouReady => try letters.appendSlice("isready"),
@@ -382,15 +360,17 @@ fn sendUci(out: anytype, cmd: UciCommand) !void {
         .SetPositionMoves => |state| {
             try letters.appendSlice("position fen ");
             try state.board.appendFEN(&letters);
-            try letters.appendSlice(" moves");
-            for (state.moves) |move| {
-                try letters.append(' ');
-                if (move[4] == 0) {
-                    try letters.appendSlice(move[0..4]);
-                } else {
-                    try letters.appendSlice(move[0..]);
-                }
-            }
+            // I thought you need this but if you include it plays for the wrong colour. just moves no fen and it erros always
+            // Its setup the fen as the initial state THEN play these moves!
+            // try letters.appendSlice(" moves");
+            // for (state.moves) |move| {
+            //     try letters.append(' ');
+            //     if (move[4] == 0) {
+            //         try letters.appendSlice(move[0..4]);
+            //     } else {
+            //         try letters.appendSlice(move[0..]);
+            //     }
+            // }
         },
         .SetOption => |option| {
             try letters.appendSlice("setoption name ");
@@ -407,7 +387,7 @@ fn sendUci(out: anytype, cmd: UciCommand) !void {
 }
 
 fn recieveUci(in: anytype) !UciResult {
-    var buf: [8192]u8 = undefined;
+    var buf: [16384]u8 = undefined;
     var resultStream = std.io.fixedBufferStream(&buf);
     // Don't care about the max because fixedBufferStream will give a write error if it overflows.
     try in.streamUntilDelimiter(resultStream.writer(), '\n', null);
