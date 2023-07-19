@@ -10,6 +10,14 @@ const Timer = @import("bench.zig").Timer;
 const print = if (@import("builtin").target.isWasm()) @import("web.zig").consolePrint else std.debug.print;
 const panic = if (@import("builtin").target.isWasm()) @import("web.zig").alertPrint else std.debug.panic;
 
+fn nanoTimestamp() i128 {
+    if (comptime isWasm) {
+        return @as(i128, @intFromFloat(@import("web.zig").jsPerformaceNow())) * std.time.ns_per_ms;
+    } else {
+        return std.time.nanoTimestamp();
+    }
+}
+
 // TODO: carefully audit any use of usize because wasm is 32 bit!
 const isWasm = @import("builtin").target.isWasm();
 
@@ -181,7 +189,7 @@ pub fn Strategy(comptime opts: StratOpts) type {
             }
 
             pub fn clear(self: *Lines) !void {
-                print("clear lines.\n", .{});
+                // print("clear lines.\n", .{});
                 self.eval = 0;
                 self.depth = 0;
                 _ = self.arena.reset(.retain_capacity);
@@ -189,15 +197,48 @@ pub fn Strategy(comptime opts: StratOpts) type {
             }
 
             pub fn deinit(self: *Lines) void {
-                print("Deinit lines.\n", .{});
+                // print("Deinit lines.\n", .{});
                 self.arena.deinit();
             }
         };
 
-        // TODO: wasm get the time
-        pub fn bestMoveIterative(game: *Board, me: Colour, maxDepth: usize, timeLimitMs: i128, lines_out: *?Lines) !Move {
-            const startTime = if (isWasm) 0 else std.time.nanoTimestamp();
-            const endTime = if (isWasm) 1 else startTime + (timeLimitMs * std.time.ns_per_ms);
+        // TODO: this SUCKS
+        pub const NoTrackLines = struct {
+            pub const Node: type = NoTrackLines;
+            pub var I: ?NoTrackLines = .{};
+
+            eval: i32 = 0,
+            depth: usize = 0,
+            pub inline fn init(game: *Board, alloc: std.mem.Allocator) !NoTrackLines {
+                _ = alloc;
+                _ = game;
+                return .{};
+            }
+            pub inline fn makeChild(self: *NoTrackLines, move: Move, remaining: u32, alpha: i32, beta: i32) !NoTrackLines {
+                _ = beta;
+                _ = alpha;
+                _ = remaining;
+                _ = move;
+                _ = self;
+                return .{};
+            }
+            pub inline fn addChild(self: *NoTrackLines, child: NoTrackLines) !void {
+                _ = child;
+                _ = self;   
+            }
+            pub inline fn clear(self: *NoTrackLines) !void {
+                _ = self;
+            }
+
+            pub inline fn deinit(self: *NoTrackLines) void {
+                _ = self;
+            }
+        };
+
+        // TODO: ?*? looks cringe!
+        pub fn bestMoveIterative(game: *Board, me: Colour, maxDepth: usize, timeLimitMs: i128, lines_out: anytype) !Move {
+            const startTime = nanoTimestamp();
+            const endTime = startTime + (timeLimitMs * std.time.ns_per_ms);
             var alloc = upperArena.allocator();
             defer _ = upperArena.reset(.retain_capacity);
             if (memoMap == null) memoMap = try MemoTable.initWithCapacity(opts.memoMapSizeMB, std.heap.page_allocator);
@@ -206,8 +247,9 @@ pub fn Strategy(comptime opts: StratOpts) type {
             var topLevelMoves = try genAllMoves.possibleMoves(game, me, alloc);
             defer alloc.free(topLevelMoves);
 
-            var prevLines = try Lines.init(game, std.heap.page_allocator);
-            var currentLines = try Lines.init(game, std.heap.page_allocator);
+            const LineTracker = @TypeOf(lines_out.*.?);
+            var prevLines = try LineTracker.init(game, std.heap.page_allocator);
+            var currentLines = try LineTracker.init(game, std.heap.page_allocator);
 
             // TODO: this is extra plays but only at top level.
             // Remove illigal moves.
@@ -234,52 +276,68 @@ pub fn Strategy(comptime opts: StratOpts) type {
             }
             var stats: Stats = .{};
             var thinkTime: i128 = -1;
+            var favourite: Move = topLevelMoves[0];
             for (1..(maxDepth + 1)) |depth| {
                 currentLines.depth = depth;
-                var bestWhiteEval = LOWEST_EVAL;
-                var bestBlackEval = LOWEST_EVAL;
-                var bestVal: i32 = LOWEST_EVAL;
+                var alpha = LOWEST_EVAL;
+                var beta = -LOWEST_EVAL;
+                var bestVal: i32 = LOWEST_EVAL * me.dir();
                 for (topLevelMoves, 0..) |move, i| {
                     const unMove = game.play(move);
                     defer game.unplay(unMove);
-                    var line = try currentLines.makeChild(move, @intCast(depth+1), bestWhiteEval, bestBlackEval);
-                    const eval = -try walkEval(game, me.other(), @intCast(depth), bestWhiteEval, bestBlackEval, movesArena.allocator(), &stats, memo, false, &line);
+                    var line = try currentLines.makeChild(move, @intCast(depth+1), alpha, beta);
+                    const eval = try walkEval(game, me.other(), @intCast(depth), alpha, beta, movesArena.allocator(), &stats, memo, false, &line);
                     evalGuesses.items[i] = eval;
-                    line.eval = eval * me.dir();
+                    line.eval = eval;
                     try currentLines.addChild(line);
 
-                    if (eval > bestVal) {
-                        bestVal = eval;
-                        if (opts.doPruning and checkAlphaBeta(bestVal, me, &bestWhiteEval, &bestBlackEval)) {
-                            break;
+                    switch (me) {
+                        .White => {
+                            bestVal = @max(bestVal, eval);
+                            alpha = @max(alpha, bestVal);
+                            if (bestVal >= beta){
+                                for ((i+1)..topLevelMoves.len) |j|{
+                                    evalGuesses.items[j] = LOWEST_EVAL;
+                                }
+                                break;
+                            }
+                        },
+                        .Black => {
+                            bestVal = @min(bestVal, eval);
+                            beta = @min(beta, bestVal);
+                            if (bestVal < alpha) {
+                                for ((i+1)..topLevelMoves.len) |j|{
+                                    evalGuesses.items[j] = -LOWEST_EVAL;
+                                }
+                                break;
+                            }
                         }
                     }
 
                     // If we ran out of time, just return the best result from the last search.
-                    if ((if (isWasm) 0 else std.time.nanoTimestamp()) >= endTime) {
+                    if (nanoTimestamp() >= endTime) {
                         currentLines.deinit();
-                        if (thinkTime == -1) {
-                            sortMoves(game, topLevelMoves); // haven't even done one search, be slightly better than random.
-                            prevLines.deinit();
-                        } else {
-                            lines_out.* = prevLines;
-                        }
-                        
+                        lines_out.* = prevLines;
                         // print("Out of time. Using move from depth {} ({}ms)\n", .{ depth - 1, @divFloor(thinkTime, std.time.ns_per_ms) });
-                        return topLevelMoves[0];
+                        return favourite;
                     }
+                    
                 }
 
-                std.sort.insertionContext(0, topLevelMoves.len, PairContext{ .moves = topLevelMoves, .evals = evalGuesses.items });
-                thinkTime = if (isWasm) 0 else std.time.nanoTimestamp() - startTime;
+                std.sort.insertionContext(0, topLevelMoves.len, PairContext{ .moves = topLevelMoves, .evals = evalGuesses.items, .me=me });
+                thinkTime = nanoTimestamp() - startTime;
                 currentLines.eval = bestVal * me.dir();
-                std.mem.swap(Lines, &prevLines, &currentLines);
+                std.mem.swap(@TypeOf(lines_out.*.?), &prevLines, &currentLines);
                 try currentLines.clear();
+                favourite = topLevelMoves[0];
+                // print("{any}\n", .{evalGuesses});
+
+                
 
                 // print("Searched depth {} in {} ms.\n", .{ depth, @divFloor(thinkTime, std.time.ns_per_ms) });
             }
 
-            // print("Reached max depth {} in {}ms.\n", .{ maxDepth orelse opts.maxDepth, @divFloor(thinkTime, std.time.ns_per_ms) });
+            // print("Reached max depth {} in {}ms.\n", .{ maxDepth, @divFloor(thinkTime, std.time.ns_per_ms) });
             lines_out.* = prevLines;
             currentLines.deinit();
             return topLevelMoves[0];
@@ -288,10 +346,15 @@ pub fn Strategy(comptime opts: StratOpts) type {
         const PairContext = struct {
             moves: []Move,
             evals: []i32,
+            me: Colour,
 
             // Flipped cause accending
             pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
-                return ctx.evals[a] > ctx.evals[b];
+                switch (ctx.me) {
+                    .White => return ctx.evals[a] > ctx.evals[b],
+                    .Black => return ctx.evals[a] < ctx.evals[b],
+                }
+                
             }
 
             pub fn swap(ctx: @This(), a: usize, b: usize) void {
@@ -362,23 +425,26 @@ pub fn Strategy(comptime opts: StratOpts) type {
         // The eval of <game>, positive means <me> is winning, assuming it is <me>'s turn.
         // Returns error.GameOver if there were no possible moves or for 50 move rule.
         // TODO: redo my captures only thing to be lookForPiece and only simpleEval if no captures on the board
-        pub fn walkEval(game: *Board, me: Colour, remaining: i32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, stats: *Stats, memo: *MemoTable, comptime capturesOnly: bool, line: *Lines.Node) error{ OutOfMemory, ForceStop, Overflow }!i32 {
+        pub fn walkEval(game: *Board, me: Colour, remaining: i32, alphaIn: i32, betaIn: i32, alloc: std.mem.Allocator, stats: *Stats, memo: *MemoTable, comptime capturesOnly: bool, line: anytype) error{ OutOfMemory, ForceStop, Overflow }!i32 {
             if (forceStop) return error.ForceStop;
             if (game.halfMoveDraw >= 100) return Magic.DRAW_EVAL;
+            if (remaining == 0) {
+                if (comptime stats.use) stats.leafBoardsSeen += 1;
+                return game.simpleEval;
+            }
 
             // Want to mutate copies of values from parameters.
-            var bestWhiteEval = bestWhiteEvalIn;
-            var bestBlackEval = bestBlackEvalIn;
+            var alpha = alphaIn;
+            var beta = betaIn;
 
             var cacheHit: ?MemoValue = null;
-            if (useMemoMap and remaining > 0) {
+            if (useMemoMap) {
                 // TODO: It would be really good to be able to reuse what we did on the last search if they played the move we thought they would.
                 //       This remaining checks stops that but also seems nesisary for correctness.
                 if (memo.get(game)) |cached| {
                     if (cached.remaining >= remaining) {
                         if (comptime stats.use) stats.memoHits += 1;
-                        // if (cached.kind == .Exact) return cached.eval * me.dir();
-                        return cached.eval * me.dir();
+                        return cached.eval;
                     }
                     cacheHit = cached;
                 }
@@ -401,12 +467,13 @@ pub fn Strategy(comptime opts: StratOpts) type {
             }
             // }
 
-            var bestVal: i32 = LOWEST_EVAL;
+            var bestVal: i32 = LOWEST_EVAL * me.dir();
             var checksSkipped: usize = 0;
             var startEvaling: usize = 0;
             // var memoKind: MemoNodeKind = .Exact;
             var foundMove: ?Move = null;
             var noLegalMoves = true;
+            var pruned = false;
             for (moves) |move| {
                 const unMove = game.play(move);
                 defer game.unplay(unMove);
@@ -416,57 +483,43 @@ pub fn Strategy(comptime opts: StratOpts) type {
                 }
                 startEvaling += 1;
                 noLegalMoves = false;
-                var nextLine = try line.makeChild(move, @intCast(remaining), bestWhiteEval, bestBlackEval);
-
-                const value = if (remaining <= 0) v: {
-                    if (comptime stats.use) stats.leafBoardsSeen += 1;
-                    break :v genAllMoves.simpleEval(game) * me.dir();
-                } else r: {
-                    const v = try walkEval(game, me.other(), remaining - 1, bestWhiteEval, bestBlackEval, alloc, stats, memo, capturesOnly, &nextLine);
-                    break :r -v;
-                };
-
-                nextLine.eval = value * me.dir();
+                var nextLine = try line.makeChild(move, @intCast(remaining), alpha, beta);
+                const eval = try walkEval(game, me.other(), remaining - 1, alpha, beta, alloc, stats, memo, capturesOnly, &nextLine);
+                nextLine.eval = eval;
                 try line.addChild(nextLine);
 
-                if (value > bestVal) {
-                    foundMove = move;
-                    bestVal = value;
-                    if (opts.doPruning and checkAlphaBeta(bestVal, me, &bestWhiteEval, &bestBlackEval)) {
-                        // memoKind = .Pruned;
-                        break;
+                switch (me) {
+                    .White => {
+                        bestVal = @max(bestVal, eval);
+                        alpha = @max(alpha, bestVal);
+                        if (bestVal >= beta) {
+                            pruned = true;
+                            break;
+                        }
+                    },
+                    .Black => {
+                        bestVal = @min(bestVal, eval);
+                        beta = @min(beta, bestVal);
+                        if (bestVal < alpha)  {
+                            pruned = true;
+                            break;
+                        }
                     }
                 }
             }
 
-            if (noLegalMoves) {
-                // <me> can't make any moves. Either got checkmated or its a draw.
-                if (comptime stats.use) stats.gameOversSeen += 1;
+            if (noLegalMoves) {  // <me> can't make any moves. Either got checkmated or its a draw.
                 if (try inCheck(game, me, alloc)) {
-                    return IM_MATED_EVAL - remaining;
+                    return (IM_MATED_EVAL - remaining) * me.dir();
                 } else {
                     return Magic.DRAW_EVAL;
                 }
             }
 
-            if (useMemoMap and remaining > 0) {
-                // Can never get here if forceStop=true.
-                // if (comptime stats.use) stats.memoAdditions += 1;
-                memo.setAndOverwriteBucket(game, .{ .eval = bestVal * me.dir(), .remaining = @intCast(remaining), .move = foundMove.? }); //, .kind = memoKind, .move = foundMove.? });
+            if (useMemoMap and !pruned) {  // Can never get here if forceStop=true.
+                memo.setAndOverwriteBucket(game, .{ .eval = bestVal, .remaining = @intCast(remaining), .move = foundMove.? }); //, .kind = memoKind, .move = foundMove.? });
             }
 
-            // const legal = moves.len - checksSkipped;
-            // _ = legal;
-            // const kindStr = switch (memoKind) {
-            //     .Exact => "Exact",
-            //     .Pruned => "Pruned",
-            // };
-            // if (remaining > 0) print("{} moves. {} walked. {s}. eval={}. bestWhiteEval={}. bestBlackEval={}.\n", .{ moves.len - checksSkipped, startEvaling, kindStr, bestVal, bestWhiteEval, bestBlackEval });
-            // if (remaining > 0 and !capturesOnly) print("remaining: {}. {} moves. {} walked.\n", .{ remaining, legal, startEvaling });
-
-            // if (*line) |bestLine| {
-            //     bestLine[bestLine.items.len - remaining - 1] = foundMove.?;
-            // }
             return bestVal;
         }
 
@@ -641,4 +694,9 @@ test {
     for (lines.?.children.items[0].children.items) |move|{
         print("{s} ({}); ", .{try move.move.text(), move.eval});
     }
+}
+
+test "dir" {
+    try std.testing.expectEqual(Colour.White.dir(), 1);
+    try std.testing.expectEqual(Colour.Black.dir(), -1);
 }

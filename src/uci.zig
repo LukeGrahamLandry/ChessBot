@@ -9,15 +9,21 @@ const GameOver = @import("board.zig").GameOver;
 // TODO: for just using support wasm32-wasi and wasm-freestanding (browser by exposing a uci_send(ptr, len) and uci_recieve(ptr, maxLen)->len function).
 // TODO: threads!!! 8x speed = goooood times.
 
-const fishTimeLimitMS = 2;
-const maxMoves = 500;
-const gameCount = 100;
-const fishLevel = 0;
-const myTimeLimitMS = 1000;
-const myMaxDepth = 4;
+const Opts = struct {
+    fishTimeLimitMS: i128  = 2,
+    maxMoves: usize  = 500,
+    gameCount: usize  = 100,
+    fishLevel: usize  = 0,
+    myTimeLimitMS: i128 = 200,
+    myMaxDepth: usize = 50,
+};
+
+const config: Opts = .{};
+var shouldPrint = false;
 
 pub fn main() !void {
-    const fishLevelStr = try std.fmt.allocPrint(general.allocator(), "{}", .{fishLevel});
+    std.debug.print("[info] {}\n", .{config});
+    const fishLevelStr = try std.fmt.allocPrint(general.allocator(), "{}", .{config.fishLevel});
     defer general.allocator().free(fishLevelStr);
     var fish = try Stockfish.init();
     try fish.send(.Init);
@@ -28,12 +34,12 @@ pub fn main() !void {
     var gt = Timer.start();
     var failed: u32 = 0;
     var results = std.AutoHashMap(GameOver, u32).init(general.allocator());
-    for (0..gameCount) |g| {
+    for (0..config.gameCount) |g| {
         if (g != 0) {
             std.debug.print("[info]: Win {}. Lose {}. Draw {}. Error {}.\n", .{ results.get(.WhiteWins) orelse 0, results.get(.BlackWins) orelse 0, (results.get(.Stalemate) orelse 0) + (results.get(.FiftyMoveDraw) orelse 0), failed });
         }
-        std.debug.print("Game {}/{}.\n", .{ g, gameCount });
-        const result = playOneGame(&fish, g, gameCount) catch |err| {
+        std.debug.print("Game {}/{}.\n", .{ g, config.gameCount });
+        const result = playOneGame(&fish, g, config.gameCount) catch |err| {
             failed += 1;
             std.debug.print("[info]: Game failed! {}\n", .{err});
             search.resetMemoTable();
@@ -46,16 +52,15 @@ pub fn main() !void {
     }
 
     const time = gt.get();
-    std.debug.print("[info]: Done! Played {} games in {}ms.\n", .{ gameCount, time });
+    std.debug.print("[info]: Done! Played {} games in {}ms.\n", .{ config.gameCount, time });
     std.debug.print("[info]: Win {}. Lose {}. Draw {}. Error {}.\n", .{ results.get(.WhiteWins) orelse 0, results.get(.BlackWins) orelse 0, (results.get(.Stalemate) orelse 0) + (results.get(.FiftyMoveDraw) orelse 0), failed });
+    std.debug.print("[info] {}\n", .{config});
     try fish.deinit();
 }
 
 // TODO: output pgn
 // TODO: alternate who plays white
 pub fn playOneGame(fish: *Stockfish, gameIndex: usize, gamesTotal: u32) !GameOver {
-    try fish.send(.AreYouReady);
-    fish.blockUntilRecieve(.ReadyOk);
     try fish.send(.NewGame);
     try fish.send(.AreYouReady);
     fish.blockUntilRecieve(.ReadyOk);
@@ -67,12 +72,11 @@ pub fn playOneGame(fish: *Stockfish, gameIndex: usize, gamesTotal: u32) !GameOve
     var stats: Stats = .{};
     // board.debugPrint();
 
-    for (0..maxMoves) |i| {
+    for (0..config.maxMoves) |i| {
         print("[info]: Move {}. Game {}/{}.\n", .{ i, gameIndex, gamesTotal });
         print("[info]: I'm thinking.\n", .{});
         var t = Timer.start();
-        // TODO: iterative is wrong. bestMove plays faster and better. because of the pruning memo table thing?
-        const move = search.bestMoveIterative(&board, board.nextPlayer, myMaxDepth, myTimeLimitMS) catch |err| {
+        const move = search.bestMoveIterative(&board, board.nextPlayer, config.myMaxDepth, config.myTimeLimitMS, &search.NoTrackLines.I) catch |err| {
             return try logGameOver(err, &board, &moveHistory, gt, &stats);
         };
 
@@ -87,18 +91,16 @@ pub fn playOneGame(fish: *Stockfish, gameIndex: usize, gamesTotal: u32) !GameOve
         };
         // board.debugPrint();
     } else {
-        print("[info]: Played {} moves each. Stopping the game because nobody cares. \n", .{maxMoves});
+        print("[info]: Played {} moves each. Stopping the game because nobody cares. \n", .{config.maxMoves});
         return error.GameTooLong;
     }
 }
 
 var buffer = std.io.bufferedWriter(std.io.getStdOut());
 pub fn print(comptime fmt: []const u8, args: anytype) void {
-    _ = args;
-    _ = fmt;
     // TODO: need to change debugPrint() to be buffered. unify all print/assert functions?
     // buffer.writer().print(fmt, args) catch return;
-    // std.debug.print(fmt, args);
+    if (shouldPrint) std.debug.print(fmt, args);
 }
 
 // https://gist.github.com/DOBRO/2592c6dad754ba67e6dcaec8c90165bf
@@ -238,61 +240,82 @@ fn logGameOver(err: anyerror, board: *Board, moveHistory: *std.ArrayList([5]u8),
 }
 
 fn playUciMove(fish: *Stockfish, board: *Board, moveHistory: *std.ArrayList([5]u8), stats: *Stats) !void {
-    try fish.send(.AreYouReady);
-    fish.blockUntilRecieve(.ReadyOk);
-    if (moveHistory.items.len == 0) {
-        try fish.send(.SetPositionInitial);
-    } else {
-        try fish.send(.{ .SetPositionMoves = .{ .board = board, .moves = moveHistory.items } });
-    }
-    try fish.send(.{ .Go = .{ .maxSearchTimeMs = fishTimeLimitMS } });
+    for (0..5) |attempt| {
+        try fish.send(.AreYouReady);
+        fish.blockUntilRecieve(.ReadyOk);
+        if (moveHistory.items.len == 0) {
+            try fish.send(.SetPositionInitial);
+        } else {
+            try fish.send(.{ .SetPositionMoves = .{ .board = board, .moves = moveHistory.items } });
+        }
+        try fish.send(.{ .Go = .{ .maxSearchTimeMs = config.fishTimeLimitMS } });
 
-    const moveStr = m: {
-        var bestMove: ?[5]u8 = null;
-        var moveTime: u64 = 0;
-        while (true) {
-            const infoMsg = try fish.recieve();
-            switch (infoMsg) {
-                .Info => |info| {
-                    if (info.time) |time| {
-                        if (time <= fishTimeLimitMS) {
-                            if (info.pvFirstMove) |move| {
-                                bestMove = move;
-                                moveTime = time;
+        const moveStr = m: {
+            var bestMove: ?[5]u8 = null;
+            var moveTime: u64 = 0;
+            while (true) {
+                const infoMsg = try fish.recieve();
+                switch (infoMsg) {
+                    .Info => |info| {
+                        if (info.time) |time| {
+                            if (time <= config.fishTimeLimitMS) {
+                                if (info.pvFirstMove) |move| {
+                                    bestMove = move;
+                                    moveTime = time;
+                                }
+                            } else {
+                                try fish.send(.Stop);
+                            }
+                        }
+                    },
+                    .BestMove => |bestmove| {
+                        try fish.send(.AreYouReady);
+                        fish.blockUntilRecieve(.ReadyOk);
+                        if (bestmove) |move| {
+                            if (bestMove == null) {
+                                const randomMove = try search.randomMove(board, board.nextPlayer, general.allocator());
+                                const moveStr = try writeAlgebraic(randomMove);
+                                stats.fishRandom += 1;
+                                print("[info]: The fish wanted to play {s} but it took too long so I randomly played {s} for it instead!\n", .{ move, moveStr });
+                                break :m moveStr;
+                            } else {
+                                stats.fishOnTime += 1;
+                                print("[info]: The fish played {s} in {}ms.\n", .{ move, moveTime });
+                                break :m move;
                             }
                         } else {
-                            try fish.send(.Stop);
+                            print("[info]: The fish knows it has no moves!\n", .{});
+                            return error.GameOver;
                         }
-                    }
-                },
-                .BestMove => |bestmove| {
-                    try fish.send(.AreYouReady);
-                    fish.blockUntilRecieve(.ReadyOk);
-                    if (bestmove) |move| {
-                        if (bestMove == null) {
-                            const randomMove = try search.randomMove(board, board.nextPlayer, general.allocator());
-                            const moveStr = try writeAlgebraic(randomMove);
-                            stats.fishRandom += 1;
-                            print("[info]: The fish wanted to play {s} but it took too long so I randomly played {s} for it instead!\n", .{ move, moveStr });
-                            break :m moveStr;
-                        } else {
-                            stats.fishOnTime += 1;
-                            print("[info]: The fish played {s} in {}ms.\n", .{ move, moveTime });
-                            break :m move;
-                        }
-                    } else {
-                        print("[info]: The fish knows it has no moves!\n", .{});
-                        return error.GameOver;
-                    }
-                },
-                else => continue,
+                    },
+                    else => continue,
+                }
             }
-        }
-        unreachable;
-    };
+            unreachable;
+        };
 
-    try playAlgebraic(board, moveStr);
-    try moveHistory.append(moveStr);
+        playAlgebraic(board, moveStr) catch |err| {
+            // I wonder if the fish played for the wrong player if its mated and you ask it to go anyway.
+            if (err == error.IllegalMove) {
+                const state = try search.isGameOver(board, general.allocator());
+                if (state != .Continue) return error.GameOver;
+                board.debugPrint();
+                shouldPrint = true;
+                print("[info]: Fish played illigal move {s}. Trying again.\n", .{moveStr});
+                continue;
+            }
+        };
+        if (attempt > 0) {
+            print("[info]: Fish got its shit together and played legal move {s}.\n", .{moveStr});
+            shouldPrint = false;
+        }
+        try moveHistory.append(moveStr);
+        return;
+    }
+
+    print("[info]: The fish didn't get its shit together.\n", .{});
+    shouldPrint = false;
+    return error.IllegalMove;
 }
 
 pub fn playAlgebraic(board: *Board, moveStr: [5]u8) !void {
@@ -303,14 +326,7 @@ pub fn playAlgebraic(board: *Board, moveStr: [5]u8) !void {
     const toRank = try letterToRank(moveStr[3]);
     const fromIndex = fromRank * 8 + fromFile;
     const toIndex = toRank * 8 + toFile;
-    _ = @import("board.zig").inferPlayMove(board, fromIndex, toIndex, general.allocator()) catch |err| {
-        // I wonder if the fish played for the wrong player if its mated and you ask it to go anyway.
-        if (err == error.IllegalMove) {
-            const state = try search.isGameOver(board, general.allocator());
-            if (state != .Continue) return error.GameOver;
-        }
-        return err;
-    };
+    _ = try @import("board.zig").inferPlayMove(board, fromIndex, toIndex, general.allocator());
 }
 
 const Stockfish = struct {

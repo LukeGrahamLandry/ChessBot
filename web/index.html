@@ -70,7 +70,8 @@
             },
             jsDrawLineMove: function (ptr, len, evall, depth, index, alpha, beta) {
                 window.jsDrawLineMove(ptr, len, evall, depth, index, alpha, beta);
-            }
+            }, 
+            jsPerformaceNow: () => performance.now(),  // TODO: why can't I just assign to performance.now? it says illigal invocation 
         }
     }
     if (typeof WebAssembly === "object" && WebAssembly.instantiateStreaming !== undefined) {

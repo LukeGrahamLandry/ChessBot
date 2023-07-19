@@ -28,6 +28,7 @@ var lines: ?Lines = null;
 extern fn jsConsoleLog(ptr: [*]const u8, len: usize) void;
 extern fn jsAlert(ptr: [*]const u8, len: usize) void; // TODO: use for assertions if enabled
 extern fn jsDrawCurrentBoard(depth: i32, eval: i32, index: u32, count: u32) void;
+pub extern fn jsPerformaceNow() f64;
 
 // TODO: log something whenever returning an error code.
 pub fn consolePrint(comptime fmt: []const u8, args: anytype) void {
@@ -80,14 +81,14 @@ export fn playNextMove() i32 {
         lines.?.deinit();
     }
 
-    const move = search.bestMoveIterative(&internalBoard, nextColour, 2, 1000, &lines) catch |err| {
+    const move = search.bestMoveIterative(&internalBoard, nextColour, 50, 200, &lines) catch |err| {
         switch (err) {
             error.GameOver => return if (nextColour == .White) 2 else 3,
             else => return 1,
         }
     };
 
-    consolePrint("{} next moves.", .{lines.?.children.items.len});
+    // consolePrint("{} next moves.", .{lines.?.children.items.len});
 
     _ = internalBoard.play(move);
     lastMove = move;

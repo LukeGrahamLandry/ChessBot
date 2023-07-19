@@ -2,7 +2,8 @@
 // TODO: do I want these to be runtime configurable in the ui?
 
 // Draws are bad if you're up material but good if you're down materal. Slight preference against because that's more fun.
-pub const DRAW_EVAL = -400;
+// TODO: if you change this go back and make sure to multiply by the right dir() when using
+pub const DRAW_EVAL = 0;
 
 // TODO: only good if there are pawns in front of you
 pub const CASTLE_REWARD: i32 = 50;

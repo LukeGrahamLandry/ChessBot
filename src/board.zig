@@ -543,7 +543,7 @@ pub const Board = struct {
         try letters.append(' ');
 
         const full = std.fmt.formatIntBuf(letters.unusedCapacitySlice(), self.fullMoves, 10, .lower, .{});
-        if (@hasField(@TypeOf(letters.*), "len")) letters.len += @intCast(half) else letters.items.len += full;
+        if (@hasField(@TypeOf(letters.*), "len")) letters.len += @intCast(full) else letters.items.len += full;
     }
 
     // Caller owns the returned string.
@@ -681,7 +681,14 @@ const genAllMoves = @import("movegen.zig").MoveFilter.Any.get();
 const search = @import("search.zig").default;
 pub fn inferPlayMove(board: *Board, fromIndex: u32, toIndex: u32, alloc: std.mem.Allocator) InferMoveErr!OldMove {
     const colour = board.nextPlayer;
-    if (board.squares[fromIndex].colour != colour) return error.IllegalMove;
+    if (board.squares[fromIndex].empty()) {
+        print("Tried to move from empty square. {}\n", .{board.squares[fromIndex]});
+        return error.IllegalMove;
+    }
+    if (board.squares[fromIndex].colour != colour) {
+        print("Tried to move wrong colour. {}\n", .{board.squares[fromIndex]});
+        return error.IllegalMove;
+    }
 
     const isCapture = !board.squares[toIndex].empty() and board.squares[toIndex].colour != colour;
     var move: Move = .{ .from = @intCast(fromIndex), .to = @intCast(toIndex), .action = .none, .isCapture = isCapture };
