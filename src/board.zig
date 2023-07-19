@@ -663,6 +663,10 @@ pub const Move = struct {
     pub fn eql(a: Move, b: Move) bool {
         return a.from == b.from and a.to == b.to;
     }
+
+    pub fn text(self: Move) ![5] u8 {
+        return try @import("uci.zig").writeAlgebraic(self);
+    }
 };
 
 // TODO: report in ui

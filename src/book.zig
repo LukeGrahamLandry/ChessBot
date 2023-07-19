@@ -1,5 +1,10 @@
 const std = @import("std");
 const Move = @import("board.zig").Move;
+const Board = @import("board.zig").Board;
+
+// This is probably an inefficient use of time because better possition after 5 moves or whatever is nice,
+// but really I need to make it understand that shuffling it's pieces is bad.
+// Also any comparisons are kinda pointless until I fix the pruning.
 
 const SmallMove = packed struct(u12) {
     from: u6,
@@ -19,6 +24,7 @@ const ParseErr = error{ UnsupportedDataVersion, DeserializationFailed };
 // TODO: I thought this would be more efficient than [] {hash, bestMove} that you binary search later
 //       because that's 10 bytes per move where this is only 4, but I'm sure there are often more than 2.2 paths
 //       to the same position in the opening so actually this is probably worse.
+//       Maybe do this first, with a stable interface, then see how muc hbetter I can make it
 // A tree packed into an array so it can be directly read in from a data file without any copying.
 const OpeningBook = struct {
     // Node 0 is the version number (u16) and first layer node count (u16)!
@@ -101,7 +107,8 @@ const BuilderNode = struct {
 
 pub fn main() !void {}
 
-pub fn findNextMove(moves: []Move) ?SmallMove {
+pub fn findNextMove(game: *Board, moves: []Move) ?SmallMove {
+    _ = game;
     _ = moves;
 }
 

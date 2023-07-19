@@ -2,7 +2,7 @@ const WHITE = 0;
 const BLACK = 1;
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
-const ctx = document.getElementById("board").getContext("2d");
+let ctx = document.getElementById("board").getContext("2d");
 // const minMoveTimeMs = 500;  // When computer vs computer, if the engine is faster than this, it will wait before playing again. 
 
 // TODO: select which colour is human or computer. button to switch mid game for testing. 
@@ -63,10 +63,12 @@ function handleResume(){
     document.getElementById("pause").disabled = false;
 }
 
+const FEN_BUFFER_SIZE = 80;
+
 function handleSetFromFen(){
     handlePause();
     // The length here must match the size of fenView in Zig to prevent writes overflowing when string too long. 
-    const fenBuffer = new Uint8Array(Engine.memory.buffer, Engine.fenView, 80);
+    const fenBuffer = new Uint8Array(Engine.memory.buffer, Engine.fenView, FEN_BUFFER_SIZE);
     const fenString = document.getElementById("fen").value;
     const length = textEncoder.encodeInto(fenString, fenBuffer).written;
     const success = Engine.setFromFen(length);
@@ -161,7 +163,7 @@ function drawPiece(file, rank, pieceByte) {
     if (pieceByte === 0) return;
     
     const kind = BigInt(pieceByte) >> 1n;
-    const squareSize = document.getElementById("board").width / 8;
+    const squareSize = ctx.canvas.width / 8;
     const imgSquareSize = chessImg.width / 6;
     if (kind > 6n) {
         console.log("Engine gave invalid pieceByte (" + pieceByte + ")");
@@ -264,12 +266,22 @@ function renderBoard() {
         for (let file=0;file<8;file++){
             const p = board[rank*8 + file];
             drawPiece(file, rank, p);
+
+            if (showSquareNumbers) {
+                const squareSize = ctx.canvas.width / 8;
+                ctx.font = "15px Arial";
+                ctx.fillStyle = "blue";
+                const letter = ["A", "B", "C", "D", "E", "F", "G", "H"][file];
+                ctx.fillText(letter + "" + (rank+1), (file) * squareSize, (7 - rank + 0.2) * squareSize);
+            }
         }
     }
 }
 
+let showSquareNumbers = true;
+
 function fillSquare(file, rank, colour, isSmall) {
-    const squareSize = document.getElementById("board").width / 8;
+    const squareSize = ctx.canvas.width / 8;
     ctx.fillStyle = colour;
     if (isSmall) {
         const edge = squareSize * 0.25;
@@ -287,6 +299,83 @@ function handleResize(){
     board.width = size;
     board.height = size; 
     renderBoard();
+}
+
+function jsDrawCurrentBoard(depth, eval, index, count) {
+    const mainCtx = ctx;  // TODO: regreting having global variables right about now. 
+    const littleCanvas = document.createElement('canvas');
+    littleCanvas.style.background = "url(assets/board.svg)";
+    littleCanvas.style.border = "2px solid black"
+    littleCanvas.style.margin = "2px"
+    const size = 70;
+    littleCanvas.width = size;
+    littleCanvas.height = size; 
+    ctx = littleCanvas.getContext("2d");
+    document.body.appendChild(littleCanvas);
+    renderBoard();
+    ctx = mainCtx;
+}
+
+function handleDrawTree() {
+    // Engine.walkPossibleMoves();
+    engineRequestLine([]);
+}
+
+function engineRequestLine(indices) {
+    // TODO: hate this. just need some wasm accessable memory. 
+    if (indices.length*4 > FEN_BUFFER_SIZE) {
+        alert("overflow");
+        return;
+    }
+    const buffer = new Uint32Array(Engine.memory.buffer, Engine.fenView, FEN_BUFFER_SIZE / 4);
+    for (let i=0;i<indices.length;i++){
+        buffer[i] = indices[i];
+    }
+    Engine.getNextLineMoves(Engine.fenView, indices.length);
+    document.body.appendChild(document.createElement('hr'));
+    renderBoard();
+}
+
+let currentLinePath = [];
+let currentLineWords = [];
+function jsDrawLineMove(ptr, len, evall, depth, index, alpha, beta) {
+    const msgBuffer = new Uint8Array(Engine.memory.buffer, ptr, len);
+    const msgStr = textDecoder.decode(msgBuffer);
+    const btn = document.createElement('button');
+    btn.innerText = msgStr + " (E=" + evall + ", A=" + alpha + ", B=" + beta + ")";
+    btn.style.borderWidth = "2px";
+    if (evall > 0) {
+        btn.style.borderColor = "red";
+    } else if (evall < 0) {
+        btn.style.borderColor = "blue";
+    } else {
+        btn.style.borderColor = "purple";
+    }
+    btn.style.margin = "5px";
+    const previousPath = [...currentLinePath];
+    const previousPathWords = [...currentLineWords];
+    btn.onclick = () => {
+        currentLinePath = [...previousPath];
+        currentLinePath.push(index);
+        currentLineWords = [...previousPathWords];
+        currentLineWords.push(msgStr);
+        const info = document.createElement('button');
+        info.style.fontWeight = "bold";
+        info.innerText = currentLineWords + ". Eval: " + evall + ". Remaining: " + depth;
+
+        const freezePath = [...currentLinePath];
+        const freezeWords = [...currentLineWords];
+        info.onclick = () => {
+            currentLinePath = [...freezePath];
+            currentLineWords = [...freezeWords];
+            engineRequestLine(currentLinePath);
+            renderBoard();
+        }
+        document.body.appendChild(info);
+        document.body.appendChild(document.createElement('br'));
+        engineRequestLine(currentLinePath);
+    };
+    document.body.appendChild(btn);
 }
 
 window.chessJsReady = true;

@@ -39,8 +39,14 @@ filtercalltree zig-out/temp_profile_info.sample
 - @truncate explicitly removes high bits but @intCast asserts that the number fits in the new type. So intCast is just better for my usize->u6 of board indexes because it means debug builds catch dumb mistakes and in release builds it becomes (i assume?) a no-op. 
 - You can't always use integer literals directly, you often need an explicit type.
 - @as(type, value) is for unambigous casts that can't fail. No-op at runtime, it's just to explicitly talk to the type system. Can be used to give an explicit type to other casts. 
+- You can't have arrays of unnatural integers but there's a PackedIntArray struct that will do the bit magic for packing them into normal integers for you. 
 
-TODO: should try to get used to the auto-format. 
+### TODO
+
+- I don't fully understand the allocator stuff. Using the allocator from std.testing gives a compile error if not in a test block but if you look at the code it's just a GeneralPurposeAllocator. Does that mean general purpose is doing bad and slow test things so shouldn't be used in the main program? or is it just future proofing if they want to change the testing allocator to something that shouldn't generally be used? Is there a reason not to use an arena whenever doing a tree structure so you can free all at once? 
+- Don't fully understand pointer alignment stuff. What's the incantation to allocate a []u32 -> cast to (4x longer) []u8 -> free it? 
+- Should try to get used to the auto-format. 
+- Is there an IDE that can actually report errors? VS code with Zig Language seems to get very confused. Completions for enums and struct initialization seem to just give things from all your types? 
 
 ## much better memo table 
 

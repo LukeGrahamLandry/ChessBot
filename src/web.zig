@@ -6,6 +6,7 @@ const Piece = @import("board.zig").Piece;
 const search = @import("search.zig").Strategy(.{});
 const genAllMoves = @import("search.zig").genAllMoves;
 const Move = @import("board.zig").Move;
+const Lines = search.Lines;
 const print = consolePrint;
 
 comptime {
@@ -22,8 +23,11 @@ const alloc = std.heap.wasm_allocator;
 var notTheRng = std.rand.DefaultPrng.init(0);
 var rng = notTheRng.random();
 
+var lines: ?Lines = null;
+
 extern fn jsConsoleLog(ptr: [*]const u8, len: usize) void;
 extern fn jsAlert(ptr: [*]const u8, len: usize) void; // TODO: use for assertions if enabled
+extern fn jsDrawCurrentBoard(depth: i32, eval: i32, index: u32, count: u32) void;
 
 // TODO: log something whenever returning an error code.
 pub fn consolePrint(comptime fmt: []const u8, args: anytype) void {
@@ -71,12 +75,19 @@ export fn playRandomMove() i32 {
 /// IN: internalBoard, boardView, nextColour
 /// OUT: internalBoard, boardView, nextColour
 export fn playNextMove() i32 {
-    const move = search.bestMove(&internalBoard, nextColour, null) catch |err| {
+    if (lines) |oldLines| {
+        _ = oldLines;
+        lines.?.deinit();
+    }
+
+    const move = search.bestMoveIterative(&internalBoard, nextColour, 2, 1000, &lines) catch |err| {
         switch (err) {
             error.GameOver => return if (nextColour == .White) 2 else 3,
             else => return 1,
         }
     };
+
+    consolePrint("{} next moves.", .{lines.?.children.items.len});
 
     _ = internalBoard.play(move);
     lastMove = move;
@@ -205,4 +216,55 @@ export fn loadOpeningBook(ptr: [*]u32, len: usize) bool {
     _ = len;
     _ = ptr;
     alertPrint("TODO: implement loadOpeningBook", .{});
+    return false;
 }
+
+// Sets up each board on internalBoard then calls drawCurrentBoard and fixes the state at the end.
+export fn walkPossibleMoves() void {
+    const colour = internalBoard.nextPlayer;
+    var allMoves = genAllMoves.possibleMoves(&internalBoard, colour, alloc) catch return;
+    defer alloc.free(allMoves);
+    nextColour = nextColour.other();
+    const prev = lastMove;
+    for (allMoves) |move| {
+        const unMove = internalBoard.play(move);
+        defer internalBoard.unplay(unMove);
+        if (search.inCheck(&internalBoard, colour, alloc) catch return) continue;
+        lastMove = move;
+        boardView = @bitCast(internalBoard.squares);
+        jsDrawCurrentBoard(1, 0, 0, 0);
+    }
+    nextColour = nextColour.other();
+    boardView = @bitCast(internalBoard.squares);
+    lastMove = prev;
+}
+
+// This stomps the internalBoard.
+export fn getNextLineMoves(indices: [*]const u32, len: u32) void {
+    if (lines) |current| {
+        lastMove = null;
+        var lineGame = current.game;
+        var children = current.children.items;
+        for (0..len) |depth| {
+            if (children.len <= indices[depth]) alertPrint("Invalid index {} at depth {}", .{indices[depth], depth});
+            const node = children[indices[depth]];
+            children = node.children.items;
+
+            _ = lineGame.play(node.move);
+            lastMove = node.move;
+        }
+
+        for (children, 0..) |node, i| {
+            var txt = node.move.text() catch return;
+            jsDrawLineMove(&txt, 4, node.eval, node.remaining, i, node.alpha, node.beta);
+        }
+        
+        internalBoard = lineGame;
+        nextColour = internalBoard.nextPlayer;
+        boardView = @bitCast(internalBoard.squares);
+    } else {
+        consolePrint("No lines", .{});
+    }
+}
+
+extern fn jsDrawLineMove(ptr: [*]const u8, len: usize, eval: i32, remaining: u32, index: u32, alpha: i32, beta: i32) void;

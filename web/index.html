@@ -24,7 +24,8 @@
                 <option value="french" selected>En Passant Target</option>
                 <option value="prev" selected>Last Move</option>
             </select>
-            Material Eval: <span id="mEval"></span>.
+            Material Eval: <span id="mEval"></span>. 
+            <button onclick="handleDrawTree()">Show Tree Walk</button>
         </div>
     </div>
     <pre id="letters"></pre>
@@ -62,6 +63,13 @@
                 const msgBuffer = new Uint8Array(Engine.memory.buffer, ptr, len);
                 const msgStr = textDecoder.decode(msgBuffer);
                 alert(msgStr);
+            },
+            // TODO: this is silly
+            jsDrawCurrentBoard: function(depth, eval, index, count) {
+                window.jsDrawCurrentBoard(depth, eval, index, count);
+            },
+            jsDrawLineMove: function (ptr, len, evall, depth, index, alpha, beta) {
+                window.jsDrawLineMove(ptr, len, evall, depth, index, alpha, beta);
             }
         }
     }

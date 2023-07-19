@@ -8,6 +8,7 @@ const GameOver = @import("board.zig").GameOver;
 const Magic = @import("magic.zig");
 const Timer = @import("bench.zig").Timer;
 const print = if (@import("builtin").target.isWasm()) @import("web.zig").consolePrint else std.debug.print;
+const panic = if (@import("builtin").target.isWasm()) @import("web.zig").alertPrint else std.debug.panic;
 
 // TODO: carefully audit any use of usize because wasm is 32 bit!
 const isWasm = @import("builtin").target.isWasm();
@@ -60,12 +61,17 @@ pub const Stats = struct {
     gameOversSeen: u64 = 0,
 };
 
-const IM_MATED_EVAL = -(@as(i32, 1) << 24); // Add distance to prefer sooner mates
-const LOWEST_EVAL = -(@as(i32, 1) << 25);
+const IM_MATED_EVAL: i32 = -1000000; // Add distance to prefer sooner mates
+const LOWEST_EVAL: i32 = -2000000;
 
 comptime {
     std.debug.assert(LOWEST_EVAL < IM_MATED_EVAL);
 }
+
+pub const LineInfo = struct {
+    lines: [][]Move,
+    evals: []i32,
+};
 
 // TODO: script that tests different variations (compare speed and run correctness tests).
 pub fn Strategy(comptime opts: StratOpts) type {
@@ -130,9 +136,68 @@ pub fn Strategy(comptime opts: StratOpts) type {
             return bestMoves.items[choice];
         }
 
-        pub fn bestMoveIterative(game: *Board, me: Colour, maxDepth: ?usize, timeLimitMs: i128) !Move {
-            const startTime = std.time.nanoTimestamp();
-            const endTime = startTime + (timeLimitMs * std.time.ns_per_ms);
+        pub const Lines = struct {
+            pub const Node = struct {
+                move: Move,
+                eval: i32 = 0,
+                children: std.ArrayList(Node),
+                alloc: std.mem.Allocator,
+                remaining: u32,
+                alpha: i32,
+                beta: i32,
+
+                pub fn makeChild(self: *Node, move: Move, remaining: u32, alpha: i32, beta: i32) !Node {
+                    var c = std.ArrayList(Node).init(self.alloc);
+                    const node: Node = .{ .alloc=self.alloc, .move=move, .children=c, .remaining=remaining, .alpha=alpha, .beta=beta };
+                    return node;
+                }
+
+                pub fn addChild(self: *Node, child: Node) !void {
+                    try self.children.append(child);
+                }
+            };
+
+            arena: std.heap.ArenaAllocator,
+            game: Board,
+            children: std.ArrayList(Node),
+            depth: usize = 0,
+            eval: i32 = 0,
+
+            pub fn init(game: *Board, alloc: std.mem.Allocator) !Lines {
+                var arena = std.heap.ArenaAllocator.init(alloc);
+                // TODO: wtf is happening. everything breaks if this resizes
+                var c = try std.ArrayList(Node).initCapacity(arena.allocator(), 100);
+                return .{ .arena=arena, .game=game.*, .children=c};
+            }
+
+            pub fn makeChild(self: *Lines, move: Move, remaining: u32, alpha: i32, beta: i32) !Node {
+                const c = std.ArrayList(Node).init(self.arena.allocator());
+                const node: Node = .{ .alloc=self.arena.allocator(), .move=move, .children=c, .remaining=remaining, .alpha=alpha, .beta=beta };
+                return node;
+            }
+
+            pub fn addChild(self: *Lines, child: Node) !void {
+                try self.children.append(child);
+            }
+
+            pub fn clear(self: *Lines) !void {
+                print("clear lines.\n", .{});
+                self.eval = 0;
+                self.depth = 0;
+                _ = self.arena.reset(.retain_capacity);
+                self.children = std.ArrayList(Node).init(self.arena.allocator());
+            }
+
+            pub fn deinit(self: *Lines) void {
+                print("Deinit lines.\n", .{});
+                self.arena.deinit();
+            }
+        };
+
+        // TODO: wasm get the time
+        pub fn bestMoveIterative(game: *Board, me: Colour, maxDepth: usize, timeLimitMs: i128, lines_out: *?Lines) !Move {
+            const startTime = if (isWasm) 0 else std.time.nanoTimestamp();
+            const endTime = if (isWasm) 1 else startTime + (timeLimitMs * std.time.ns_per_ms);
             var alloc = upperArena.allocator();
             defer _ = upperArena.reset(.retain_capacity);
             if (memoMap == null) memoMap = try MemoTable.initWithCapacity(opts.memoMapSizeMB, std.heap.page_allocator);
@@ -140,6 +205,9 @@ pub fn Strategy(comptime opts: StratOpts) type {
 
             var topLevelMoves = try genAllMoves.possibleMoves(game, me, alloc);
             defer alloc.free(topLevelMoves);
+
+            var prevLines = try Lines.init(game, std.heap.page_allocator);
+            var currentLines = try Lines.init(game, std.heap.page_allocator);
 
             // TODO: this is extra plays but only at top level.
             // Remove illigal moves.
@@ -166,15 +234,19 @@ pub fn Strategy(comptime opts: StratOpts) type {
             }
             var stats: Stats = .{};
             var thinkTime: i128 = -1;
-            for (1..@as(usize, @intCast((maxDepth orelse opts.maxDepth) + 1))) |depth| {
+            for (1..(maxDepth + 1)) |depth| {
+                currentLines.depth = depth;
                 var bestWhiteEval = LOWEST_EVAL;
                 var bestBlackEval = LOWEST_EVAL;
                 var bestVal: i32 = LOWEST_EVAL;
                 for (topLevelMoves, 0..) |move, i| {
                     const unMove = game.play(move);
                     defer game.unplay(unMove);
-                    const eval = -try walkEval(game, me.other(), @intCast(depth), LOWEST_EVAL, LOWEST_EVAL, movesArena.allocator(), &stats, memo, false); // TODO: need to catch
+                    var line = try currentLines.makeChild(move, @intCast(depth+1), bestWhiteEval, bestBlackEval);
+                    const eval = -try walkEval(game, me.other(), @intCast(depth), bestWhiteEval, bestBlackEval, movesArena.allocator(), &stats, memo, false, &line);
                     evalGuesses.items[i] = eval;
+                    line.eval = eval * me.dir();
+                    try currentLines.addChild(line);
 
                     if (eval > bestVal) {
                         bestVal = eval;
@@ -184,19 +256,32 @@ pub fn Strategy(comptime opts: StratOpts) type {
                     }
 
                     // If we ran out of time, just return the best result from the last search.
-                    if (std.time.nanoTimestamp() >= endTime) {
-                        if (thinkTime == -1) sortMoves(game, topLevelMoves); // haven't even done one search, be slightly better than random.
+                    if ((if (isWasm) 0 else std.time.nanoTimestamp()) >= endTime) {
+                        currentLines.deinit();
+                        if (thinkTime == -1) {
+                            sortMoves(game, topLevelMoves); // haven't even done one search, be slightly better than random.
+                            prevLines.deinit();
+                        } else {
+                            lines_out.* = prevLines;
+                        }
+                        
                         // print("Out of time. Using move from depth {} ({}ms)\n", .{ depth - 1, @divFloor(thinkTime, std.time.ns_per_ms) });
                         return topLevelMoves[0];
                     }
                 }
 
                 std.sort.insertionContext(0, topLevelMoves.len, PairContext{ .moves = topLevelMoves, .evals = evalGuesses.items });
-                thinkTime = std.time.nanoTimestamp() - startTime;
+                thinkTime = if (isWasm) 0 else std.time.nanoTimestamp() - startTime;
+                currentLines.eval = bestVal * me.dir();
+                std.mem.swap(Lines, &prevLines, &currentLines);
+                try currentLines.clear();
+
                 // print("Searched depth {} in {} ms.\n", .{ depth, @divFloor(thinkTime, std.time.ns_per_ms) });
             }
 
             // print("Reached max depth {} in {}ms.\n", .{ maxDepth orelse opts.maxDepth, @divFloor(thinkTime, std.time.ns_per_ms) });
+            lines_out.* = prevLines;
+            currentLines.deinit();
             return topLevelMoves[0];
         }
 
@@ -277,7 +362,7 @@ pub fn Strategy(comptime opts: StratOpts) type {
         // The eval of <game>, positive means <me> is winning, assuming it is <me>'s turn.
         // Returns error.GameOver if there were no possible moves or for 50 move rule.
         // TODO: redo my captures only thing to be lookForPiece and only simpleEval if no captures on the board
-        pub fn walkEval(game: *Board, me: Colour, remaining: i32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, stats: *Stats, memo: *MemoTable, comptime capturesOnly: bool) error{ OutOfMemory, ForceStop, Overflow }!i32 {
+        pub fn walkEval(game: *Board, me: Colour, remaining: i32, bestWhiteEvalIn: i32, bestBlackEvalIn: i32, alloc: std.mem.Allocator, stats: *Stats, memo: *MemoTable, comptime capturesOnly: bool, line: *Lines.Node) error{ OutOfMemory, ForceStop, Overflow }!i32 {
             if (forceStop) return error.ForceStop;
             if (game.halfMoveDraw >= 100) return Magic.DRAW_EVAL;
 
@@ -331,14 +416,18 @@ pub fn Strategy(comptime opts: StratOpts) type {
                 }
                 startEvaling += 1;
                 noLegalMoves = false;
+                var nextLine = try line.makeChild(move, @intCast(remaining), bestWhiteEval, bestBlackEval);
 
                 const value = if (remaining <= 0) v: {
                     if (comptime stats.use) stats.leafBoardsSeen += 1;
                     break :v genAllMoves.simpleEval(game) * me.dir();
                 } else r: {
-                    const v = try walkEval(game, me.other(), remaining - 1, bestWhiteEval, bestBlackEval, alloc, stats, memo, capturesOnly);
+                    const v = try walkEval(game, me.other(), remaining - 1, bestWhiteEval, bestBlackEval, alloc, stats, memo, capturesOnly, &nextLine);
                     break :r -v;
                 };
+
+                nextLine.eval = value * me.dir();
+                try line.addChild(nextLine);
 
                 if (value > bestVal) {
                     foundMove = move;
@@ -375,6 +464,9 @@ pub fn Strategy(comptime opts: StratOpts) type {
             // if (remaining > 0) print("{} moves. {} walked. {s}. eval={}. bestWhiteEval={}. bestBlackEval={}.\n", .{ moves.len - checksSkipped, startEvaling, kindStr, bestVal, bestWhiteEval, bestBlackEval });
             // if (remaining > 0 and !capturesOnly) print("remaining: {}. {} moves. {} walked.\n", .{ remaining, legal, startEvaling });
 
+            // if (*line) |bestLine| {
+            //     bestLine[bestLine.items.len - remaining - 1] = foundMove.?;
+            // }
             return bestVal;
         }
 
@@ -448,7 +540,7 @@ pub fn Strategy(comptime opts: StratOpts) type {
         }
 
         pub const MemoEntry = struct {
-            // squares: [64]Piece,
+            squares: [64]Piece,
             hash: u64,
             value: MemoValue,
         };
@@ -510,7 +602,7 @@ pub fn Strategy(comptime opts: StratOpts) type {
                 const hashcode = hash(key);
                 const bucket: usize = @intCast(hashcode & self.bucketMask);
                 self.buffer[bucket] = .{
-                    // .squares = key.squares,
+                    .squares = key.squares,
                     .hash = hashcode,
                     .value = value,
                 };
@@ -520,11 +612,11 @@ pub fn Strategy(comptime opts: StratOpts) type {
                 const hashcode = hash(key);
                 const bucket: usize = @intCast(hashcode & self.bucketMask);
                 if (self.buffer[bucket].hash == hashcode) {
-                    // fuck it, we ball, 2^64 is basically infinity
-                    // if (!eql(key, &self.buffer[bucket])) {
-                    //     if (!isWasm) @panic("hash collission (not a problem, just debugging)"); // TODO: does this every happen? how confident am I?
-                    //     return null;
-                    // }
+                    // TODO: fuck it, we ball, 2^64 is basically infinity
+                    if (!eql(key, &self.buffer[bucket])) {
+                        panic("hash collission (not a problem... yet, just debugging)", .{}); // TODO: does this every happen? how confident am I?
+                        return null;
+                    }
                     return self.buffer[bucket].value;
                 } else {
                     return null;
@@ -535,3 +627,18 @@ pub fn Strategy(comptime opts: StratOpts) type {
 } // End Strategy.
 
 pub const default = Strategy(.{});
+
+
+test {
+    var game = Board.initial();
+    var lines: ?default.Lines = null;
+    const best = try default.bestMoveIterative(&game, .White, 5, 1000, &lines);
+    _ = best;
+    for (lines.?.children.items) |move|{
+        print("{s} ({}); ", .{try move.move.text(), move.eval});
+    }
+    print("\n", .{});
+    for (lines.?.children.items[0].children.items) |move|{
+        print("{s} ({}); ", .{try move.move.text(), move.eval});
+    }
+}

@@ -465,7 +465,7 @@ const Engine = struct {
     }
 };
 
-fn writeAlgebraic(move: Move) ![5]u8 {
+pub fn writeAlgebraic(move: Move) ![5]u8 {
     var moveStr: [5]u8 = std.mem.zeroes([5]u8);
     const fromRank = @divFloor(move.from, 8);
     const fromFile = @mod(move.from, 8);
