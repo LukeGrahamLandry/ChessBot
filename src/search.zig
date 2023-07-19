@@ -226,9 +226,8 @@ pub fn Strategy(comptime opts: StratOpts) type {
             }
         };
 
-        // TODO: ?*? looks cringe!
         pub fn bestMoveIterative(game: *Board, me: Colour, maxDepth: usize, timeLimitMs: i128, lines_out: anytype) !Move {
-            if (game.halfMoveDraw >= 100) return error.GameOver; // Draw
+            if (game.halfMoveDraw >= 100 or insufficientMaterial(game)) return error.GameOver; // Draw
 
             const startTime = nanoTimestamp();
             const endTime = startTime + (timeLimitMs * std.time.ns_per_ms);
@@ -271,52 +270,45 @@ pub fn Strategy(comptime opts: StratOpts) type {
                 var alpha = LOWEST_EVAL;
                 var beta = -LOWEST_EVAL;
                 var bestVal: i32 = LOWEST_EVAL * me.dir();
+                // TODO: this is almost the same as walkEval.
                 for (topLevelMoves, 0..) |move, i| {
                     _ = movesArena.reset(.retain_capacity);
                     const unMove = game.play(move);
                     defer game.unplay(unMove);
                     var line = try currentLines.makeChild(move, @intCast(depth + 1), alpha, beta);
-                    const eval = try walkEval(game, me.other(), @intCast(depth), alpha, beta, movesArena.allocator(), &stats, memo, false, &line);
+                    const eval = walkEval(game, me.other(), @intCast(depth), alpha, beta, movesArena.allocator(), &stats, memo, false, &line, endTime) catch |err| {
+                        if (err == error.ForceStop) {
+                            // If we ran out of time, just return the best result from the last search.
+                            if (nanoTimestamp() >= endTime) {
+                                if (thinkTime == -1) {
+                                    if (isWasm) print("Didn't even finish one layer!\n", .{});
+                                    sortMoves(game, topLevelMoves);
+                                    favourite = topLevelMoves[0];
+                                    prevLines.deinit();
+                                } else {
+                                    lines_out.* = prevLines;
+                                    if (isWasm) print("Out of time. Using move from depth {} ({}ms)\n", .{ depth - 1, @divFloor(thinkTime, std.time.ns_per_ms) });
+                                }
+                                currentLines.deinit();
+                                return favourite;
+                            }
+                        }
+                        return err;
+                    };
                     evalGuesses.items[i] = eval;
                     line.eval = eval;
                     try currentLines.addChild(line);
 
+                    // Update a/b to pass better ones to walkEval but it would never be able to prune here because the we're always the same player.
                     switch (me) {
                         .White => {
                             bestVal = @max(bestVal, eval);
                             alpha = @max(alpha, bestVal);
-                            if (bestVal >= beta) {
-                                for ((i + 1)..topLevelMoves.len) |j| {
-                                    evalGuesses.items[j] = LOWEST_EVAL;
-                                }
-                                break;
-                            }
                         },
                         .Black => {
                             bestVal = @min(bestVal, eval);
                             beta = @min(beta, bestVal);
-                            if (bestVal <= alpha) {
-                                for ((i + 1)..topLevelMoves.len) |j| {
-                                    evalGuesses.items[j] = -LOWEST_EVAL;
-                                }
-                                break;
-                            }
                         },
-                    }
-
-                    // If we ran out of time, just return the best result from the last search.
-                    if (nanoTimestamp() >= endTime) {
-                        if (thinkTime == -1) {
-                            if (isWasm) print("Didn't even finish one layer!\n", .{});
-                            sortMoves(game, topLevelMoves);
-                            favourite = topLevelMoves[0];
-                            prevLines.deinit();
-                        } else {
-                            lines_out.* = prevLines;
-                            if (isWasm) print("Out of time. Using move from depth {} ({}ms)\n", .{ depth - 1, @divFloor(thinkTime, std.time.ns_per_ms) });
-                        }
-                        currentLines.deinit();
-                        return favourite;
                     }
                 }
 
@@ -326,7 +318,6 @@ pub fn Strategy(comptime opts: StratOpts) type {
                 std.mem.swap(@TypeOf(lines_out.*.?), &prevLines, &currentLines);
                 try currentLines.clear();
                 favourite = topLevelMoves[0];
-                // print("{any}\n", .{evalGuesses});
 
                 // print("Searched depth {} in {} ms.\n", .{ depth, @divFloor(thinkTime, std.time.ns_per_ms) });
             }
@@ -370,7 +361,7 @@ pub fn Strategy(comptime opts: StratOpts) type {
 
         // TODO: why am I returning an array list here but a slice from possibleMoves?
         pub fn allEqualBestMoves(game: *Board, me: Colour, alloc: std.mem.Allocator, depth: i32) MoveErr!std.ArrayList(Move) {
-            if (game.halfMoveDraw >= 100) return error.GameOver; // Draw
+            if (game.halfMoveDraw >= 100 or insufficientMaterial(game)) return error.GameOver; // Draw
 
             // TODO: I don't like that I can't init this outside.
             // Not using the arena alloc because this persists after the move is played so work can be reused.
@@ -419,13 +410,16 @@ pub fn Strategy(comptime opts: StratOpts) type {
         // The eval of <game>, positive means <me> is winning, assuming it is <me>'s turn.
         // Returns error.GameOver if there were no possible moves or for 50 move rule.
         // TODO: redo my captures only thing to be lookForPiece and only simpleEval if no captures on the board
-        pub fn walkEval(game: *Board, me: Colour, remaining: i32, alphaIn: i32, betaIn: i32, alloc: std.mem.Allocator, stats: *Stats, memo: *MemoTable, comptime capturesOnly: bool, line: anytype) error{ OutOfMemory, ForceStop, Overflow }!i32 {
+        pub fn walkEval(game: *Board, me: Colour, remaining: i32, alphaIn: i32, betaIn: i32, alloc: std.mem.Allocator, stats: *Stats, memo: *MemoTable, comptime capturesOnly: bool, line: anytype, endTime: i128) error{ OutOfMemory, ForceStop, Overflow }!i32 {
             if (forceStop) return error.ForceStop;
-            if (game.halfMoveDraw >= 100) return Magic.DRAW_EVAL;
             if (remaining == 0) {
                 if (comptime stats.use) stats.leafBoardsSeen += 1;
                 return game.simpleEval;
             }
+            if (game.halfMoveDraw >= 100 or insufficientMaterial(game)) return Magic.DRAW_EVAL;
+            // Getting the time at every leaf node slows it down. But don't want to wait to get all the way back to the top if we're out of time.
+            // Note: since I'm not checking at top level, it just doen't limit time if maxDepth=2 but only matters if you give it <5 ms so don't care.
+            if (remaining > 2 and nanoTimestamp() >= endTime) return error.ForceStop;
 
             // Want to mutate copies of values from parameters.
             var alpha = alphaIn;
@@ -481,7 +475,7 @@ pub fn Strategy(comptime opts: StratOpts) type {
                 startEvaling += 1;
                 noLegalMoves = false;
                 var nextLine = try line.makeChild(move, @intCast(remaining), alpha, beta);
-                const eval = try walkEval(game, me.other(), remaining - 1, alpha, beta, alloc, stats, memo, capturesOnly, &nextLine);
+                const eval = try walkEval(game, me.other(), remaining - 1, alpha, beta, alloc, stats, memo, capturesOnly, &nextLine, endTime);
                 nextLine.eval = eval;
                 try line.addChild(nextLine);
 
@@ -587,18 +581,40 @@ pub fn Strategy(comptime opts: StratOpts) type {
 
         pub fn isGameOver(game: *Board, alloc: std.mem.Allocator) !GameOver {
             if (game.halfMoveDraw >= 100) return .FiftyMoveDraw;
+            if (insufficientMaterial(game)) return .MaterialDraw;
             if (try hasAnyLegalMoves(game, alloc)) return .Continue;
-            if (!(try inCheck(game, game.nextPlayer, alloc))) return .Stalemate;
-            return if (game.nextPlayer == .White) .BlackWins else .WhiteWins;
+            if (try inCheck(game, game.nextPlayer, alloc)) return if (game.nextPlayer == .White) .BlackWins else .WhiteWins;
+            return .Stalemate;
+        }
+
+        // https://www.chess.com/article/view/how-chess-games-can-end-8-ways-explained#insufficient-material
+        pub fn insufficientMaterial(game: *Board) bool {
+            const total = @popCount(game.peicePositions.white | game.peicePositions.white);
+            if (total > 4) return false;
+            var minorWhite: usize = 0;
+            var minorBlack: usize = 0;
+            for (game.squares) |piece| {
+                switch (piece.kind) {
+                    .Empty, .King => {},
+                    .Rook, .Queen, .Pawn => return false,
+                    .Bishop, .Knight => switch (piece.colour) {
+                        .White => minorWhite += 1,
+                        .Black => minorBlack += 1,
+                    },
+                }
+            }
+            // TODO: king vs king + 2N
+            // (king vs king, king+1 vs king) or (king+1 vs king+1)
+            return (minorWhite + minorBlack) <= 1 or (minorWhite == 1 and minorBlack == 1);
         }
 
         pub const MemoEntry = struct {
             // squares: [64]Piece,
-            hash: u64,
+            hash: u64, // TODO: lower x bits are the bucket so why store them
             value: MemoValue,
         };
 
-        const MemoKind = union(enum) { Exact, AlphaPrune, BetaPrune };
+        const MemoKind = enum(u2) { Exact, AlphaPrune, BetaPrune };
 
         pub const MemoValue = struct { eval: i32, remaining: i16, move: Move, kind: MemoKind };
 
@@ -629,13 +645,14 @@ pub fn Strategy(comptime opts: StratOpts) type {
                 return self;
             }
 
+            // Must be same allocator as used to init.
             pub fn deinit(self: *MemoTable, alloc: std.mem.Allocator) void {
                 alloc.free(self.buffer);
             }
 
-            // This is relies on empty squares having a definied colour so they bytes match! TODO: test that stays true
             pub fn hash(key: *const Board) u64 {
                 // // TODO: include castling/french move.
+                // This is relies on empty squares having a definied colour so they bytes match!
                 // const data = std.mem.asBytes(&key.squares);
                 // const hashcode = switch (comptime opts.hashAlgo) {
                 //     .Wyhash => std.hash.Wyhash.hash(0, data),
@@ -652,6 +669,7 @@ pub fn Strategy(comptime opts: StratOpts) type {
             }
 
             pub fn eql(key: *const Board, entry: *MemoEntry) bool {
+                // This is relies on empty squares having a definied colour so they bytes match!
                 return std.mem.eql(u8, std.mem.asBytes(&key.squares), std.mem.asBytes(&entry.squares));
             }
 

@@ -18,6 +18,7 @@ let ctx = document.getElementById("board").getContext("2d");
 
 let ticker = null;
 let boardFenHistory = [];
+let gameOverMsg = null;
 function tickGame() {
     const start = performance.now();
     const result = Engine.playNextMove();
@@ -25,17 +26,19 @@ function tickGame() {
     const time = Math.round(performance.now() - start);
     console.log("Found move in " + time + "ms.");
     renderBoard();
-    switch (result) {
-        case 0:
-            // TODO: do this if computer vs computer.  
-            // if (time < minMoveTimeMs) ticker = window.setTimeout(tickGame, minMoveTimeMs - time);
-            // else ticker = window.setTimeout(tickGame, 1);
-            break;
-        default:
-            reportEngineMsg(result);
-            document.getElementById("resume").disabled = true;
-            document.getElementById("pause").disabled = true;
-            break;
+    if (result == 0) {  // Continue
+        // TODO: do this if computer vs computer.  
+        // if (time < minMoveTimeMs) ticker = window.setTimeout(tickGame, minMoveTimeMs - time);
+        // else ticker = window.setTimeout(tickGame, 1);
+    } else if (result > 1) {  // Game over
+        const msgBuffer = new Uint8Array(Engine.memory.buffer, Engine.msgBuffer, result);
+        gameOverMsg = textDecoder.decode(msgBuffer);
+        console.log(gameOverMsg);
+        renderBoard();
+    } else {  // Engine error
+        reportEngineMsg(result);
+        document.getElementById("resume").disabled = true;
+        document.getElementById("pause").disabled = true;
     }
 };
 
@@ -48,6 +51,7 @@ function handleRestart() {
     console.log(boardFenHistory);
     Engine.restartGame();
     boardFenHistory = [getFenFromEngine()];
+    gameOverMsg = null;
     renderBoard();
 }
 
@@ -133,29 +137,10 @@ function handleCanvasClick(e) {
 }
 
 function reportEngineMsg(result) {
-    switch (result) {
-        case 0:
-            msg = "Ok (???)";
-            break;
-        case 1:
-            // TODO: give zig a way to return the type of error. 
-            msg = "Engine error.";
-            clearInterval(ticker);
-            document.getElementById("controls").style.display = "none";
-            break;
-        case 2:
-            msg = "White cannot move.";
-            break;
-        case 3:
-            msg = "Black cannot move.";
-            break;
-        case 4: 
-            msg = "Invalid move (???)";
-            break;
-        default:
-            msg = "Invalid engine response: " + result;
-            break;
-    }
+    // TODO: give zig a way to return the type of error. 
+    msg = "Engine error " + result;
+    clearInterval(ticker);
+    document.getElementById("controls").style.display = "none";
     document.getElementById("letters").innerText += "\n" + msg;
 }
 
@@ -217,7 +202,7 @@ function drawBitBoardPair(magicEngineIndex) {
 function renderBoard() {
     const fen = getFenFromEngine();
     document.getElementById("fen").value = fen;
-    document.getElementById("player").innerText = (Engine.isWhiteTurn() ? "White" : "Black") + "'s Turn";  // TODO: this is where winner/draw info will go
+    document.getElementById("player").innerText = gameOverMsg != null ? gameOverMsg : (Engine.isWhiteTurn() ? "White" : "Black") + "'s Turn";
     document.getElementById("mEval").innerText = Engine.getMaterialEval();
 
     // TODO: If I really cared I could just render the diff instead of clearing the board

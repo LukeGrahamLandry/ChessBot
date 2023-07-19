@@ -197,8 +197,8 @@ const FrenchMove = union(enum) { none, file: u4 };
 const slowTrackAllMoves = false;
 
 inline fn getZoidberg(piece: Piece, square: u6) u64 {
-    const kindOffset = @as(u64, @intCast(@intFromEnum(piece.kind))) - 1;
-    const colourOffset = @as(u64, @intCast(@intFromEnum(piece.colour))) * 6;
+    const kindOffset: usize = @intCast(@intFromEnum(piece.kind));
+    const colourOffset: usize = @intCast(@intFromEnum(piece.colour));
     const offset = (kindOffset + colourOffset) * 64;
     const index = Magic.ZOID_PIECE_START + offset + square;
     // print("{} kindOffset={} colourOffset={} square={} index={}\n", .{ piece, kindOffset, colourOffset, square, index });
@@ -487,44 +487,44 @@ pub const Board = struct {
     // TODO: allow for extra spaces
     pub fn fromFEN(fen: []const u8) InvalidFenErr!Board {
         var self = Board.blank();
-        var file: u8 = 0;
-        var rank: u8 = 7;
-        var i: usize = 0;
 
-        // Pieces
-        for (fen) |letter| {
-            defer i += 1;
-            if (letter == ' ') break;
+        var parts = std.mem.splitScalar(u8, fen, ' ');
+        if (parts.next()) |pieces| {
+            var file: u8 = 0;
+            var rank: u8 = 7;
+            var i: usize = 0;
+            for (pieces) |letter| {
+                defer i += 1;
+                if (letter == ' ') break;
 
-            if (std.ascii.isDigit(letter)) {
-                const count = letter - ASCII_ZERO_CHAR;
-                file += count;
-            } else if (letter == '/') {
-                if (file != 8) return error.InvalidFen;
-                file = 0;
-                if (rank == 0) return error.InvalidFen; // This assumes no trailing '/'
-                rank -= 1;
-            } else {
-                self.set(file, rank, try Piece.fromChar(letter));
-                file += 1;
-                if (rank > 8) return error.InvalidFen;
+                if (std.ascii.isDigit(letter)) {
+                    const count = letter - ASCII_ZERO_CHAR;
+                    file += count;
+                } else if (letter == '/') {
+                    if (file != 8) return error.InvalidFen;
+                    file = 0;
+                    if (rank == 0) return error.InvalidFen; // This assumes no trailing '/'
+                    rank -= 1;
+                } else {
+                    self.set(file, rank, try Piece.fromChar(letter));
+                    file += 1;
+                    if (rank > 8) return error.InvalidFen;
+                }
             }
+            if (file != 8) return error.InvalidFen;
+        } else {
+            return error.InvalidFen;
         }
 
-        if (file != 8) return error.InvalidFen;
-        if (i == fen.len) return error.InvalidFen;
-
-        // Whose turn?
-        switch (fen[i]) {
-            'w' => self.nextPlayer = .White,
-            'b' => self.nextPlayer = .Black,
-            else => return error.InvalidFen,
+        if (parts.next()) |player| {
+            switch (player[0]) {
+                'w' => self.nextPlayer = .White,
+                'b' => self.nextPlayer = .Black,
+                else => return error.InvalidFen,
+            }
+        } else {
+            return error.InvalidFen;
         }
-        i += 1;
-
-        if (i == fen.len) return self; // Missing fields could be an error but I'm feeling chill today.
-        if (fen[i] != ' ') return error.InvalidFen;
-        i += 1;
 
         // TODO: parse the rest
         // Castling
@@ -615,6 +615,7 @@ pub const Board = struct {
         return try letters.toOwnedSlice();
     }
 
+    // TODO: there's a magic format function signature the std printing looks for.
     pub fn debugPrint(self: *const Board) void {
         var staticDebugBuffer: [500]u8 = undefined;
         var staticDebugAlloc = std.heap.FixedBufferAllocator.init(&staticDebugBuffer);
@@ -718,7 +719,7 @@ pub const Move = struct {
 };
 
 // TODO: report in ui
-pub const GameOver = enum { Continue, Stalemate, FiftyMoveDraw, WhiteWins, BlackWins };
+pub const GameOver = enum { Continue, Stalemate, FiftyMoveDraw, MaterialDraw, WhiteWins, BlackWins };
 
 const isWasm = @import("builtin").target.isWasm();
 
@@ -730,11 +731,11 @@ const search = @import("search.zig").default;
 pub fn inferPlayMove(board: *Board, fromIndex: u32, toIndex: u32, alloc: std.mem.Allocator) InferMoveErr!OldMove {
     const colour = board.nextPlayer;
     if (board.squares[fromIndex].empty()) {
-        print("Tried to move from empty square. {}\n", .{board.squares[fromIndex]});
+        // print("Tried to move from empty square. {}\n", .{board.squares[fromIndex]});
         return error.IllegalMove;
     }
     if (board.squares[fromIndex].colour != colour) {
-        print("Tried to move wrong colour. {}\n", .{board.squares[fromIndex]});
+        // print("Tried to move wrong colour. {}\n", .{board.squares[fromIndex]});
         return error.IllegalMove;
     }
 

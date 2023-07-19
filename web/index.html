@@ -12,8 +12,8 @@
         <div id="controls">
            <div style="font-size: 2rem;" id="player"></div>
             <button onclick="handleAskRestart()"> Reset Board </button>
-            <button onclick="handlePause()" id="pause" disabled> Pause </button>
-            <button onclick="handleResume()" id="resume"> Resume </button>
+            <button onclick="handlePause()" id="pause" disabled hidden> Pause </button>
+            <button onclick="handleResume()" id="resume" hidden> Resume </button>
             <br> <br>
             FEN: <input type="text" id="fen" style="width: 350px;"> <button onclick="handleSetFromFen()">Set Board</button> <br>
             Info: <select id="bitboard" onchange="handleBitboardSelect()">
@@ -24,11 +24,11 @@
                 <option value="french" selected>En Passant Target</option>
                 <option value="prev" selected>Last Move</option>
             </select>
-            Material Eval: <span id="mEval"></span>. 
+            Simple Eval: <span id="mEval"></span>. 
             <input type="checkbox" id="showlabels"> Show Square Labels <br>
-            <button onclick="handleDrawTree()">Show Tree Walk</button> <br>
-            <input type="range" id="depth" value="5" min="2" max="7" style="width: 50%;"> Max Depth: <span id="showdepth"></span>. <br>
-            <input type="range" id="time" value="200" min="200" max="10000" style="width: 50%;">  Max Time: <span id="showtime"></span> ms.<br> <br>
+            <button onclick="handleDrawTree()" hidden>Show Tree Walk</button> <br>
+            <input type="range" id="depth" value="5" min="2" max="9" style="width: 50%;"> Max Depth: <span id="showdepth"></span> ply. <br>
+            <input type="range" id="time" value="200" min="50" max="10000" style="width: 50%;">  Max Time: <span id="showtime"></span> ms.<br> <br>
             <textarea id="log" style="width: 80%;" rows="4"></textarea>
         </div>
     </div>

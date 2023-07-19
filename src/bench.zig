@@ -1,12 +1,14 @@
 const std = @import("std");
 const board = @import("board.zig");
 const search = @import("search.zig");
+const Magic = @import("magic.zig");
 var allocatorT = std.heap.GeneralPurposeAllocator(.{}){};
 var alloc = allocatorT.allocator();
 const print = if (@import("builtin").target.isWasm()) @import("web.zig").consolePrint else std.debug.print;
 
 // TODO: maybe one game then compare time to generate an eval of each position
 pub fn main() !void {
+    Magic.initZoidberg();
     _ = try replayGame(example);
     // const total = Timer.start();
     // const count = 30;

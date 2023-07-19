@@ -4,39 +4,46 @@ const Move = @import("board.zig").Move;
 const search = @import("search.zig").default;
 const Timer = @import("bench.zig").Timer;
 const GameOver = @import("board.zig").GameOver;
+const Magic = @import("magic.zig");
 
 // TODO: split into uci.zig and fish.zig
 // TODO: for just using support wasm32-wasi and wasm-freestanding (browser by exposing a uci_send(ptr, len) and uci_recieve(ptr, maxLen)->len function).
 // TODO: threads!!! 8x speed = goooood times.
 
+// TODO: auto run shorter matches while increasing my time until equal skill.
 const Opts = struct {
-    fishTimeLimitMS: i128 = 2,
-    maxMoves: usize = 500,
+    maxMoves: usize = 250,
     gameCount: usize = 100,
-    fishLevel: usize = 0,
-    myTimeLimitMS: i128 = 200,
-    myMaxDepth: usize = 5,
+
+    // These are passed to stockfish to limit its strength.
+    fishSkillLevel: usize = 0, // 0-20.
+    fishTimeLimitMS: i128 = 2,
+
+    // These control my strength. The search stops when either time or depth is exceeded.
+    // Limiting my time and allowing high depth like real games rewards performance improvements.
+    myTimeLimitMS: i128 = 26,
+    myMaxDepth: usize = 50, // anything above 10 is basically unlimited other than endgame.
 };
 
 const config: Opts = .{};
 var shouldPrint = false;
 
 pub fn main() !void {
+    Magic.initZoidberg();
     std.debug.print("[info] {}\n", .{config});
-    const fishLevelStr = try std.fmt.allocPrint(general.allocator(), "{}", .{config.fishLevel});
+    const fishLevelStr = try std.fmt.allocPrint(general.allocator(), "{}", .{config.fishSkillLevel});
     defer general.allocator().free(fishLevelStr);
     var fish = try Stockfish.init();
     try fish.send(.Init);
     fish.blockUntilRecieve(.InitOk);
     try fish.send(.{ .SetOption = .{ .name = "Skill Level", .value = fishLevelStr } });
-    try fish.send(.{ .SetOption = .{ .name = "Hash", .value = "1" } });
 
     var gt = Timer.start();
     var failed: u32 = 0;
     var results = std.AutoHashMap(GameOver, u32).init(general.allocator());
-    for (0..config.gameCount) |g| {
+    for (1..config.gameCount + 1) |g| {
         if (g != 0) {
-            std.debug.print("[info]: Win {}. Lose {}. Draw {}. Error {}.\n", .{ results.get(.WhiteWins) orelse 0, results.get(.BlackWins) orelse 0, (results.get(.Stalemate) orelse 0) + (results.get(.FiftyMoveDraw) orelse 0), failed });
+            std.debug.print("[info]: Win {}. Lose {}. Draw {}. Error {}.\n", .{ results.get(.WhiteWins) orelse 0, results.get(.BlackWins) orelse 0, (results.get(.Stalemate) orelse 0) + (results.get(.FiftyMoveDraw) orelse 0) + (results.get(.MaterialDraw) orelse 0), failed });
         }
         std.debug.print("Game {}/{}.\n", .{ g, config.gameCount });
         const result = playOneGame(&fish, g, config.gameCount) catch |err| {
@@ -53,13 +60,14 @@ pub fn main() !void {
 
     const time = gt.get();
     std.debug.print("[info]: Done! Played {} games in {}ms.\n", .{ config.gameCount, time });
-    std.debug.print("[info]: Win {}. Lose {}. Draw {}. Error {}.\n", .{ results.get(.WhiteWins) orelse 0, results.get(.BlackWins) orelse 0, (results.get(.Stalemate) orelse 0) + (results.get(.FiftyMoveDraw) orelse 0), failed });
+    std.debug.print("[info]: Win {}. Lose {}. Draw {}. Error {}.\n", .{ results.get(.WhiteWins) orelse 0, results.get(.BlackWins) orelse 0, (results.get(.Stalemate) orelse 0) + (results.get(.FiftyMoveDraw) orelse 0) + (results.get(.MaterialDraw) orelse 0), failed });
     std.debug.print("[info] {}\n", .{config});
     try fish.deinit();
 }
 
 // TODO: output pgn
 // TODO: alternate who plays white
+// TODO: detect draw by insufficient material
 pub fn playOneGame(fish: *Stockfish, gameIndex: usize, gamesTotal: u32) !GameOver {
     try fish.send(.NewGame);
     try fish.send(.AreYouReady);
@@ -233,12 +241,14 @@ fn logGameOver(err: anyerror, board: *Board, moveHistory: *std.ArrayList([5]u8),
                 .Continue => "Game over but player can still move? This is a bug!",
                 .Stalemate => "Draw (stalemate).",
                 .FiftyMoveDraw => "Draw (50 move rule).",
+                .MaterialDraw => "Draw (insufficient material).",
                 .WhiteWins => "White (luke) wins.",
                 .BlackWins => "Black (fish) wins.",
             };
             const time = gt.get();
             std.debug.print("[info]: {s} The game lasted {} ply ({} ms). \n", .{ msg, moveHistory.items.len, time });
             if (stats.fishRandom != 0) std.debug.print("[info]: The fish played {}/{} moves randomly.\n", .{ stats.fishRandom, stats.fishOnTime + stats.fishRandom });
+            board.debugPrint();
             return result;
         },
         else => return err,
@@ -270,6 +280,7 @@ fn playUciMove(fish: *Stockfish, board: *Board, moveHistory: *std.ArrayList([5]u
                             }
                         } else {
                             try fish.send(.Stop);
+                            // Not breaking out of the loop because still want to consume all calculations that took too long.
                         }
                     }
                 },

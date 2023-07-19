@@ -6,6 +6,7 @@ const Piece = @import("board.zig").Piece;
 const search = @import("search.zig").Strategy(.{});
 const genAllMoves = @import("search.zig").genAllMoves;
 const Move = @import("board.zig").Move;
+const Magic = @import("magic.zig");
 const Lines = search.Lines;
 const print = consolePrint;
 
@@ -17,6 +18,7 @@ var internalBoard: Board = Board.initial();
 export var boardView: [64]u8 = undefined;
 var nextColour: Colour = .White;
 export var fenView: [80]u8 = undefined; // This length MUST match the one in js handleSetFromFen.
+export var msgBuffer: [80]u8 = undefined; // This length MUST match the one in js
 var lastMove: ?Move = null;
 
 const alloc = std.heap.wasm_allocator;
@@ -31,6 +33,7 @@ extern fn jsDrawCurrentBoard(depth: i32, eval: i32, index: u32, count: u32) void
 pub extern fn jsPerformaceNow() f64;
 
 // TODO: log something whenever returning an error code.
+// TODO: think about this more. since printing is a comptime thing, commenting these out saves ~115kb (out of ~400).
 pub fn consolePrint(comptime fmt: []const u8, args: anytype) void {
     var buffer: [2048]u8 = undefined;
     var str = std.fmt.bufPrint(&buffer, fmt, args) catch "Error while printing!";
@@ -45,14 +48,15 @@ pub fn alertPrint(comptime fmt: []const u8, args: anytype) void {
 
 /// OUT: internalBoard, boardView, nextColour
 export fn restartGame() void {
+    Magic.initZoidberg();
     internalBoard = Board.initial();
     boardView = @bitCast(internalBoard.squares);
     nextColour = .White;
     lastMove = null;
-    print("{}", .{search.config});
+    // print("{}", .{search.config});
 }
 
-/// Returns 0->continue, 1->error, 2->black wins, 3->white wins.
+/// Returns 0->continue, 1->error, >1 -> game over string length
 /// IN: internalBoard, boardView, nextColour
 /// OUT: internalBoard, boardView, nextColour
 export fn playRandomMove() i32 {
@@ -62,7 +66,8 @@ export fn playRandomMove() i32 {
     };
     defer alloc.free(allMoves);
     if (allMoves.len == 0) {
-        return if (nextColour == .White) 2 else 3;
+        const len = checkGameOver();
+        if (len > 0) return len;
     }
 
     const choice = rng.uintLessThanBiased(usize, allMoves.len);
@@ -72,12 +77,12 @@ export fn playRandomMove() i32 {
     lastMove = move;
     boardView = @bitCast(internalBoard.squares);
     nextColour = nextColour.other();
-    return 0;
+    return checkGameOver();
 }
 
-/// Returns 0->continue, 1->error, 2->black wins, 3->white wins.
+/// Returns 0->continue, 1->error, >1 -> game over string length
 /// IN: internalBoard, boardView, nextColour
-/// OUT: internalBoard, boardView, nextColour
+/// OUT: internalBoard, boardView, nextColour, fenView
 export fn playNextMove() i32 {
     if (lines) |oldLines| {
         _ = oldLines;
@@ -86,7 +91,11 @@ export fn playNextMove() i32 {
 
     const move = search.bestMoveIterative(&internalBoard, nextColour, maxDepth, maxTimeMs, &search.NoTrackLines.I) catch |err| {
         switch (err) {
-            error.GameOver => return if (nextColour == .White) 2 else 3,
+            error.GameOver => {
+                // Engine couldn't move.
+                const len = checkGameOver();
+                return if (len > 0) len else 1;
+            },
             else => logErr(err),
         }
         return 1;
@@ -98,7 +107,18 @@ export fn playNextMove() i32 {
     lastMove = move;
     boardView = @bitCast(internalBoard.squares);
     nextColour = nextColour.other();
-    return 0;
+
+    return checkGameOver(); // Check if human won't be able to move.
+}
+
+fn checkGameOver() i32 {
+    const reason = search.isGameOver(&internalBoard, alloc) catch return -1;
+    if (reason == .Continue) return 0;
+    const str = @tagName(reason);
+    print("Game over: {s}", .{str});
+    // TODO: cringe global string buffer.
+    @memcpy(msgBuffer[0..str.len], str);
+    return @intCast(str.len);
 }
 
 /// Returns a bit board showing which squares the piece in <from> can move to.
@@ -163,7 +183,7 @@ export fn getMaterialEval() i32 {
 }
 
 // TODO: return win/lose
-/// Returns 0->continue, 1->error, 2->black wins, 3->white wins, 4->invalid move.
+/// Returns 0->continue, 1->error, 4->invalid move.
 /// IN: internalBoard, boardView, nextColour
 /// OUT: internalBoard, boardView, nextColour
 export fn playHumanMove(fromIndex: u32, toIndex: u32) i32 {
