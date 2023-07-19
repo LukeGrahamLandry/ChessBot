@@ -10,12 +10,12 @@ const GameOver = @import("board.zig").GameOver;
 // TODO: threads!!! 8x speed = goooood times.
 
 const Opts = struct {
-    fishTimeLimitMS: i128  = 2,
-    maxMoves: usize  = 500,
-    gameCount: usize  = 100,
-    fishLevel: usize  = 0,
+    fishTimeLimitMS: i128 = 2,
+    maxMoves: usize = 500,
+    gameCount: usize = 100,
+    fishLevel: usize = 0,
     myTimeLimitMS: i128 = 200,
-    myMaxDepth: usize = 50,
+    myMaxDepth: usize = 5,
 };
 
 const config: Opts = .{};
@@ -221,6 +221,11 @@ const Stats = struct {
 };
 
 fn logGameOver(err: anyerror, board: *Board, moveHistory: *std.ArrayList([5]u8), gt: Timer, stats: *Stats) !GameOver {
+    for (moveHistory.items) |m| {
+        print("{s} ", .{m});
+    }
+    print("\n", .{});
+
     switch (err) {
         error.GameOver => {
             const result = try search.isGameOver(board, general.allocator());
@@ -292,11 +297,11 @@ fn playUciMove(fish: *Stockfish, board: *Board, moveHistory: *std.ArrayList([5]u
         unreachable;
     };
 
-    try playAlgebraic(board, moveStr);
+    _ = try playAlgebraic(board, moveStr);
     try moveHistory.append(moveStr);
 }
 
-pub fn playAlgebraic(board: *Board, moveStr: [5]u8) !void {
+pub fn playAlgebraic(board: *Board, moveStr: [5]u8) !@import("board.zig").OldMove {
     // TODO: promote
     const fromFile = try letterToFile(moveStr[0]);
     const fromRank = try letterToRank(moveStr[1]);
@@ -304,7 +309,7 @@ pub fn playAlgebraic(board: *Board, moveStr: [5]u8) !void {
     const toRank = try letterToRank(moveStr[3]);
     const fromIndex = fromRank * 8 + fromFile;
     const toIndex = toRank * 8 + toFile;
-    _ = try @import("board.zig").inferPlayMove(board, fromIndex, toIndex, general.allocator());
+    return try @import("board.zig").inferPlayMove(board, fromIndex, toIndex, general.allocator());
 }
 
 const Stockfish = struct {

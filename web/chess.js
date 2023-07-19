@@ -267,7 +267,7 @@ function renderBoard() {
             const p = board[rank*8 + file];
             drawPiece(file, rank, p);
 
-            if (showSquareNumbers) {
+            if (document.getElementById("showlabels").checked) {
                 const squareSize = ctx.canvas.width / 8;
                 ctx.font = "15px Arial";
                 ctx.fillStyle = "blue";
@@ -277,8 +277,6 @@ function renderBoard() {
         }
     }
 }
-
-let showSquareNumbers = true;
 
 function fillSquare(file, rank, colour, isSmall) {
     const squareSize = ctx.canvas.width / 8;

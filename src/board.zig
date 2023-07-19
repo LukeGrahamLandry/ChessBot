@@ -141,7 +141,7 @@ const BitBoardPair = packed struct {
     }
 };
 
-const OldMove = struct {
+pub const OldMove = struct {
     move: Move,
     taken: Piece,
     original: Piece,
@@ -151,6 +151,7 @@ const OldMove = struct {
     debugSimpleEval: i32,
     frenchMove: FrenchMove,
     oldHalfMoveDraw: u32 = 0,
+    debugZoidberg: u64,
 };
 
 const CastlingRights = packed struct(u8) {
@@ -195,6 +196,15 @@ comptime {
 const FrenchMove = union(enum) { none, file: u4 };
 const slowTrackAllMoves = false;
 
+inline fn getZoidberg(piece: Piece, square: u6) u64 {
+    const kindOffset = @as(u64, @intCast(@intFromEnum(piece.kind))) - 1;
+    const colourOffset = @as(u64, @intCast(@intFromEnum(piece.colour))) * 6;
+    const offset = (kindOffset + colourOffset) * 64;
+    const index = Magic.ZOID_PIECE_START + offset + square;
+    // print("{} kindOffset={} colourOffset={} square={} index={}\n", .{ piece, kindOffset, colourOffset, square, index });
+    return Magic.ZOIDBERG[index];
+}
+
 // TODO: Count moves for draw.
 pub const Board = struct {
     // TODO: this could be a PackedIntArray if I remove padding from Piece and deal with re-encoding to bytes before sending to js. is that better?
@@ -210,6 +220,7 @@ pub const Board = struct {
     halfMoveDraw: u32 = 0,
     fullMoves: u32 = 0,
     line: if (slowTrackAllMoves) std.BoundedArray(OldMove, 100) else void = if (slowTrackAllMoves) std.BoundedArray(OldMove, 100).init(0) catch @panic("Overflow line.") else {}, // inefficient but useful for debugging.
+    zoidberg: u64 = 1,
 
     pub fn blank() Board {
         return .{};
@@ -255,9 +266,10 @@ pub const Board = struct {
 
     /// This assumes that <move> is legal.
     pub fn play(self: *Board, move: Move) OldMove {
+        // print("start play\n", .{});
         assert(move.from != move.to);
         assertSlow(self.hasCorrectPositionsBits());
-        const thisMove: OldMove = .{ .move = move, .taken = self.squares[move.to], .original = self.squares[move.from], .old_castling = self.castling, .debugPeicePositions = self.peicePositions, .debugSimpleEval = self.simpleEval, .frenchMove = self.frenchMove, .oldHalfMoveDraw = self.halfMoveDraw };
+        const thisMove: OldMove = .{ .move = move, .taken = self.squares[move.to], .original = self.squares[move.from], .old_castling = self.castling, .debugPeicePositions = self.peicePositions, .debugSimpleEval = self.simpleEval, .frenchMove = self.frenchMove, .oldHalfMoveDraw = self.halfMoveDraw, .debugZoidberg = self.zoidberg };
         assert(thisMove.original.colour == self.nextPlayer);
         const colour = thisMove.original.colour;
         self.simpleEval -= thisMove.taken.eval();
@@ -286,6 +298,7 @@ pub const Board = struct {
 
         // Most of the time, nobody can castle. Handle that case in the fewest branches.
         // TODO: punish for loosing castling rights
+        // TODO: Zobrist needs to include castling rights!!!!!
         if (self.castling.any()) {
             if (thisMove.original.kind == .King) {
                 // If you move your king, you can't castle on either side.
@@ -313,6 +326,12 @@ pub const Board = struct {
             }
         }
 
+        self.zoidberg ^= Magic.ZOIDBERG[Magic.ZOID_TURN_INDEX];
+        self.zoidberg ^= getZoidberg(thisMove.original, move.from);
+        self.zoidberg ^= getZoidberg(thisMove.original, move.to);
+        // assert(getZoidberg(thisMove.original, move.from) != getZoidberg(thisMove.original, move.to));
+        if (!thisMove.taken.empty()) self.zoidberg ^= getZoidberg(thisMove.taken, move.to);
+
         switch (move.action) {
             .none => {
                 assert(move.isCapture == (thisMove.taken.kind != .Empty));
@@ -325,8 +344,11 @@ pub const Board = struct {
                 self.simpleEval -= thisMove.original.eval();
                 self.simpleEval += self.squares[move.to].eval();
                 assert(move.isCapture == (thisMove.taken.kind != .Empty));
+                self.zoidberg ^= getZoidberg(thisMove.original, move.to); // undo the pawn at target square
+                self.zoidberg ^= getZoidberg(self.squares[move.to], move.to); // add the promoted thing
             },
             .castle => |info| {
+                self.zoidberg ^= getZoidberg(self.squares[info.rookFrom], info.rookFrom); // remove the rook
                 assert(self.squares[move.from].is(colour, .King));
                 self.squares[move.to] = thisMove.original;
                 self.squares[move.from] = Piece.EMPTY;
@@ -340,15 +362,21 @@ pub const Board = struct {
                 self.squares[info.rookFrom] = Piece.EMPTY;
                 assert(!move.isCapture and (thisMove.taken.kind == .Empty));
                 self.simpleEval += Magic.CASTLE_REWARD * colour.dir();
+
+                self.zoidberg ^= getZoidberg(self.squares[info.rookTo], info.rookTo); // add rook back
             },
             .allowFrenchMove => {
                 assert(self.squares[move.from].is(colour, .Pawn));
                 self.squares[move.to] = thisMove.original;
                 self.squares[move.from] = Piece.EMPTY;
-                self.frenchMove = .{ .file = @intCast(@rem(move.to, 8)) };
+                const file: u4 = @intCast(@rem(move.to, 8));
+                self.frenchMove = .{ .file = file };
                 assert(!move.isCapture and (thisMove.taken.kind == .Empty));
+                self.zoidberg ^= Magic.ZOIDBERG[Magic.ZOID_FRENCH_START + file];
             },
             .useFrenchMove => |captureIndex| {
+                self.zoidberg ^= getZoidberg(self.squares[captureIndex], captureIndex); // remove the taken pawn
+
                 assert(self.squares[move.from].is(colour, .Pawn));
                 assert(self.squares[move.to].empty());
                 assert(self.squares[captureIndex].is(colour.other(), .Pawn));
@@ -371,21 +399,31 @@ pub const Board = struct {
     // Thought this would be faster because less copying but almost no difference (at the time. TODO: check again).
     /// <move> must be the value returned from playing the most recent move.
     pub fn unplay(self: *Board, move: OldMove) void {
+        // print("start unplay\n", .{});
+        self.zoidberg ^= Magic.ZOIDBERG[Magic.ZOID_TURN_INDEX];
         // assert(std.meta.eql(self.line.pop(), move));
         assertSlow(self.hasCorrectPositionsBits());
         const colour = move.original.colour;
         self.castling = move.old_castling;
-        self.frenchMove = move.frenchMove;
         self.simpleEval += move.taken.eval();
         self.halfMoveDraw = move.oldHalfMoveDraw;
         self.simpleEval -= move.move.bonus * colour.dir();
+        self.frenchMove = move.frenchMove;
+
+        self.zoidberg ^= getZoidberg(move.original, move.move.from);
+        self.zoidberg ^= getZoidberg(move.original, move.move.to);
+        if (!move.taken.empty()) self.zoidberg ^= getZoidberg(move.taken, move.move.to);
+
         switch (move.move.action) {
             .none => {},
             .promote => |_| {
+                self.zoidberg ^= getZoidberg(self.squares[move.move.to], move.move.to); // undo the promoted thing
+                self.zoidberg ^= getZoidberg(move.original, move.move.to); // undo undoing the pawn at target square
                 self.simpleEval -= self.squares[move.move.to].eval();
                 self.simpleEval += move.original.eval();
             },
             .castle => |info| {
+                self.zoidberg ^= getZoidberg(self.squares[info.rookTo], info.rookTo);
                 assert(self.squares[info.rookTo].is(colour, .Rook));
                 assert(self.squares[info.rookFrom].empty());
                 assert(self.squares[move.move.to].is(colour, .King));
@@ -396,12 +434,17 @@ pub const Board = struct {
                 self.squares[info.rookTo] = .{ .colour = .White, .kind = .Empty };
                 self.squares[info.rookFrom] = .{ .colour = colour, .kind = .Rook };
                 self.simpleEval -= Magic.CASTLE_REWARD * colour.dir();
+                self.zoidberg ^= getZoidberg(self.squares[info.rookFrom], info.rookFrom);
             },
-            .allowFrenchMove => {},
+            .allowFrenchMove => {
+                const file: u4 = @intCast(@rem(move.move.to, 8));
+                self.zoidberg ^= Magic.ZOIDBERG[Magic.ZOID_FRENCH_START + file];
+            },
             .useFrenchMove => |captureIndex| {
                 self.squares[captureIndex] = .{ .kind = .Pawn, .colour = colour.other() };
                 self.simpleEval += self.squares[captureIndex].eval();
                 self.peicePositions.setBit(captureIndex, colour.other());
+                self.zoidberg ^= getZoidberg(self.squares[captureIndex], captureIndex); // add back the taken pawn
             },
         }
 
@@ -428,6 +471,11 @@ pub const Board = struct {
         assert(std.meta.eql(move.debugPeicePositions, self.peicePositions));
         assertSlow(self.hasCorrectPositionsBits());
         assert(self.simpleEval == move.debugSimpleEval);
+        if (self.zoidberg != move.debugZoidberg) {
+            print("{}\n", .{move});
+            self.debugPrint();
+        }
+        assert(self.zoidberg == move.debugZoidberg);
     }
 
     pub fn copyPlay(self: *const Board, move: Move) Board {
@@ -664,7 +712,7 @@ pub const Move = struct {
         return a.from == b.from and a.to == b.to;
     }
 
-    pub fn text(self: Move) ![5] u8 {
+    pub fn text(self: Move) ![5]u8 {
         return try @import("uci.zig").writeAlgebraic(self);
     }
 };

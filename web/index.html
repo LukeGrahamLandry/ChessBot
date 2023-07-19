@@ -25,6 +25,7 @@
                 <option value="prev" selected>Last Move</option>
             </select>
             Material Eval: <span id="mEval"></span>. 
+            <input type="checkbox" id="showlabels"> Show Square Labels <br>
             <button onclick="handleDrawTree()">Show Tree Walk</button> <br>
             <input type="range" id="depth" value="5" min="2" max="7" style="width: 50%;"> Max Depth: <span id="showdepth"></span>. <br>
             <input type="range" id="time" value="200" min="200" max="10000" style="width: 50%;">  Max Time: <span id="showtime"></span> ms.<br> <br>
@@ -49,6 +50,7 @@
         document.getElementById("depth").addEventListener("input", handleSettingsChange);
         document.getElementById("time").addEventListener("input", handleSettingsChange);
         handleSettingsChange();
+        document.getElementById("showlabels").addEventListener("input", renderBoard);
     }
 
     var Engine;

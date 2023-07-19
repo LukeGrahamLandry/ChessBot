@@ -72,15 +72,6 @@ pub const Stats = struct {
 const IM_MATED_EVAL: i32 = -1000000; // Add distance to prefer sooner mates
 const LOWEST_EVAL: i32 = -2000000;
 
-comptime {
-    std.debug.assert(LOWEST_EVAL < IM_MATED_EVAL);
-}
-
-pub const LineInfo = struct {
-    lines: [][]Move,
-    evals: []i32,
-};
-
 // TODO: script that tests different variations (compare speed and run correctness tests).
 pub fn Strategy(comptime opts: StratOpts) type {
     return struct { // Start Strategy.
@@ -631,6 +622,10 @@ pub fn Strategy(comptime opts: StratOpts) type {
                 }
                 const realSizeMB = realCapacity * @sizeOf(MemoEntry) / 1024 / 1024;
                 print("Memo table capacity is {} ({} MB).\n", .{ realCapacity, realSizeMB });
+
+                // for (0..781) |i| {
+                //     print("{b}\n", .{Magic.ZOIDBERG[i] & (realCapacity - 1)});
+                // }
                 return self;
             }
 
@@ -640,17 +635,20 @@ pub fn Strategy(comptime opts: StratOpts) type {
 
             // This is relies on empty squares having a definied colour so they bytes match! TODO: test that stays true
             pub fn hash(key: *const Board) u64 {
-                // TODO: include castling/french move.
-                const data = std.mem.asBytes(&key.squares);
-                const hashcode = switch (comptime opts.hashAlgo) {
-                    .Wyhash => std.hash.Wyhash.hash(0, data),
-                    .Fnv1a_64 => std.hash.Fnv1a_64.hash(data),
-                    .XxHash64 => std.hash.XxHash64.hash(0, data),
-                    .Murmur2_64 => std.hash.Murmur2_64.hash(data),
-                    .CityHash64 => std.hash.CityHash64.hash(data),
-                };
-                assert(hashcode != 0); // collission with my empty bucket indicator
-                return hashcode;
+                // // TODO: include castling/french move.
+                // const data = std.mem.asBytes(&key.squares);
+                // const hashcode = switch (comptime opts.hashAlgo) {
+                //     .Wyhash => std.hash.Wyhash.hash(0, data),
+                //     .Fnv1a_64 => std.hash.Fnv1a_64.hash(data),
+                //     .XxHash64 => std.hash.XxHash64.hash(0, data),
+                //     .Murmur2_64 => std.hash.Murmur2_64.hash(data),
+                //     .CityHash64 => std.hash.CityHash64.hash(data),
+                // };
+                // assert(hashcode != 0); // collission with my empty bucket indicator
+                // return hashcode;
+                // print("set {} ", .{key.zoidberg});
+                // key.debugPrint();
+                return key.zoidberg;
             }
 
             pub fn eql(key: *const Board, entry: *MemoEntry) bool {
@@ -671,6 +669,8 @@ pub fn Strategy(comptime opts: StratOpts) type {
             pub fn get(self: *MemoTable, key: *const Board) ?MemoValue {
                 const hashcode = hash(key);
                 const bucket: usize = @intCast(hashcode & self.bucketMask);
+                // print("get {} ", .{key.zoidberg});
+                // key.debugPrint();
                 if (self.buffer[bucket].hash == hashcode) {
                     // fuck it, we ball, 2^64 is basically infinity
                     // if (!eql(key, &self.buffer[bucket])) {
