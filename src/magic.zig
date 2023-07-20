@@ -26,14 +26,3 @@ pub const ZOID_TURN_INDEX: usize = 0;
 pub const ZOID_FRENCH_START: usize = 1;
 pub const ZOID_CASTLE_START: usize = 9;
 pub const ZOID_PIECE_START: usize = 13;
-
-test "do you are have random" {
-    @import("common.zig").setup();
-    for (ZOIDBERG) |number| {
-        var count: usize = 0;
-        for (ZOIDBERG) |check| {
-            if (check == number) count += 1;
-        }
-        try @import("std").testing.expectEqual(count, 1);
-    }
-}

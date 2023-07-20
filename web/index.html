@@ -39,19 +39,7 @@
     function startChessIfReady() {
         // This get's called each time something loads. Wait until everything is loaded...
         if (!wasmReady || window.chessJsReady === undefined || !chessImg.complete) return;
-
-        Engine.setup();
-        document.getElementById("loading").style.display = "none";
-        handleResize();
-        document.getElementById("board").addEventListener("click", handleCanvasClick);
-        addEventListener("resize", handleResize);
-        handleRestart();
-        handleBitboardSelect();
-        renderBoard();
-        document.getElementById("depth").addEventListener("input", handleSettingsChange);
-        document.getElementById("time").addEventListener("input", handleSettingsChange);
-        handleSettingsChange();
-        document.getElementById("showlabels").addEventListener("input", renderBoard);
+        startChess();
     }
 
     var Engine;
@@ -59,13 +47,13 @@
         console.log("WASM ready in " + Math.round(performance.now() - startTime) + "ms.");
         Engine = wasm.instance.exports;
         wasmReady = true;
-        window.startChessIfReady();
+        startChessIfReady();
     }
+
     const callbacks = { 
         env: {
             jsConsoleLog: function (ptr, len) {
-                const msgBuffer = new Uint8Array(Engine.memory.buffer, ptr, len);
-                const msgStr = textDecoder.decode(msgBuffer);
+                const msgStr = getWasmString(ptr, len);
                 console.log(msgStr);
                 document.getElementById("log").value += msgStr;
                 document.getElementById("log").scrollTop = document.getElementById("log").scrollHeight;
@@ -73,9 +61,9 @@
             jsAlert: function (ptr, len) {
                 const msgBuffer = new Uint8Array(Engine.memory.buffer, ptr, len);
                 const msgStr = textDecoder.decode(msgBuffer);
-                alert(msgStr);
+                alert(getWasmString(ptr, len));
             },
-            // TODO: this is silly
+            // TODO: this is silly but want to be able to start streaming wasm without waiting to load chess.js
             jsDrawCurrentBoard: function(depth, eval, index, count) {
                 window.jsDrawCurrentBoard(depth, eval, index, count);
             },

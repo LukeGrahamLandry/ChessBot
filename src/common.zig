@@ -1,15 +1,21 @@
 const std = @import("std");
 const Magic = @import("magic.zig");
 pub const isWasm = @import("builtin").target.isWasm();
+pub const isTest = @import("builtin").is_test;
 
 pub const print = if (isWasm) @import("web.zig").consolePrint else std.debug.print;
 pub const panic = if (isWasm) @import("web.zig").alertPrint else std.debug.panic;
 pub const assert = std.debug.assert;
 
+fn noPrint(comptime fmt: []const u8, args: anytype) void {
+    _ = args;
+    _ = fmt;
+}
+
 // TODO: do memo table here as well // memoTableMB: u64
 pub fn setup() void {
-    print("Zobrist Xoshiro256 seed is {any}.\n", .{Magic.ZOIDBERG_SEED});
-    var rand: @import("std").rand.Xoshiro256 = .{ .s = Magic.ZOIDBERG_SEED };
+    if (!isTest) print("Zobrist Xoshiro256 seed is {any}.\n", .{Magic.ZOIDBERG_SEED});
+    var rand: std.rand.Xoshiro256 = .{ .s = Magic.ZOIDBERG_SEED };
     for (&Magic.ZOIDBERG) |*ptr| {
         ptr.* = rand.next();
     }

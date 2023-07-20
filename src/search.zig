@@ -16,17 +16,6 @@ const nanoTimestamp = @import("common.zig").nanoTimestamp;
 // TODO: carefully audit any use of usize because wasm is 32 bit!
 const isWasm = @import("builtin").target.isWasm();
 
-pub const HashAlgo = enum {
-    // These all operate on the byte array of squares.
-    Wyhash, // same algo as auto
-    Fnv1a_64,
-    XxHash64,
-    Murmur2_64,
-    CityHash64,
-};
-
-pub const CheckAlgo = enum { Ignore, ReverseFromKing, LookAhead };
-
 var notTheRng = std.rand.DefaultPrng.init(0);
 var rng = notTheRng.random();
 
@@ -35,15 +24,10 @@ pub const genCapturesOnly = movegen.MoveFilter.CapturesOnly.get();
 pub const genAllMoves = movegen.MoveFilter.Any.get();
 
 pub const StratOpts = struct {
-    maxDepth: comptime_int = 4, // TODO: should be runtime param to bestMove so wasm can change without increasing code size.
     doPruning: bool = true,
-    beDeterministicForTest: bool = true,
-    memoMapSizeMB: u64 = 100, // Zero means don't use memo map at all.  // TODO: set this in ui?
-    hashAlgo: HashAlgo = .CityHash64,
-    checkDetection: CheckAlgo = .ReverseFromKing,
-    // TODO: High numbers play worse?? i know im doing it wrong but i thought it would still be better. or maybe its cripplefish fuck up
-    followCaptureDepth: i32 = -12345, // TODO: unused
-    // TODO: how many levels to sort. which algo to use. whether to use memo map.
+    doIterative: bool = true, // When false, it will play garbage moves if it runs out of time because it won't have other levels to fall back to.
+    doMemo: bool = true,
+    memoMapSizeMB: u64 = 100, // TODO: runtime so can set this in ui?
 };
 
 pub const MoveErr = error{ GameOver, OutOfMemory, ForceStop, Overflow };
@@ -59,11 +43,11 @@ pub const Stats = struct {
 const IM_MATED_EVAL: i32 = -1000000; // Add distance to prefer sooner mates
 const LOWEST_EVAL: i32 = -2000000;
 
-// TODO: script that tests different variations (compare speed and run correctness tests).
+// TODO: opts can just be an arg to bestMove and walkEval
 pub fn Strategy(comptime opts: StratOpts) type {
-    return struct { // Start Strategy.
+    return struct {
         pub const config = opts;
-        const useMemoMap = opts.memoMapSizeMB > 0;
+        const useMemoMap = opts.doMemo and opts.memoMapSizeMB > 0;
 
         // None of this is thread safe!
         // This gets reset after each whole decision is done.
@@ -73,7 +57,8 @@ pub fn Strategy(comptime opts: StratOpts) type {
 
         // TODO: a bunch of sanity check regression tests for simple positions that have an obvious best move
         // TODO: flag to start at max depth to confirm that iterative is comparably fast because of better ordering
-        pub fn bestMoveIterative(game: *Board, maxDepth: usize, timeLimitMs: i128, lines_out: anytype) !Move {
+        // TODO: make it more clear when in an arena and dont bother freeing.
+        pub fn bestMove(game: *Board, maxDepth: usize, timeLimitMs: i128, lines_out: anytype) !Move {
             if (game.halfMoveDraw >= 100 or game.hasInsufficientMaterial()) return error.GameOver; // Draw
             const me = game.nextPlayer;
 
@@ -112,7 +97,8 @@ pub fn Strategy(comptime opts: StratOpts) type {
 
             var thinkTime: i128 = -1;
             var favourite: Move = topLevelMoves[0];
-            for (0..(maxDepth + 1)) |depth| {
+            const startDepth = if (opts.doIterative) 0 else maxDepth;
+            for (startDepth..(maxDepth + 1)) |depth| {
                 var stats: Stats = .{};
                 currentLines.depth = depth;
                 var alpha = LOWEST_EVAL;
@@ -230,11 +216,11 @@ pub fn Strategy(comptime opts: StratOpts) type {
 
             var cacheHit: ?MemoValue = null;
             if (useMemoMap) {
-                // TODO: It would be really good to be able to reuse what we did on the last search if they played the move we thought they would.
-                //       This remaining checks stops that but also seems nesisary for correctness.
                 if (memoMap.?.get(game)) |cached| {
                     if (cached.remaining >= remaining) {
                         if (comptime stats.use) stats.memoHits += 1;
+                        if (!opts.doPruning) assert(cached.kind == .Exact);
+
                         switch (cached.kind) {
                             .Exact => return cached.eval,
                             .AlphaPrune => if (cached.eval <= alpha) return cached.eval,
@@ -286,7 +272,7 @@ pub fn Strategy(comptime opts: StratOpts) type {
                         bestVal = @max(bestVal, eval);
                         if (bestVal == eval) foundMove = move;
                         alpha = @max(alpha, bestVal);
-                        if (bestVal >= beta) {
+                        if (opts.doPruning and bestVal >= beta) {
                             memoKind = .BetaPrune;
                             break;
                         }
@@ -295,7 +281,7 @@ pub fn Strategy(comptime opts: StratOpts) type {
                         bestVal = @min(bestVal, eval);
                         if (bestVal == eval) foundMove = move;
                         beta = @min(beta, bestVal);
-                        if (bestVal <= alpha) {
+                        if (opts.doPruning and bestVal <= alpha) {
                             memoKind = .AlphaPrune;
                             break;
                         }
@@ -396,8 +382,8 @@ pub fn Strategy(comptime opts: StratOpts) type {
                 for (0..realCapacity) |i| {
                     self.buffer[i].hash = 0;
                 }
-                const realSizeMB = realCapacity * @sizeOf(MemoEntry) / 1024 / 1024;
-                print("Memo table capacity is {} ({} MB).\n", .{ realCapacity, realSizeMB });
+                // const realSizeMB = realCapacity * @sizeOf(MemoEntry) / 1024 / 1024;
+                // if (!@import("builtin").is_test) print("Memo table capacity is {} ({} MB).\n", .{ realCapacity, realSizeMB });
                 return self;
             }
 
@@ -406,51 +392,22 @@ pub fn Strategy(comptime opts: StratOpts) type {
                 alloc.free(self.buffer);
             }
 
-            pub fn hash(key: *const Board) u64 {
-                // // TODO: include castling/french move.
-                // This is relies on empty squares having a definied colour so they bytes match!
-                // const data = std.mem.asBytes(&key.squares);
-                // const hashcode = switch (comptime opts.hashAlgo) {
-                //     .Wyhash => std.hash.Wyhash.hash(0, data),
-                //     .Fnv1a_64 => std.hash.Fnv1a_64.hash(data),
-                //     .XxHash64 => std.hash.XxHash64.hash(0, data),
-                //     .Murmur2_64 => std.hash.Murmur2_64.hash(data),
-                //     .CityHash64 => std.hash.CityHash64.hash(data),
-                // };
-                // assert(hashcode != 0); // collission with my empty bucket indicator
-                // return hashcode;
-                // print("set {} ", .{key.zoidberg});
-                // key.debugPrint();
-                return key.zoidberg;
-            }
-
-            pub fn eql(key: *const Board, entry: *MemoEntry) bool {
-                // This is relies on empty squares having a definied colour so their bytes match!
-                return std.mem.eql(u8, std.mem.asBytes(&key.squares), std.mem.asBytes(&entry.squares));
-            }
-
             // TODO: some heuristic for when you get to overwrite bucket? age (epoch counter) vs remaining
             pub fn setAndOverwriteBucket(self: *MemoTable, key: *const Board, value: MemoValue) void {
-                const hashcode = hash(key);
-                const bucket: usize = @intCast(hashcode & self.bucketMask);
+                const bucket: usize = @intCast(key.zoidberg & self.bucketMask);
                 self.buffer[bucket] = .{
                     // .squares = key.squares,
-                    .hash = hashcode,
+                    .hash = key.zoidberg,
                     .value = value,
                 };
             }
 
             pub fn get(self: *MemoTable, key: *const Board) ?MemoValue {
-                const hashcode = hash(key);
-                const bucket: usize = @intCast(hashcode & self.bucketMask);
-                // print("get {} ", .{key.zoidberg});
-                // key.debugPrint();
-                if (self.buffer[bucket].hash == hashcode) {
+                const bucket: usize = @intCast(key.zoidberg & self.bucketMask);
+                if (self.buffer[bucket].hash == key.zoidberg) {
                     // fuck it, we ball, 2^64 is basically infinity
-                    // if (!eql(key, &self.buffer[bucket])) {
-                    //     panic("hash collission (not a problem... yet, just debugging)", .{});
-                    //     return null;
-                    // }
+                    // const eql = std.mem.eql(u8, std.mem.asBytes(&key.squares), std.mem.asBytes(&self.buffer[bucket].squares));
+                    // if (!eql) return null;
                     return self.buffer[bucket].value;
                 } else {
                     return null;
@@ -554,8 +511,3 @@ pub const NoTrackLines = struct {
 };
 
 pub const default = Strategy(.{});
-
-test "dir" {
-    try std.testing.expectEqual(Colour.White.dir(), 1);
-    try std.testing.expectEqual(Colour.Black.dir(), -1);
-}

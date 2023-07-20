@@ -82,11 +82,11 @@ pub fn playOneGame(fish: *Stockfish, gameIndex: usize, gamesTotal: u32) !GameOve
         print("[info]: Move {}. Game {}/{}.\n", .{ i, gameIndex, gamesTotal });
         print("[info]: I'm thinking.\n", .{});
         var t = Timer.start();
-        const move = search.bestMoveIterative(&board, config.myMaxDepth, config.myTimeLimitMS, &@import("search.zig").NoTrackLines.I) catch |err| {
+        const move = search.bestMove(&board, config.myMaxDepth, config.myTimeLimitMS, &@import("search.zig").NoTrackLines.I) catch |err| {
             return try logGameOver(err, &board, &moveHistory, gt);
         };
 
-        const moveStr = try writeAlgebraic(move);
+        const moveStr = writeAlgebraic(move);
         try moveHistory.append(moveStr);
         _ = board.play(move);
         print("[info]: I played {s} in {}ms.\n", .{ moveStr, t.get() });
@@ -463,16 +463,18 @@ const Engine = struct {
     }
 };
 
-pub fn writeAlgebraic(move: Move) ![5]u8 {
+pub fn writeAlgebraic(move: Move) [5]u8 {
     var moveStr: [5]u8 = std.mem.zeroes([5]u8);
     const fromRank = @divFloor(move.from, 8);
     const fromFile = @mod(move.from, 8);
     const toRank = @divFloor(move.to, 8);
     const toFile = @mod(move.to, 8);
-    moveStr[0] = try fileToLetter(fromFile);
-    moveStr[1] = try rankToLetter(fromRank);
-    moveStr[2] = try fileToLetter(toFile);
-    moveStr[3] = try rankToLetter(toRank);
+
+    // These return error on bounds check but Move from/to will always be within u6.
+    moveStr[0] = fileToLetter(fromFile) catch unreachable;
+    moveStr[1] = rankToLetter(fromRank) catch unreachable;
+    moveStr[2] = fileToLetter(toFile) catch unreachable;
+    moveStr[3] = rankToLetter(toRank) catch unreachable;
 
     switch (move.action) {
         .promote => |kind| {
@@ -491,22 +493,22 @@ pub fn writeAlgebraic(move: Move) ![5]u8 {
     return moveStr;
 }
 
-fn fileToLetter(file: u6) !u8 {
+pub fn fileToLetter(file: u6) !u8 {
     if (file >= 8) return error.UnknownUciStr;
     return @as(u8, @intCast(file)) + 'a';
 }
 
-fn letterToFile(letter: u8) !u6 {
+pub fn letterToFile(letter: u8) !u6 {
     if (letter < 'a' or letter > 'h') return error.UnknownUciStr;
     return @intCast(letter - 'a');
 }
 
-fn rankToLetter(rank: u6) !u8 {
+pub fn rankToLetter(rank: u6) !u8 {
     if (rank >= 8) return error.UnknownUciStr;
     return @as(u8, @intCast(rank)) + '1';
 }
 
-fn letterToRank(letter: u8) !u6 {
+pub fn letterToRank(letter: u8) !u6 {
     if (letter < '1' or letter > '8') return error.UnknownUciStr;
     return @intCast(letter - '1');
 }

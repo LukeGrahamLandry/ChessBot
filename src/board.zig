@@ -5,7 +5,7 @@ const Magic = @import("magic.zig");
 const print = @import("common.zig").print;
 const assert = @import("common.zig").assert;
 
-// Numbers matter because js sees them.
+// Numbers matter because js sees them and for fen parsing.
 pub const Kind = enum(u4) {
     Empty = 0,
     Pawn = 6,
@@ -92,6 +92,7 @@ pub const Piece = packed struct {
         };
     }
 
+    // TODO:
     pub fn empty(self: Piece) bool {
         return self.kind == .Empty;
     }
@@ -102,7 +103,7 @@ pub const Piece = packed struct {
 };
 
 const ASCII_ZERO_CHAR: u8 = 48;
-pub const INIT_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w";
+pub const INIT_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 const InvalidFenErr = error{InvalidFen};
 
 const BitBoardPair = packed struct {
@@ -136,7 +137,7 @@ pub const OldMove = struct {
     taken: Piece,
     original: Piece,
     old_castling: CastlingRights,
-    // TODO: remove
+    // TODO: remove or easy way to toggle off in release. probably doesnt matter but offends me.
     debugPeicePositions: BitBoardPair,
     debugSimpleEval: i32,
     frenchMove: FrenchMove,
@@ -150,6 +151,8 @@ const CastlingRights = packed struct(u8) {
     blackLeft: bool = true,
     blackRight: bool = true,
     _fuck: u4 = 0,
+
+    pub const NONE: CastlingRights = @bitCast(@as(u8, 0));
 
     // TODO: goingLeft should be an enum
     pub fn get(self: CastlingRights, colour: Colour, comptime goingLeft: bool) bool {
@@ -191,16 +194,17 @@ inline fn getZoidberg(piece: Piece, square: u6) u64 {
     const colourOffset: usize = @intCast(@intFromEnum(piece.colour));
     const offset = (kindOffset + colourOffset) * 64;
     const index = Magic.ZOID_PIECE_START + offset + square;
-    // print("{} kindOffset={} colourOffset={} square={} index={}\n", .{ piece, kindOffset, colourOffset, square, index });
     return Magic.ZOIDBERG[index];
 }
 
 // TODO: Count moves for draw.
 pub const Board = struct {
     // TODO: this could be a PackedIntArray if I remove padding from Piece and deal with re-encoding to bytes before sending to js. is that better?
+    //       probably not since I dont need to hash all the bytes anymore and i dont copy them into table and dont copy to play moves so who cares how big this struct is
     squares: [64]Piece = std.mem.zeroes([64]Piece),
     peicePositions: BitBoardPair = .{},
     // TODO: make sure these are packed nicely
+    // Absolute material eval (+ any extra heuristics like prefer castling). Positive means white is winning.
     simpleEval: i32 = 0, // TODO: a test that recalculates
     blackKingIndex: u6 = 0,
     whiteKingIndex: u6 = 0,
@@ -208,7 +212,7 @@ pub const Board = struct {
     nextPlayer: Colour = .White,
     castling: CastlingRights = .{},
     halfMoveDraw: u32 = 0,
-    fullMoves: u32 = 0,
+    fullMoves: u32 = 1,
     line: if (slowTrackAllMoves) std.BoundedArray(OldMove, 100) else void = if (slowTrackAllMoves) std.BoundedArray(OldMove, 100).init(0) catch @panic("Overflow line.") else {}, // inefficient but useful for debugging.
     zoidberg: u64 = 1,
 
@@ -459,13 +463,14 @@ pub const Board = struct {
         assert(self.zoidberg == move.debugZoidberg);
     }
 
+    /// Probably bad and slow! Only use for test code / debugging!
     pub fn copyPlay(self: *const Board, move: Move) Board {
         var board = self.*;
         _ = board.play(move);
         return board;
     }
 
-    // TODO: allow for extra spaces
+    // TODO: maybe move fen stuff to the uci file.
     pub fn fromFEN(fen: []const u8) InvalidFenErr!Board {
         var self = Board.blank();
 
@@ -498,6 +503,7 @@ pub const Board = struct {
         }
 
         if (parts.next()) |player| {
+            if (player.len != 1) return error.InvalidFen;
             switch (player[0]) {
                 'w' => self.nextPlayer = .White,
                 'b' => self.nextPlayer = .Black,
@@ -507,14 +513,50 @@ pub const Board = struct {
             return error.InvalidFen;
         }
 
-        // TODO: parse the rest
-        // Castling
+        // These fields are less important so are optional.
 
-        // En-passant
+        self.castling = CastlingRights.NONE;
+        if (parts.next()) |castling| {
+            if (castling.len == 1 and castling[0] == '-') {
+                // Nobody can castle
+            } else if (castling.len <= 4) {
+                for (castling) |c| {
+                    switch (c) {
+                        'K' => self.castling.whiteRight = true,
+                        'Q' => self.castling.whiteLeft = true,
+                        'k' => self.castling.blackRight = true,
+                        'q' => self.castling.blackLeft = true,
+                        else => return error.InvalidFen,
+                    }
+                }
+            } else {
+                return error.InvalidFen;
+            }
+        }
 
-        // Half moves
+        if (parts.next()) |frenchMove| {
+            switch (frenchMove.len) {
+                1 => if (frenchMove[0] != '-') return error.InvalidFen, // No french move is possible.
+                2 => {
+                    // The target must be on the right rank given the player that just moved.
+                    switch (self.nextPlayer) {
+                        .White => if (frenchMove[1] != '6') return error.InvalidFen,
+                        .Black => if (frenchMove[1] != '3') return error.InvalidFen,
+                    }
+                    const file = @import("uci.zig").letterToFile(frenchMove[0]) catch return error.InvalidFen;
+                    self.frenchMove = .{ .file = @intCast(file) };
+                },
+                else => return error.InvalidFen,
+            }
+        }
 
-        // Full moves
+        if (parts.next()) |halfMoves| {
+            self.halfMoveDraw = std.fmt.parseInt(u32, halfMoves, 10) catch return error.InvalidFen;
+        }
+
+        if (parts.next()) |fullMoves| {
+            self.fullMoves = std.fmt.parseInt(u32, fullMoves, 10) catch return error.InvalidFen;
+        }
 
         return self;
     }
@@ -528,6 +570,7 @@ pub const Board = struct {
     }
 
     // letters: pointer to ArrayList or BoundedArray
+    // TODO: take a std.io.Writer because both ^ have one
     pub fn appendFEN(self: *const Board, letters: anytype) AppendErr!void {
         for (0..8) |rank| {
             var empty: u8 = 0;
@@ -563,7 +606,13 @@ pub const Board = struct {
         if (!self.castling.any()) try letters.append('-');
         try letters.append(' ');
 
-        try letters.append('-'); // TODO: french move
+        switch (self.frenchMove) {
+            .none => try letters.append('-'),
+            .file => |file| {
+                try letters.append(@import("uci.zig").fileToLetter(@intCast(file)) catch unreachable);
+                try letters.append(if (self.nextPlayer == .White) '6' else '3');
+            },
+        }
         try letters.append(' ');
 
         // TODO: ugly. want it to work on bounded + list
@@ -660,77 +709,33 @@ pub const Move = struct {
     }
 
     pub fn text(self: Move) ![5]u8 {
-        return try @import("uci.zig").writeAlgebraic(self);
+        return @import("uci.zig").writeAlgebraic(self);
     }
 };
 
-// TODO: report in ui
 pub const GameOver = enum { Continue, Stalemate, FiftyMoveDraw, MaterialDraw, WhiteWins, BlackWins };
 
 const isWasm = @import("builtin").target.isWasm();
 
 pub const InferMoveErr = error{IllegalMove} || @import("search.zig").MoveErr;
 
-// TODO: don't like that im hard coding strategies here
 const genAllMoves = @import("movegen.zig").MoveFilter.Any.get();
-const search = @import("search.zig").default;
 pub fn inferPlayMove(board: *Board, fromIndex: u32, toIndex: u32, alloc: std.mem.Allocator) InferMoveErr!OldMove {
     const colour = board.nextPlayer;
-    if (board.squares[fromIndex].empty()) {
-        // print("Tried to move from empty square. {}\n", .{board.squares[fromIndex]});
-        return error.IllegalMove;
-    }
-    if (board.squares[fromIndex].colour != colour) {
-        // print("Tried to move wrong colour. {}\n", .{board.squares[fromIndex]});
-        return error.IllegalMove;
-    }
+    if (board.squares[fromIndex].empty()) return error.IllegalMove;
+    if (board.squares[fromIndex].colour != colour) return error.IllegalMove;
 
-    const isCapture = !board.squares[toIndex].empty() and board.squares[toIndex].colour != colour;
-    var move: Move = .{ .from = @intCast(fromIndex), .to = @intCast(toIndex), .action = .none, .isCapture = isCapture };
     // TODO: ui should know when promoting so it can let you choose which piece to make.
-    if (board.squares[fromIndex].kind == .Pawn) {
-        // TODO: factor out some canPromote function so magic numbers live in one place
-        const isPromote = (colour == .Black and toIndex <= 7) or (colour == .White and toIndex > (64 - 8));
-        if (isPromote) {
-            move.action = .{ .promote = .Queen };
-        } else {
-            const toRank = @divFloor(toIndex, 8);
-            const fromRank = @divFloor(fromIndex, 8);
-            const isForwardTwo = (colour == .Black and toRank == 4 and fromRank == 6) or (colour == .White and toRank == 3 and fromRank == 1);
-            if (isForwardTwo) {
-                move.action = .allowFrenchMove;
-            } else {
-                const toFile = @mod(toIndex, 8);
-                const fromFile = @mod(fromIndex, 8);
-                if (toFile != fromFile and !move.isCapture) { // this will include invalid moves but that's checked below
-                    move.isCapture = true;
-                    const captureIndex = ((if (colour == .White) toRank - 1 else toRank + 1) * 8) + toFile;
-                    move.action = .{ .useFrenchMove = @intCast(captureIndex) };
-                }
-            }
-        }
-    } else if (board.squares[fromIndex].kind == .King) {
-        var castles = std.ArrayList(Move).init(alloc);
-        defer castles.deinit();
-        const file: usize = @rem(fromIndex, 8);
-        const rank: usize = @divFloor(fromIndex, 8);
-        try genAllMoves.tryCastle(&castles, board, @intCast(fromIndex), file, rank, colour, true);
-        try genAllMoves.tryCastle(&castles, board, @intCast(fromIndex), file, rank, colour, false);
-        assert(castles.items.len <= 2);
-        if (castles.items.len > 0 and castles.items[0].to == toIndex) {
-            move = castles.items[0];
-        } else if (castles.items.len > 1 and castles.items[1].to == toIndex) {
-            move = castles.items[1];
-        }
-    }
+    //       right now this relies on you probably want a queen and queen is ordered first
+    //       TODO: test that checks queen is first in list
 
-    // Check if this is a legal move by the current player.
+    // Could do a bunch of work to infer the move but instead just find all the moves and see if any match the squares they clicked.
+    // This is slower than it could be but it's not in a hot path and allows simple code instead of something super complicated.
     const allMoves = try genAllMoves.possibleMoves(board, colour, alloc);
     defer alloc.free(allMoves);
     var realMove: Move = undefined;
     for (allMoves) |m| {
-        // TODO: this is all you need, dont bother with all that shit above. just use <m> below
-        if (std.meta.eql(move.from, m.from) and std.meta.eql(move.to, m.to)) {
+        if (m.from == @as(u6, @intCast(fromIndex)) and m.to == @as(u6, @intCast(toIndex))) {
             realMove = m;
             break;
         }

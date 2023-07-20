@@ -30,8 +30,7 @@ function tickGame() {
         // if (time < minMoveTimeMs) ticker = window.setTimeout(tickGame, minMoveTimeMs - time);
         // else ticker = window.setTimeout(tickGame, 1);
     } else if (result > 1) {  // Game over
-        const msgBuffer = new Uint8Array(Engine.memory.buffer, Engine.msgBuffer, result);
-        gameOverMsg = textDecoder.decode(msgBuffer);
+        gameOverMsg = getWasmString(Engine.msgBuffer, result);
         console.log(gameOverMsg);
         renderBoard();
     } else {  // Engine error
@@ -86,9 +85,7 @@ function getFenFromEngine() {
         reportEngineMsg(1);
         return;
     }
-    const fenBuffer = new Uint8Array(Engine.memory.buffer, Engine.fenView, length);
-    const fenString = textDecoder.decode(fenBuffer);
-    return fenString;
+    return getWasmString(Engine.fenView, length);
 }
 
 function isHumanTurn() {
@@ -368,6 +365,26 @@ function handleSettingsChange() {
     maxDepth = document.getElementById("depth").value;
     document.getElementById("showdepth").innerText = maxDepth;
     Engine.changeSettings(maxTimeMs, maxDepth);
+}
+
+function getWasmString(ptr, len) {
+    const buffer = new Uint8Array(Engine.memory.buffer, ptr, len);
+    return textDecoder.decode(buffer);
+}
+
+function startChess() {
+    Engine.setup();
+    document.getElementById("loading").style.display = "none";
+    handleResize();
+    document.getElementById("board").addEventListener("click", handleCanvasClick);
+    addEventListener("resize", handleResize);
+    handleRestart();
+    handleBitboardSelect();
+    renderBoard();
+    document.getElementById("depth").addEventListener("input", handleSettingsChange);
+    document.getElementById("time").addEventListener("input", handleSettingsChange);
+    handleSettingsChange();
+    document.getElementById("showlabels").addEventListener("input", renderBoard);
 }
 
 window.chessJsReady = true;

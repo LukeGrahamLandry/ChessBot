@@ -18,7 +18,6 @@ comptime {
 // TODO: want multiple games so give js opaque pointers instead.
 var internalBoard: Board = Board.initial();
 export var boardView: [64]u8 = undefined;
-var nextColour: Colour = .White;
 export var fenView: [80]u8 = undefined; // This length MUST match the one in js handleSetFromFen.
 export var msgBuffer: [80]u8 = undefined; // This length MUST match the one in js
 var lastMove: ?Move = null;
@@ -52,49 +51,23 @@ export fn setup() void {
     @import("common.zig").setup();
 }
 
-/// OUT: internalBoard, boardView, nextColour
+/// OUT: internalBoard, boardView, lastMove
 export fn restartGame() void {
     internalBoard = Board.initial();
     boardView = @bitCast(internalBoard.squares);
-    nextColour = .White;
     lastMove = null;
-    // print("{}", .{search.config});
 }
 
 /// Returns 0->continue, 1->error, >1 -> game over string length
-/// IN: internalBoard, boardView, nextColour
-/// OUT: internalBoard, boardView, nextColour
-export fn playRandomMove() i32 {
-    const allMoves = genAllMoves.possibleMoves(&internalBoard, nextColour, alloc) catch |err| {
-        logErr(err);
-        return 1;
-    };
-    defer alloc.free(allMoves);
-    if (allMoves.len == 0) {
-        const len = checkGameOver();
-        if (len > 0) return len;
-    }
-
-    const choice = rng.uintLessThanBiased(usize, allMoves.len);
-    const move = allMoves[choice];
-    _ = internalBoard.play(move);
-
-    lastMove = move;
-    boardView = @bitCast(internalBoard.squares);
-    nextColour = nextColour.other();
-    return checkGameOver();
-}
-
-/// Returns 0->continue, 1->error, >1 -> game over string length
-/// IN: internalBoard, boardView, nextColour
-/// OUT: internalBoard, boardView, nextColour, fenView
+/// IN: internalBoard, boardView
+/// OUT: internalBoard, boardView, msgBuffer, lastMove
 export fn playNextMove() i32 {
     if (lines) |oldLines| {
         _ = oldLines;
         lines.?.deinit();
     }
 
-    const move = search.bestMoveIterative(&internalBoard, maxDepth, maxTimeMs, &@import("search.zig").NoTrackLines.I) catch |err| {
+    const move = search.bestMove(&internalBoard, maxDepth, maxTimeMs, &@import("search.zig").NoTrackLines.I) catch |err| {
         switch (err) {
             error.GameOver => {
                 // Engine couldn't move.
@@ -111,7 +84,6 @@ export fn playNextMove() i32 {
     _ = internalBoard.play(move);
     lastMove = move;
     boardView = @bitCast(internalBoard.squares);
-    nextColour = nextColour.other();
 
     return checkGameOver(); // Check if human won't be able to move.
 }
@@ -127,7 +99,7 @@ fn checkGameOver() i32 {
 }
 
 /// Returns a bit board showing which squares the piece in <from> can move to.
-/// IN: internalBoard, nextColour
+/// IN: internalBoard
 export fn getPossibleMoves(from: i32) u64 {
     const piece = internalBoard.squares[@intCast(from)];
     if (piece.empty()) return 0;
@@ -151,7 +123,7 @@ export fn getPossibleMoves(from: i32) u64 {
 }
 
 /// IN: fenView
-/// OUT: internalBoard, boardView, nextColour
+/// OUT: internalBoard, boardView
 export fn setFromFen(length: u32) bool {
     const fenSlice = fenView[0..@as(usize, length)];
     const temp = Board.fromFEN(fenSlice) catch |err| {
@@ -181,13 +153,12 @@ export fn getFen() u32 {
 
 /// IN: internalBoard
 export fn getMaterialEval() i32 {
-    return genAllMoves.simpleEval(&internalBoard);
+    return internalBoard.simpleEval;
 }
 
-// TODO: return win/lose
 /// Returns 0->continue, 1->error, 4->invalid move.
-/// IN: internalBoard, boardView, nextColour
-/// OUT: internalBoard, boardView, nextColour
+/// IN: internalBoard, boardView
+/// OUT: internalBoard, boardView, msgBuffer
 export fn playHumanMove(fromIndex: u32, toIndex: u32) i32 {
     if (fromIndex >= 64 or toIndex >= 64) return 1;
 
@@ -199,7 +170,6 @@ export fn playHumanMove(fromIndex: u32, toIndex: u32) i32 {
         return 1;
     }).move;
     boardView = @bitCast(internalBoard.squares);
-    nextColour = nextColour.other();
     return 0;
 }
 
@@ -243,7 +213,7 @@ export fn getBitBoard(magicEngineIndex: u32, colourIndex: u32) u64 {
             switch (internalBoard.frenchMove) {
                 .none => return 0,
                 .file => |targetFile| {
-                    const index = @as(u6, if (nextColour == .White) 5 else 2) * 8 + targetFile;
+                    const index = @as(u6, if (internalBoard.nextPlayer == .White) 5 else 2) * 8 + targetFile;
                     return one << index;
                 },
             }
@@ -253,7 +223,7 @@ export fn getBitBoard(magicEngineIndex: u32, colourIndex: u32) u64 {
 }
 
 export fn isWhiteTurn() bool {
-    return nextColour == .White;
+    return internalBoard.nextPlayer == .White;
 }
 
 export fn loadOpeningBook(ptr: [*]u32, len: usize) bool {
@@ -268,7 +238,6 @@ export fn walkPossibleMoves() void {
     const colour = internalBoard.nextPlayer;
     var allMoves = genAllMoves.possibleMoves(&internalBoard, colour, alloc) catch return;
     defer alloc.free(allMoves);
-    nextColour = nextColour.other();
     const prev = lastMove;
     for (allMoves) |move| {
         const unMove = internalBoard.play(move);
@@ -278,7 +247,6 @@ export fn walkPossibleMoves() void {
         boardView = @bitCast(internalBoard.squares);
         jsDrawCurrentBoard(1, 0, 0, 0);
     }
-    nextColour = nextColour.other();
     boardView = @bitCast(internalBoard.squares);
     lastMove = prev;
 }
@@ -304,7 +272,6 @@ export fn getNextLineMoves(indices: [*]const u32, len: u32) void {
         }
 
         internalBoard = lineGame;
-        nextColour = internalBoard.nextPlayer;
         boardView = @bitCast(internalBoard.squares);
     } else {
         consolePrint("No lines", .{});

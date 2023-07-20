@@ -14,7 +14,7 @@ const Move = @import("board.zig").Move;
 pub const MoveFilter = enum {
     Any,
     CapturesOnly,
-    KingCapturesOnly, // TODO: write a test with this against
+    KingCapturesOnly, // TODO: write a test with this against reverseFromKingIsInCheck
 
     pub fn get(comptime self: MoveFilter) type {
         return MoveGenStrategy(self);
@@ -23,16 +23,7 @@ pub const MoveFilter = enum {
 
 pub fn MoveGenStrategy(comptime filter: MoveFilter) type {
     return struct { // Start Strategy.
-
-        /// Positive means white is winning.
-        pub fn simpleEval(game: *const Board) i32 {
-            // TODO: Calls to this function are clearly not optimised away, idk what's going on.
-            // assert(game.simpleEval == slowSimpleEval(game));
-            if (game.halfMoveDraw >= 100) return 0; // Draw. Most predicable branch ever?
-            return game.simpleEval;
-        }
-
-        pub inline fn slowSimpleEval(game: *const Board) i32 {
+        pub fn slowSimpleEval(game: *const Board) i32 {
             var result: i32 = 0;
             for (game.squares) |piece| {
                 if (piece.kind == .Empty) continue;
