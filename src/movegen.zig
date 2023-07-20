@@ -1,13 +1,9 @@
+//! Generating the list of possible moves for a position.
+
 const std = @import("std");
 const Magic = @import("magic.zig");
-// const assert = std.debug.assert;
-
-const print = if (@import("builtin").target.isWasm()) @import("web.zig").consolePrint else std.debug.print;
-fn assert(val: bool) void {
-    // if (val) @panic("lol nope");
-    std.debug.assert(val);
-}
-
+const print = @import("common.zig").print;
+const assert = @import("common.zig").assert;
 const Board = @import("board.zig").Board;
 const Colour = @import("board.zig").Colour;
 const Piece = @import("board.zig").Piece;
@@ -18,7 +14,7 @@ const Move = @import("board.zig").Move;
 pub const MoveFilter = enum {
     Any,
     CapturesOnly,
-    KingCapturesOnly,
+    KingCapturesOnly, // TODO: write a test with this against
 
     pub fn get(comptime self: MoveFilter) type {
         return MoveGenStrategy(self);
@@ -357,14 +353,14 @@ pub fn MoveGenStrategy(comptime filter: MoveFilter) type {
         }
 
         fn castlingIsLegal(board: *Board, i: usize, colour: Colour, comptime goingLeft: bool) !bool {
-            if (try reverseFromKingIsInCheck(board, colour)) return false;
+            if (board.inCheck(colour)) return false;
             const path = if (goingLeft) [_]usize{ i - 1, i - 2, i - 3 } else [_]usize{ i + 1, i + 2 };
             for (path) |sq| {
                 // TODO: do this without playing the move? It annoys me that this makes getPossibleMoves take a mutable board pointer (would also be fixed by doing it later with other legal move checks).
                 const move = ii(@intCast(i), @intCast(sq), false);
                 const unMove = board.play(move);
                 defer board.unplay(unMove);
-                if (try reverseFromKingIsInCheck(board, colour)) return false;
+                if (board.inCheck(colour)) return false;
             }
             return true;
         }
@@ -437,7 +433,7 @@ pub fn MoveGenStrategy(comptime filter: MoveFilter) type {
 } // End Strategy.
 
 // TODO: this is bascilly a copy paste from the other one. could have all the move functions be generic over a function to call when you get each move.
-pub fn reverseFromKingIsInCheck(game: *Board, me: Colour) !bool {
+pub fn reverseFromKingIsInCheck(game: *Board, me: Colour) bool {
     const i = if (me == .Black) (game.blackKingIndex) else (game.whiteKingIndex);
     const file = i % 8;
     const rank = i / 8;

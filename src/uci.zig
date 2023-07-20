@@ -2,9 +2,10 @@ const std = @import("std");
 const Board = @import("board.zig").Board;
 const Move = @import("board.zig").Move;
 const search = @import("search.zig").default;
-const Timer = @import("bench.zig").Timer;
+const Timer = @import("common.zig").Timer;
 const GameOver = @import("board.zig").GameOver;
 const Magic = @import("magic.zig");
+const assert = @import("common.zig").assert;
 
 // TODO: split into uci.zig and fish.zig
 // TODO: for just using support wasm32-wasi and wasm-freestanding (browser by exposing a uci_send(ptr, len) and uci_recieve(ptr, maxLen)->len function).
@@ -29,7 +30,7 @@ const config: Opts = .{};
 var shouldPrint = false;
 
 pub fn main() !void {
-    Magic.initZoidberg();
+    @import("common.zig").setup();
     std.debug.print("[info] {}\n", .{config});
     const fishLevelStr = try std.fmt.allocPrint(general.allocator(), "{}", .{config.fishSkillLevel});
     defer general.allocator().free(fishLevelStr);
@@ -52,7 +53,6 @@ pub fn main() !void {
             search.resetMemoTable();
             continue;
         };
-        // const result = try playOneGame(&fish, g, gameCount);
         search.resetMemoTable();
         const count = (results.get(result) orelse 0) + 1;
         try results.put(result, count);
@@ -67,7 +67,6 @@ pub fn main() !void {
 
 // TODO: output pgn
 // TODO: alternate who plays white
-// TODO: detect draw by insufficient material
 pub fn playOneGame(fish: *Stockfish, gameIndex: usize, gamesTotal: u32) !GameOver {
     try fish.send(.NewGame);
     try fish.send(.AreYouReady);
@@ -77,27 +76,26 @@ pub fn playOneGame(fish: *Stockfish, gameIndex: usize, gamesTotal: u32) !GameOve
     var moveHistory = std.ArrayList([5]u8).init(alloc);
     var gt = Timer.start();
     var board = Board.initial();
-    var stats: Stats = .{};
-    // board.debugPrint();
+    if (shouldPrint) board.debugPrint();
 
     for (0..config.maxMoves) |i| {
         print("[info]: Move {}. Game {}/{}.\n", .{ i, gameIndex, gamesTotal });
         print("[info]: I'm thinking.\n", .{});
         var t = Timer.start();
-        const move = search.bestMoveIterative(&board, board.nextPlayer, config.myMaxDepth, config.myTimeLimitMS, &search.NoTrackLines.I) catch |err| {
-            return try logGameOver(err, &board, &moveHistory, gt, &stats);
+        const move = search.bestMoveIterative(&board, config.myMaxDepth, config.myTimeLimitMS, &@import("search.zig").NoTrackLines.I) catch |err| {
+            return try logGameOver(err, &board, &moveHistory, gt);
         };
 
         const moveStr = try writeAlgebraic(move);
         try moveHistory.append(moveStr);
         _ = board.play(move);
         print("[info]: I played {s} in {}ms.\n", .{ moveStr, t.get() });
-        // board.debugPrint();
+        if (shouldPrint) board.debugPrint();
 
-        playUciMove(fish, &board, &moveHistory, &stats) catch |err| {
-            return try logGameOver(err, &board, &moveHistory, gt, &stats);
+        playUciMove(fish, &board, &moveHistory) catch |err| {
+            return try logGameOver(err, &board, &moveHistory, gt);
         };
-        // board.debugPrint();
+        if (shouldPrint) board.debugPrint();
     } else {
         print("[info]: Played {} moves each. Stopping the game because nobody cares. \n", .{config.maxMoves});
         board.debugPrint();
@@ -157,7 +155,7 @@ const UciResult = union(enum) {
     BestMove: ?[5]u8,
 
     pub fn parse(str: []const u8) !UciResult {
-        // TODO: this sucks
+        // TODO: this sucks. some crazy comptime perfect hash thing?
         if (std.mem.eql(u8, str, "uciok")) {
             return .InitOk;
         } else if (std.mem.eql(u8, str, "readyok")) {
@@ -212,7 +210,6 @@ const UciResult = union(enum) {
             } else if (first.len <= 5) {
                 var move = std.mem.zeroes([5]u8);
                 @memcpy(move[0..first.len], first);
-                // TODO: this is ignoring the ponder request.
                 return .{ .BestMove = move };
             }
         }
@@ -223,12 +220,7 @@ const UciResult = union(enum) {
 
 var general = (std.heap.GeneralPurposeAllocator(.{}){});
 
-const Stats = struct {
-    fishRandom: u64 = 0,
-    fishOnTime: u64 = 0,
-};
-
-fn logGameOver(err: anyerror, board: *Board, moveHistory: *std.ArrayList([5]u8), gt: Timer, stats: *Stats) !GameOver {
+fn logGameOver(err: anyerror, board: *Board, moveHistory: *std.ArrayList([5]u8), gt: Timer) !GameOver {
     for (moveHistory.items) |m| {
         print("{s} ", .{m});
     }
@@ -247,7 +239,6 @@ fn logGameOver(err: anyerror, board: *Board, moveHistory: *std.ArrayList([5]u8),
             };
             const time = gt.get();
             std.debug.print("[info]: {s} The game lasted {} ply ({} ms). \n", .{ msg, moveHistory.items.len, time });
-            if (stats.fishRandom != 0) std.debug.print("[info]: The fish played {}/{} moves randomly.\n", .{ stats.fishRandom, stats.fishOnTime + stats.fishRandom });
             board.debugPrint();
             return result;
         },
@@ -255,7 +246,7 @@ fn logGameOver(err: anyerror, board: *Board, moveHistory: *std.ArrayList([5]u8),
     }
 }
 
-fn playUciMove(fish: *Stockfish, board: *Board, moveHistory: *std.ArrayList([5]u8), stats: *Stats) !void {
+fn playUciMove(fish: *Stockfish, board: *Board, moveHistory: *std.ArrayList([5]u8)) !void {
     try fish.send(.AreYouReady);
     fish.blockUntilRecieve(.ReadyOk);
     if (moveHistory.items.len == 0) {
@@ -287,13 +278,8 @@ fn playUciMove(fish: *Stockfish, board: *Board, moveHistory: *std.ArrayList([5]u
                 .BestMove => |bestmove| {
                     if (bestmove) |move| {
                         if (bestMove == null) {
-                            const randomMove = try search.randomMove(board, board.nextPlayer, general.allocator());
-                            const moveStr = try writeAlgebraic(randomMove);
-                            stats.fishRandom += 1;
-                            print("[info]: The fish wanted to play {s} but it took too long so I randomly played {s} for it instead!\n", .{ move, moveStr });
-                            break :m moveStr;
+                            return error.GameOver;
                         } else {
-                            stats.fishOnTime += 1;
                             print("[info]: The fish played {s} in {}ms.\n", .{ move, moveTime });
                             break :m move;
                         }

@@ -1,3 +1,5 @@
+//! Choosing the best move for a position.
+
 const std = @import("std");
 const Board = @import("board.zig").Board;
 const Colour = @import("board.zig").Colour;
@@ -6,26 +8,13 @@ const Kind = @import("board.zig").Kind;
 const Move = @import("board.zig").Move;
 const GameOver = @import("board.zig").GameOver;
 const Magic = @import("magic.zig");
-const Timer = @import("bench.zig").Timer;
-const print = if (@import("builtin").target.isWasm()) @import("web.zig").consolePrint else std.debug.print;
-const panic = if (@import("builtin").target.isWasm()) @import("web.zig").alertPrint else std.debug.panic;
-
-fn nanoTimestamp() i128 {
-    if (comptime isWasm) {
-        return @as(i128, @intFromFloat(@import("web.zig").jsPerformaceNow())) * std.time.ns_per_ms;
-    } else {
-        return std.time.nanoTimestamp();
-    }
-}
+const Timer = @import("common.zig").Timer;
+const print = @import("common.zig").print;
+const assert = @import("common.zig").assert;
+const nanoTimestamp = @import("common.zig").nanoTimestamp;
 
 // TODO: carefully audit any use of usize because wasm is 32 bit!
 const isWasm = @import("builtin").target.isWasm();
-
-inline fn assert(val: bool) void {
-    // if (val) @panic("lol nope");
-    std.debug.assert(val);
-    // _ = val;
-}
 
 pub const HashAlgo = enum {
     // These all operate on the byte array of squares.
@@ -49,7 +38,7 @@ pub const StratOpts = struct {
     maxDepth: comptime_int = 4, // TODO: should be runtime param to bestMove so wasm can change without increasing code size.
     doPruning: bool = true,
     beDeterministicForTest: bool = true,
-    memoMapSizeMB: u64 = 100, // Zero means don't use memo map at all.
+    memoMapSizeMB: u64 = 100, // Zero means don't use memo map at all.  // TODO: set this in ui?
     hashAlgo: HashAlgo = .CityHash64,
     checkDetection: CheckAlgo = .ReverseFromKing,
     // TODO: High numbers play worse?? i know im doing it wrong but i thought it would still be better. or maybe its cripplefish fuck up
@@ -59,14 +48,12 @@ pub const StratOpts = struct {
 
 pub const MoveErr = error{ GameOver, OutOfMemory, ForceStop, Overflow };
 
-// These numbers are for one bestMove call, not cumulative.
+// These numbers are for one depth in bestMoveIterative, not cumulative.
 pub const Stats = struct {
     comptime use: bool = false,
+    // Starts of looking relitively low but by the end there's about as many hits as leaf boards. also remember that a hit happens at ahigher level so saves many layers of work
     memoHits: u64 = 0, // Tried to evaluate a board and it was already in the memo table with a high enough depth.
-    // memoAdditions: u64 = 0, // Added a board to the memo table.
-    // memoCollissions: u64 = 0, // Added a board and overwrite a previous value. Since the table is never reset, this will trend towards 100% of memoAdditions. TODO: make this useful
     leafBoardsSeen: u64 = 0, // Ran out of depth and checked the simpleEval of a board.
-    gameOversSeen: u64 = 0,
 };
 
 const IM_MATED_EVAL: i32 = -1000000; // Add distance to prefer sooner mates
@@ -84,156 +71,17 @@ pub fn Strategy(comptime opts: StratOpts) type {
         // This gets reset after checking each top level move.
         var movesArena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 
-        const genKingCapturesOnly = @import("movegen.zig").MoveFilter.KingCapturesOnly.get();
-        const one: u64 = 1;
-        pub fn inCheck(game: *Board, me: Colour, alloc: std.mem.Allocator) !bool {
-            switch (opts.checkDetection) {
-                .Ignore => return false,
-                .LookAhead => {
-                    const moves = try genKingCapturesOnly.possibleMoves(game, me.other(), alloc);
-                    defer alloc.free(moves);
-                    return moves.len > 0;
-                },
-                .ReverseFromKing => {
-                    return try movegen.reverseFromKingIsInCheck(game, me);
-                },
-            }
-        }
-
-        pub fn randomMove(game: *Board, me: Colour, alloc: std.mem.Allocator) !Move {
-            const moves = try genAllMoves.possibleMoves(game, me, alloc);
-            defer alloc.free(moves);
-            if (moves.len == 0) return error.GameOver;
-
-            var legalMoves = try std.ArrayList(Move).initCapacity(alloc, 50);
-            defer legalMoves.deinit();
-
-            for (moves) |move| {
-                const unMove = game.play(move);
-                defer game.unplay(unMove);
-                if (try inCheck(game, me, alloc)) continue;
-                try legalMoves.append(move);
-            }
-
-            if (legalMoves.items.len == 0) return error.GameOver;
-            const choice = if (opts.beDeterministicForTest or legalMoves.items.len == 1) 0 else rng.uintLessThanBiased(usize, legalMoves.items.len);
-            return legalMoves.items[choice];
-        }
-
-        // This has its own loop because I actually need to know which move is best which walkEval doesn't return.
-        // Also means I can reset the temp allocator more often.
-        pub fn bestMove(game: *Board, me: Colour, depth: ?i32) !Move {
-            var alloc = upperArena.allocator();
-            defer assert(upperArena.reset(.retain_capacity));
-            const bestMoves = try allEqualBestMoves(game, me, alloc, depth orelse opts.maxDepth);
-            defer bestMoves.deinit();
-
-            // You can't just pick a deterministic random because pruning might end up with a shorter list of equal moves.
-            // Always choosing the first should be fine because pruning just cuts off the search early.
-            // Generating random numbers is quite slow, so don't do it if theres only 1 option anyway.
-            const choice = if (opts.beDeterministicForTest or bestMoves.items.len == 1) 0 else rng.uintLessThanBiased(usize, bestMoves.items.len);
-            return bestMoves.items[choice];
-        }
-
-        pub const Lines = struct {
-            pub const Node = struct {
-                move: Move,
-                eval: i32 = 0,
-                children: std.ArrayList(Node),
-                alloc: std.mem.Allocator,
-                remaining: u32,
-                alpha: i32,
-                beta: i32,
-
-                pub fn makeChild(self: *Node, move: Move, remaining: u32, alpha: i32, beta: i32) !Node {
-                    var c = std.ArrayList(Node).init(self.alloc);
-                    const node: Node = .{ .alloc = self.alloc, .move = move, .children = c, .remaining = remaining, .alpha = alpha, .beta = beta };
-                    return node;
-                }
-
-                pub fn addChild(self: *Node, child: Node) !void {
-                    try self.children.append(child);
-                }
-            };
-
-            arena: std.heap.ArenaAllocator,
-            game: Board,
-            children: std.ArrayList(Node),
-            depth: usize = 0,
-            eval: i32 = 0,
-
-            pub fn init(game: *Board, alloc: std.mem.Allocator) !Lines {
-                var arena = std.heap.ArenaAllocator.init(alloc);
-                // TODO: wtf is happening. everything breaks if this resizes
-                var c = try std.ArrayList(Node).initCapacity(arena.allocator(), 100);
-                return .{ .arena = arena, .game = game.*, .children = c };
-            }
-
-            pub fn makeChild(self: *Lines, move: Move, remaining: u32, alpha: i32, beta: i32) !Node {
-                const c = std.ArrayList(Node).init(self.arena.allocator());
-                const node: Node = .{ .alloc = self.arena.allocator(), .move = move, .children = c, .remaining = remaining, .alpha = alpha, .beta = beta };
-                return node;
-            }
-
-            pub fn addChild(self: *Lines, child: Node) !void {
-                try self.children.append(child);
-            }
-
-            pub fn clear(self: *Lines) !void {
-                // print("clear lines.\n", .{});
-                self.eval = 0;
-                self.depth = 0;
-                _ = self.arena.reset(.retain_capacity);
-                self.children = std.ArrayList(Node).init(self.arena.allocator());
-            }
-
-            pub fn deinit(self: *Lines) void {
-                // print("Deinit lines.\n", .{});
-                self.arena.deinit();
-            }
-        };
-
-        // TODO: this SUCKS
-        pub const NoTrackLines = struct {
-            pub const Node: type = NoTrackLines;
-            pub var I: ?NoTrackLines = .{};
-
-            eval: i32 = 0,
-            depth: usize = 0,
-            pub inline fn init(game: *Board, alloc: std.mem.Allocator) !NoTrackLines {
-                _ = alloc;
-                _ = game;
-                return .{};
-            }
-            pub inline fn makeChild(self: *NoTrackLines, move: Move, remaining: u32, alpha: i32, beta: i32) !NoTrackLines {
-                _ = beta;
-                _ = alpha;
-                _ = remaining;
-                _ = move;
-                _ = self;
-                return .{};
-            }
-            pub inline fn addChild(self: *NoTrackLines, child: NoTrackLines) !void {
-                _ = child;
-                _ = self;
-            }
-            pub inline fn clear(self: *NoTrackLines) !void {
-                _ = self;
-            }
-
-            pub inline fn deinit(self: *NoTrackLines) void {
-                _ = self;
-            }
-        };
-
-        pub fn bestMoveIterative(game: *Board, me: Colour, maxDepth: usize, timeLimitMs: i128, lines_out: anytype) !Move {
-            if (game.halfMoveDraw >= 100 or insufficientMaterial(game)) return error.GameOver; // Draw
+        // TODO: a bunch of sanity check regression tests for simple positions that have an obvious best move
+        // TODO: flag to start at max depth to confirm that iterative is comparably fast because of better ordering
+        pub fn bestMoveIterative(game: *Board, maxDepth: usize, timeLimitMs: i128, lines_out: anytype) !Move {
+            if (game.halfMoveDraw >= 100 or game.hasInsufficientMaterial()) return error.GameOver; // Draw
+            const me = game.nextPlayer;
 
             const startTime = nanoTimestamp();
             const endTime = startTime + (timeLimitMs * std.time.ns_per_ms);
             defer _ = upperArena.reset(.retain_capacity);
+            // TODO: do this in global init
             if (memoMap == null) memoMap = try MemoTable.initWithCapacity(opts.memoMapSizeMB, std.heap.page_allocator);
-            var memo = &memoMap.?;
 
             var topLevelMoves = try genAllMoves.possibleMoves(game, me, upperArena.allocator());
             defer upperArena.allocator().free(topLevelMoves);
@@ -251,7 +99,7 @@ pub fn Strategy(comptime opts: StratOpts) type {
                 const move = topLevelMoves[m];
                 const unMove = game.play(move);
                 defer game.unplay(unMove);
-                if (try inCheck(game, me, movesArena.allocator())) {
+                if (game.inCheck(me)) {
                     // TODO: leak but arena
                     std.mem.swap(Move, &topLevelMoves[topLevelMoves.len - 1], &topLevelMoves[m]);
                     topLevelMoves.len -= 1;
@@ -262,10 +110,10 @@ pub fn Strategy(comptime opts: StratOpts) type {
             }
             if (topLevelMoves.len == 0) return error.GameOver;
 
-            var stats: Stats = .{};
             var thinkTime: i128 = -1;
             var favourite: Move = topLevelMoves[0];
             for (0..(maxDepth + 1)) |depth| {
+                var stats: Stats = .{};
                 currentLines.depth = depth;
                 var alpha = LOWEST_EVAL;
                 var beta = -LOWEST_EVAL;
@@ -276,7 +124,7 @@ pub fn Strategy(comptime opts: StratOpts) type {
                     const unMove = game.play(move);
                     defer game.unplay(unMove);
                     var line = try currentLines.makeChild(move, @intCast(depth + 1), alpha, beta);
-                    const eval = walkEval(game, me.other(), @intCast(depth), alpha, beta, movesArena.allocator(), &stats, memo, false, &line, endTime) catch |err| {
+                    const eval = walkEval(game, @intCast(depth), alpha, beta, movesArena.allocator(), &stats, false, &line, endTime) catch |err| {
                         if (err == error.ForceStop) {
                             // If we ran out of time, just return the best result from the last search.
                             if (nanoTimestamp() >= endTime) {
@@ -359,64 +207,19 @@ pub fn Strategy(comptime opts: StratOpts) type {
             }
         }
 
-        // TODO: why am I returning an array list here but a slice from possibleMoves?
-        pub fn allEqualBestMoves(game: *Board, me: Colour, alloc: std.mem.Allocator, depth: i32) MoveErr!std.ArrayList(Move) {
-            if (game.halfMoveDraw >= 100 or insufficientMaterial(game)) return error.GameOver; // Draw
-
-            // TODO: I don't like that I can't init this outside.
-            // Not using the arena alloc because this persists after the move is played so work can be reused.
-            if (memoMap == null) memoMap = try MemoTable.initWithCapacity(opts.memoMapSizeMB, std.heap.page_allocator);
-            var memo = &memoMap.?;
-
-            const moves = try genAllMoves.possibleMoves(game, me, alloc);
-            defer alloc.free(moves);
-            if (moves.len == 0) return error.GameOver;
-            sortMoves(game, moves);
-
-            // No deinit because returned
-            var bestMoves = try std.ArrayList(Move).initCapacity(alloc, 50);
-
-            // TODO: use memo at top level? once it persists longer it must be helpful
-            var bestVal: i32 = LOWEST_EVAL;
-            var stats: Stats = .{};
-            var bestWhiteEval = LOWEST_EVAL;
-            var bestBlackEval = LOWEST_EVAL;
-            for (moves) |move| {
-                const unMove = game.play(move);
-                defer game.unplay(unMove);
-                if (try inCheck(game, me, alloc)) continue;
-                const value = -try walkEval(game, me.other(), depth, bestWhiteEval, bestBlackEval, movesArena.allocator(), &stats, memo, false); // TODO: need to catch
-                if (value > bestVal) {
-                    bestVal = value;
-                    bestMoves.clearRetainingCapacity();
-                    try bestMoves.append(move);
-                    if (opts.doPruning and checkAlphaBeta(bestVal, me, &bestWhiteEval, &bestBlackEval)) {
-                        break;
-                    }
-                } else if (value == bestVal) {
-                    try bestMoves.append(move);
-                }
-                _ = movesArena.reset(.retain_capacity);
-            }
-
-            if (bestMoves.items.len == 0) return error.GameOver;
-            // assert(stats.memoAdditions >= stats.memoCollissions);
-            if (comptime stats.use) print("Move {}, eval {}. Depth {} (+{} for captures) saw {} leaf boards with {} memo hits.\n", .{ game.fullMoves + 1, bestVal, depth, @min(opts.followCaptureDepth, depth), stats.leafBoardsSeen, stats.memoHits });
-            return bestMoves;
-        }
-
         // https://en.wikipedia.org/wiki/Alpha%E2%80%93beta_pruning
         // The alpha-beta values effect lower layers, not higher layers, so passed by value.
-        // The eval of <game>, positive means <me> is winning, assuming it is <me>'s turn.
-        // Returns error.GameOver if there were no possible moves or for 50 move rule.
-        // TODO: redo my captures only thing to be lookForPiece and only simpleEval if no captures on the board
-        pub fn walkEval(game: *Board, me: Colour, remaining: i32, alphaIn: i32, betaIn: i32, alloc: std.mem.Allocator, stats: *Stats, memo: *MemoTable, comptime capturesOnly: bool, line: anytype, endTime: i128) error{ OutOfMemory, ForceStop, Overflow }!i32 {
+        // Returns the absolute eval of <game>, positive means white is winning, after game.nextPlayer makes a move.
+        // Returns error.GameOver if there were no possible moves or other draws.
+        // TODO: redo my captures only thing to be lookForPeace and only simpleEval if no captures on the board
+        pub fn walkEval(game: *Board, remaining: i32, alphaIn: i32, betaIn: i32, alloc: std.mem.Allocator, stats: *Stats, comptime capturesOnly: bool, line: anytype, endTime: i128) error{ OutOfMemory, ForceStop, Overflow }!i32 {
+            const me = game.nextPlayer;
             if (forceStop) return error.ForceStop;
             if (remaining == 0) {
                 if (comptime stats.use) stats.leafBoardsSeen += 1;
                 return game.simpleEval;
             }
-            if (game.halfMoveDraw >= 100 or insufficientMaterial(game)) return Magic.DRAW_EVAL;
+            if (game.halfMoveDraw >= 100 or game.hasInsufficientMaterial()) return Magic.DRAW_EVAL;
             // Getting the time at every leaf node slows it down. But don't want to wait to get all the way back to the top if we're out of time.
             // Note: since I'm not checking at top level, it just doen't limit time if maxDepth=2 but only matters if you give it <5 ms so don't care.
             if (remaining > 2 and nanoTimestamp() >= endTime) return error.ForceStop;
@@ -429,7 +232,7 @@ pub fn Strategy(comptime opts: StratOpts) type {
             if (useMemoMap) {
                 // TODO: It would be really good to be able to reuse what we did on the last search if they played the move we thought they would.
                 //       This remaining checks stops that but also seems nesisary for correctness.
-                if (memo.get(game)) |cached| {
+                if (memoMap.?.get(game)) |cached| {
                     if (cached.remaining >= remaining) {
                         if (comptime stats.use) stats.memoHits += 1;
                         switch (cached.kind) {
@@ -442,8 +245,7 @@ pub fn Strategy(comptime opts: StratOpts) type {
                 }
             }
 
-            const moveGen = genAllMoves;
-            var moves = try moveGen.possibleMoves(game, me, alloc);
+            var moves = try genAllMoves.possibleMoves(game, me, alloc);
             defer alloc.free(moves);
 
             // if (remaining > 0) {
@@ -468,14 +270,14 @@ pub fn Strategy(comptime opts: StratOpts) type {
             for (moves) |move| {
                 const unMove = game.play(move);
                 defer game.unplay(unMove);
-                if (try inCheck(game, me, alloc)) {
+                if (game.inCheck(me)) {
                     checksSkipped += 1;
                     continue;
                 }
                 startEvaling += 1;
                 noLegalMoves = false;
                 var nextLine = try line.makeChild(move, @intCast(remaining), alpha, beta);
-                const eval = try walkEval(game, me.other(), remaining - 1, alpha, beta, alloc, stats, memo, capturesOnly, &nextLine, endTime);
+                const eval = try walkEval(game, remaining - 1, alpha, beta, alloc, stats, capturesOnly, &nextLine, endTime);
                 nextLine.eval = eval;
                 try line.addChild(nextLine);
 
@@ -502,39 +304,18 @@ pub fn Strategy(comptime opts: StratOpts) type {
             }
 
             if (noLegalMoves) { // <me> can't make any moves. Either got checkmated or its a draw.
-                if (try inCheck(game, me, alloc)) {
+                if (game.inCheck(me)) {
                     return (IM_MATED_EVAL - remaining) * me.dir();
                 } else {
                     return Magic.DRAW_EVAL;
                 }
             }
 
-            // TODO: this is still wrong, its only skipping if we pruned this level, but should also care if any children pruned?
             if (useMemoMap) { // Can never get here if forceStop=true.
-                memo.setAndOverwriteBucket(game, .{ .eval = bestVal, .remaining = @intCast(remaining), .move = foundMove.?, .kind = memoKind });
+                memoMap.?.setAndOverwriteBucket(game, .{ .eval = bestVal, .remaining = @intCast(remaining), .move = foundMove.?, .kind = memoKind });
             }
 
             return bestVal;
-        }
-
-        // This is in it's own function because it's used in the special upper loop and the walkEval.
-        /// Returns true if the move is so good we should stop considering this branch.
-        fn checkAlphaBeta(bestVal: i32, me: Colour, bestWhiteEval: *i32, bestBlackEval: *i32) bool {
-            switch (me) {
-                .White => {
-                    bestWhiteEval.* = @max(bestWhiteEval.*, bestVal);
-                    if (bestVal >= -bestBlackEval.*) {
-                        return true;
-                    }
-                },
-                .Black => {
-                    bestBlackEval.* = @max(bestBlackEval.*, bestVal);
-                    if (bestVal >= -bestWhiteEval.*) {
-                        return true;
-                    }
-                },
-            }
-            return false;
         }
 
         // TODO: try putting move values in parralel array so i dont need to keep re-playing move?
@@ -573,7 +354,7 @@ pub fn Strategy(comptime opts: StratOpts) type {
             for (moves) |move| {
                 const unMove = game.play(move);
                 defer game.unplay(unMove);
-                if (try inCheck(game, colour, alloc)) continue;
+                if (game.inCheck(colour)) continue;
                 return true;
             }
             return false;
@@ -581,31 +362,10 @@ pub fn Strategy(comptime opts: StratOpts) type {
 
         pub fn isGameOver(game: *Board, alloc: std.mem.Allocator) !GameOver {
             if (game.halfMoveDraw >= 100) return .FiftyMoveDraw;
-            if (insufficientMaterial(game)) return .MaterialDraw;
+            if (game.hasInsufficientMaterial()) return .MaterialDraw;
             if (try hasAnyLegalMoves(game, alloc)) return .Continue;
-            if (try inCheck(game, game.nextPlayer, alloc)) return if (game.nextPlayer == .White) .BlackWins else .WhiteWins;
+            if (game.inCheck(game.nextPlayer)) return if (game.nextPlayer == .White) .BlackWins else .WhiteWins;
             return .Stalemate;
-        }
-
-        // https://www.chess.com/article/view/how-chess-games-can-end-8-ways-explained#insufficient-material
-        pub fn insufficientMaterial(game: *Board) bool {
-            const total = @popCount(game.peicePositions.white | game.peicePositions.white);
-            if (total > 4) return false;
-            var minorWhite: usize = 0;
-            var minorBlack: usize = 0;
-            for (game.squares) |piece| {
-                switch (piece.kind) {
-                    .Empty, .King => {},
-                    .Rook, .Queen, .Pawn => return false,
-                    .Bishop, .Knight => switch (piece.colour) {
-                        .White => minorWhite += 1,
-                        .Black => minorBlack += 1,
-                    },
-                }
-            }
-            // TODO: king vs king + 2N
-            // (king vs king, king+1 vs king) or (king+1 vs king+1)
-            return (minorWhite + minorBlack) <= 1 or (minorWhite == 1 and minorBlack == 1);
         }
 
         pub const MemoEntry = struct {
@@ -638,10 +398,6 @@ pub fn Strategy(comptime opts: StratOpts) type {
                 }
                 const realSizeMB = realCapacity * @sizeOf(MemoEntry) / 1024 / 1024;
                 print("Memo table capacity is {} ({} MB).\n", .{ realCapacity, realSizeMB });
-
-                // for (0..781) |i| {
-                //     print("{b}\n", .{Magic.ZOIDBERG[i] & (realCapacity - 1)});
-                // }
                 return self;
             }
 
@@ -669,7 +425,7 @@ pub fn Strategy(comptime opts: StratOpts) type {
             }
 
             pub fn eql(key: *const Board, entry: *MemoEntry) bool {
-                // This is relies on empty squares having a definied colour so they bytes match!
+                // This is relies on empty squares having a definied colour so their bytes match!
                 return std.mem.eql(u8, std.mem.asBytes(&key.squares), std.mem.asBytes(&entry.squares));
             }
 
@@ -692,7 +448,7 @@ pub fn Strategy(comptime opts: StratOpts) type {
                 if (self.buffer[bucket].hash == hashcode) {
                     // fuck it, we ball, 2^64 is basically infinity
                     // if (!eql(key, &self.buffer[bucket])) {
-                    //     panic("hash collission (not a problem... yet, just debugging)", .{}); // TODO: does this every happen? how confident am I?
+                    //     panic("hash collission (not a problem... yet, just debugging)", .{});
                     //     return null;
                     // }
                     return self.buffer[bucket].value;
@@ -704,21 +460,100 @@ pub fn Strategy(comptime opts: StratOpts) type {
     };
 } // End Strategy.
 
-pub const default = Strategy(.{});
+// TODO: This seems like a lot of code for something that only gets used during narrowest debugging because using at any meaningful depth uses way to much memory.
+//       Should really have a simpler way to just track the best x lines it finds.
+pub const Lines = struct {
+    pub const Node = struct {
+        move: Move,
+        eval: i32 = 0,
+        children: std.ArrayList(Node),
+        alloc: std.mem.Allocator,
+        remaining: u32,
+        alpha: i32,
+        beta: i32,
 
-test {
-    var game = Board.initial();
-    var lines: ?default.Lines = null;
-    const best = try default.bestMoveIterative(&game, .White, 5, 1000, &lines);
-    _ = best;
-    for (lines.?.children.items) |move| {
-        print("{s} ({}); ", .{ try move.move.text(), move.eval });
+        pub fn makeChild(self: *Node, move: Move, remaining: u32, alpha: i32, beta: i32) !Node {
+            var c = std.ArrayList(Node).init(self.alloc);
+            const node: Node = .{ .alloc = self.alloc, .move = move, .children = c, .remaining = remaining, .alpha = alpha, .beta = beta };
+            return node;
+        }
+
+        pub fn addChild(self: *Node, child: Node) !void {
+            try self.children.append(child);
+        }
+    };
+
+    arena: std.heap.ArenaAllocator,
+    game: Board,
+    children: std.ArrayList(Node),
+    depth: usize = 0,
+    eval: i32 = 0,
+
+    pub fn init(game: *Board, alloc: std.mem.Allocator) !Lines {
+        var arena = std.heap.ArenaAllocator.init(alloc);
+        // TODO: wtf is happening. everything breaks if this resizes
+        var c = try std.ArrayList(Node).initCapacity(arena.allocator(), 100);
+        return .{ .arena = arena, .game = game.*, .children = c };
     }
-    print("\n", .{});
-    for (lines.?.children.items[0].children.items) |move| {
-        print("{s} ({}); ", .{ try move.move.text(), move.eval });
+
+    pub fn makeChild(self: *Lines, move: Move, remaining: u32, alpha: i32, beta: i32) !Node {
+        const c = std.ArrayList(Node).init(self.arena.allocator());
+        const node: Node = .{ .alloc = self.arena.allocator(), .move = move, .children = c, .remaining = remaining, .alpha = alpha, .beta = beta };
+        return node;
     }
-}
+
+    pub fn addChild(self: *Lines, child: Node) !void {
+        try self.children.append(child);
+    }
+
+    pub fn clear(self: *Lines) !void {
+        // print("clear lines.\n", .{});
+        self.eval = 0;
+        self.depth = 0;
+        _ = self.arena.reset(.retain_capacity);
+        self.children = std.ArrayList(Node).init(self.arena.allocator());
+    }
+
+    pub fn deinit(self: *Lines) void {
+        // print("Deinit lines.\n", .{});
+        self.arena.deinit();
+    }
+};
+
+// TODO: this SUCKS
+pub const NoTrackLines = struct {
+    pub const Node: type = NoTrackLines;
+    pub var I: ?NoTrackLines = .{};
+
+    eval: i32 = 0,
+    depth: usize = 0,
+    pub inline fn init(game: *Board, alloc: std.mem.Allocator) !NoTrackLines {
+        _ = alloc;
+        _ = game;
+        return .{};
+    }
+    pub inline fn makeChild(self: *NoTrackLines, move: Move, remaining: u32, alpha: i32, beta: i32) !NoTrackLines {
+        _ = beta;
+        _ = alpha;
+        _ = remaining;
+        _ = move;
+        _ = self;
+        return .{};
+    }
+    pub inline fn addChild(self: *NoTrackLines, child: NoTrackLines) !void {
+        _ = child;
+        _ = self;
+    }
+    pub inline fn clear(self: *NoTrackLines) !void {
+        _ = self;
+    }
+
+    pub inline fn deinit(self: *NoTrackLines) void {
+        _ = self;
+    }
+};
+
+pub const default = Strategy(.{});
 
 test "dir" {
     try std.testing.expectEqual(Colour.White.dir(), 1);

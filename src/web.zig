@@ -1,3 +1,5 @@
+//! C ABI functions that JavaScript can call.
+
 const std = @import("std");
 const assert = std.debug.assert;
 const Colour = @import("board.zig").Colour;
@@ -7,7 +9,7 @@ const search = @import("search.zig").Strategy(.{});
 const genAllMoves = @import("search.zig").genAllMoves;
 const Move = @import("board.zig").Move;
 const Magic = @import("magic.zig");
-const Lines = search.Lines;
+const Lines = @import("search.zig").Lines;
 const print = consolePrint;
 
 comptime {
@@ -46,9 +48,12 @@ pub fn alertPrint(comptime fmt: []const u8, args: anytype) void {
     jsAlert(str.ptr, str.len);
 }
 
+export fn setup() void {
+    @import("common.zig").setup();
+}
+
 /// OUT: internalBoard, boardView, nextColour
 export fn restartGame() void {
-    Magic.initZoidberg();
     internalBoard = Board.initial();
     boardView = @bitCast(internalBoard.squares);
     nextColour = .White;
@@ -89,7 +94,7 @@ export fn playNextMove() i32 {
         lines.?.deinit();
     }
 
-    const move = search.bestMoveIterative(&internalBoard, nextColour, maxDepth, maxTimeMs, &search.NoTrackLines.I) catch |err| {
+    const move = search.bestMoveIterative(&internalBoard, maxDepth, maxTimeMs, &@import("search.zig").NoTrackLines.I) catch |err| {
         switch (err) {
             error.GameOver => {
                 // Engine couldn't move.
@@ -139,10 +144,7 @@ export fn getPossibleMoves(from: i32) u64 {
     for (allMoves.items) |move| {
         const unMove = internalBoard.play(move);
         defer internalBoard.unplay(unMove);
-        if (search.inCheck(&internalBoard, piece.colour, alloc) catch |err| {
-            logErr(err);
-            return 1;
-        }) continue;
+        if (internalBoard.inCheck(piece.colour)) continue;
         result |= @as(u64, 1) << @intCast(move.to);
     }
     return result;
@@ -271,7 +273,7 @@ export fn walkPossibleMoves() void {
     for (allMoves) |move| {
         const unMove = internalBoard.play(move);
         defer internalBoard.unplay(unMove);
-        if (search.inCheck(&internalBoard, colour, alloc) catch return) continue;
+        if (internalBoard.inCheck(colour)) continue;
         lastMove = move;
         boardView = @bitCast(internalBoard.squares);
         jsDrawCurrentBoard(1, 0, 0, 0);

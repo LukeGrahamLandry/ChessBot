@@ -1,19 +1,9 @@
+//! Representing the game. Playing and unplaying moves. FEN parsing.
+
 const std = @import("std");
 const Magic = @import("magic.zig");
-const print = if (@import("builtin").target.isWasm()) @import("web.zig").consolePrint else std.debug.print;
-
-const assert = std.debug.assert;
-// inline fn assert(val: bool) void {
-//     std.debug.assert(val);
-//     // _ = val;
-// }
-
-// Calling hasCorrectPositionsBits doesn't get optimised out in release mode when passed to std assert. But it does if passed to a function that discards it.
-// I think even this and inlining both doesn't fix that
-inline fn assertSlow(val: bool) void {
-    // std.debug.assert(val);
-    _ = val;
-}
+const print = @import("common.zig").print;
+const assert = @import("common.zig").assert;
 
 // Numbers matter because js sees them.
 pub const Kind = enum(u4) {
@@ -268,7 +258,6 @@ pub const Board = struct {
     pub fn play(self: *Board, move: Move) OldMove {
         // print("start play\n", .{});
         assert(move.from != move.to);
-        assertSlow(self.hasCorrectPositionsBits());
         const thisMove: OldMove = .{ .move = move, .taken = self.squares[move.to], .original = self.squares[move.from], .old_castling = self.castling, .debugPeicePositions = self.peicePositions, .debugSimpleEval = self.simpleEval, .frenchMove = self.frenchMove, .oldHalfMoveDraw = self.halfMoveDraw, .debugZoidberg = self.zoidberg };
         assert(thisMove.original.colour == self.nextPlayer);
         const colour = thisMove.original.colour;
@@ -329,7 +318,6 @@ pub const Board = struct {
         self.zoidberg ^= Magic.ZOIDBERG[Magic.ZOID_TURN_INDEX];
         self.zoidberg ^= getZoidberg(thisMove.original, move.from);
         self.zoidberg ^= getZoidberg(thisMove.original, move.to);
-        // assert(getZoidberg(thisMove.original, move.from) != getZoidberg(thisMove.original, move.to));
         if (!thisMove.taken.empty()) self.zoidberg ^= getZoidberg(thisMove.taken, move.to);
 
         switch (move.action) {
@@ -391,7 +379,6 @@ pub const Board = struct {
         }
 
         self.nextPlayer = self.nextPlayer.other();
-        assertSlow(self.hasCorrectPositionsBits());
         // self.line.append(thisMove) catch @panic("Overflow line.");
         return thisMove;
     }
@@ -402,7 +389,6 @@ pub const Board = struct {
         // print("start unplay\n", .{});
         self.zoidberg ^= Magic.ZOIDBERG[Magic.ZOID_TURN_INDEX];
         // assert(std.meta.eql(self.line.pop(), move));
-        assertSlow(self.hasCorrectPositionsBits());
         const colour = move.original.colour;
         self.castling = move.old_castling;
         self.simpleEval += move.taken.eval();
@@ -469,12 +455,7 @@ pub const Board = struct {
         self.nextPlayer = self.nextPlayer.other();
         assert(colour == self.nextPlayer);
         assert(std.meta.eql(move.debugPeicePositions, self.peicePositions));
-        assertSlow(self.hasCorrectPositionsBits());
         assert(self.simpleEval == move.debugSimpleEval);
-        if (self.zoidberg != move.debugZoidberg) {
-            print("{}\n", .{move});
-            self.debugPrint();
-        }
         assert(self.zoidberg == move.debugZoidberg);
     }
 
@@ -623,68 +604,33 @@ pub const Board = struct {
         print("{s}\n", .{s});
     }
 
-    // Asserts to this don't get compiled out in release mode! It's like 10x faster with this commented out.
-    pub inline fn hasCorrectPositionsBits(board: *const Board) bool {
-        _ = board;
+    pub fn inCheck(self: *Board, me: Colour) bool {
+        return @import("movegen.zig").reverseFromKingIsInCheck(self, me);
+    }
 
-        // const valid = v: {
-        //     var flag: u64 = 1;
-        //     for (board.squares) |piece| {
-        //         defer flag = flag << 1;
-        //         if (piece.kind == .Empty){
-        //             if ((board.peicePositions.white & flag) != 0) break :v false;
-        //             if ((board.peicePositions.black & flag) != 0) break :v false;
-        //         } else {
-        //             if ((board.peicePositions.getFlag(piece.colour) & flag) == 0) break :v false;
-        //         }
-        //     }
-
-        //     // TODO: this is broken until I detect checkmate
-        //     // if (!board.squares[board.whiteKingIndex].is(.White, .King)) {
-        //     //     if (board.whiteKingIndex == 0) print("whiteKingIndex=0, maybe not set?\n", .{});
-        //     //     break :v false;
-        //     // }
-        //     // if (!board.squares[board.blackKingIndex].is(.Black, .King)) {
-        //     //     if (board.blackKingIndex == 0) print("blackKingIndex=0, maybe not set?\n", .{});
-        //     //     break :v false;
-        //     // }
-        //     if (board.simpleEval != @import("movegen.zig").MoveFilter.Any.get().slowSimpleEval(board)) break :v false;
-        //     break :v true;
-        // };
-
-        // // if (!valid and !isWasm) {
-        // //     board.debugPrint();
-        // //     print("white: {b}\nblack: {b}\neval={}. {} to move. kings: {} {}\n {}\n\n", .{board.peicePositions.white, board.peicePositions.black, board.simpleEval, board.nextPlayer, board.whiteKingIndex, board.blackKingIndex, board.castling});
-        // // }
-        // return valid;
-        return true;
+    // https://www.chess.com/article/view/how-chess-games-can-end-8-ways-explained#insufficient-material
+    pub fn hasInsufficientMaterial(game: *Board) bool {
+        const total = @popCount(game.peicePositions.white | game.peicePositions.white);
+        if (total > 4) return false;
+        var minorWhite: usize = 0;
+        var minorBlack: usize = 0;
+        for (game.squares) |piece| {
+            switch (piece.kind) {
+                .Empty, .King => {},
+                .Rook, .Queen, .Pawn => return false,
+                .Bishop, .Knight => switch (piece.colour) {
+                    .White => minorWhite += 1,
+                    .Black => minorBlack += 1,
+                },
+            }
+        }
+        // TODO: king vs king + 2N
+        // (king vs king, king+1 vs king) or (king+1 vs king+1)
+        return (minorWhite + minorBlack) <= 1 or (minorWhite == 1 and minorBlack == 1);
     }
 
     pub fn expectEqual(a: *const Board, b: *const Board) !void {
-        for (a.squares, b.squares) |aSq, bSq| {
-            if (aSq.empty() and bSq.empty()) continue;
-            if (!std.meta.eql(aSq, bSq)) {
-                if (!isWasm) {
-                    print("=====\n", .{});
-                    a.debugPrint();
-                    b.debugPrint();
-                    print("Expected boards above to be equal.\n", .{});
-                }
-                return error.TestExpectedEqual;
-            }
-        }
-        var badMetaData = !a.hasCorrectPositionsBits() or !b.hasCorrectPositionsBits() or !std.meta.eql(a.castling, b.castling) or !std.meta.eql(a.simpleEval, b.simpleEval) or !std.meta.eql(a.nextPlayer, b.nextPlayer);
-        if (badMetaData) {
-            if (!isWasm) {
-                print("=====\n", .{});
-                a.debugPrint();
-                print("white: {b}\nblack: {b}\neval={}. {} to move. kings: {} {}\n {}\n\n", .{ a.peicePositions.white, a.peicePositions.black, a.simpleEval, a.nextPlayer, a.whiteKingIndex, a.blackKingIndex, a.castling });
-                b.debugPrint();
-                print("white: {b}\nblack: {b}\neval={} {} to move. kings: {} {}\n {}\n\n", .{ b.peicePositions.white, b.peicePositions.black, b.simpleEval, b.nextPlayer, b.whiteKingIndex, b.blackKingIndex, b.castling });
-                print("Expected boards above to be equal.\n", .{});
-            }
-            return error.TestExpectedEqual;
-        }
+        return std.testing.expectEqual(a.*, b.*);
     }
 };
 
@@ -793,7 +739,7 @@ pub fn inferPlayMove(board: *Board, fromIndex: u32, toIndex: u32, alloc: std.mem
     }
 
     const unMove = board.play(realMove);
-    if (try search.inCheck(board, colour, alloc)) {
+    if (board.inCheck(colour)) {
         board.unplay(unMove);
         return error.IllegalMove;
     }

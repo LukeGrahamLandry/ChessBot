@@ -5,13 +5,12 @@ const textDecoder = new TextDecoder();
 let ctx = document.getElementById("board").getContext("2d");
 // const minMoveTimeMs = 500;  // When computer vs computer, if the engine is faster than this, it will wait before playing again. 
 
-// TODO: select which colour is human or computer. button to switch mid game for testing. 
+// TODO: select which colour is human or computer. button to switch mid game for testing. ai vs ai mode. 
 // TODO: option to render black at the bottom
-// TODO: set depth/time limit, show search time
 // TODO: forward and back buttons to move through position history, start playing from anywhere to make tree (render all branches as tiny boards?)
 // TODO: run wasm in a worker so it doesn't freeze ui while searching
-// TODO: show checkmate, render captured pieces, show engine eval
-// TODO: each file should know the git hash and report the error if  something caches just one
+// TODO: render captured pieces, show engine eval, show when in check
+// TODO: each file should know the git hash and report the error if something caches just one
 // TODO: show the line it thinks is best 
 // TODO: save game in local storage 
 // TODO: checkbox for "ummmm, I push pawn!", voice lines would be cool 

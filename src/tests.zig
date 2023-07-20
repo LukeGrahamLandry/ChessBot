@@ -6,11 +6,11 @@ const Kind = @import("board.zig").Kind;
 const StratOpts = @import("search.zig").StratOpts;
 const Strategy = @import("search.zig").Strategy;
 const MoveFilter = @import("movegen.zig").MoveFilter;
-const reverseFromKingIsInCheck = @import("movegen.zig").reverseFromKingIsInCheck;
 const Move = @import("board.zig").Move;
 const Stats = @import("search.zig").Stats;
-const assert = std.debug.assert;
-const print = std.debug.print;
+
+const print = @import("common.zig").print;
+const assert = @import("common.zig").assert;
 
 // TODO: tests dont pass on maxDepth=2
 // These don't use the memo table because I think that's allowed to change evals.
@@ -91,7 +91,7 @@ test "bestMoves eval equal" {
             for (bestMoves.items, 0..) |move, i| {
                 const unMove = game.play(move);
                 defer game.unplay(unMove);
-                try std.testing.expect(!(try testNoMemo.inCheck(&game, me, quickAlloc)));
+                try std.testing.expect(!game.inCheck(&game));
 
                 var thing: Stats = .{};
                 // pay attention to negative sign
@@ -124,20 +124,21 @@ const PerftResult = struct {
 };
 
 const genKingCapturesOnly = @import("movegen.zig").MoveFilter.KingCapturesOnly.get();
+// TODO: try using a memo table here as well.
 fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, alloc: std.mem.Allocator, comptime countMates: bool) !PerftResult {
     var results: PerftResult = .{};
 
     if (remainingDepth == 0) {
         if (!countMates) @panic("Should early exit on remainingDepth == 0");
 
-        if (try reverseFromKingIsInCheck(game, me)) {
+        if (game.inCheck(me)) {
             const allMoves = try MoveFilter.Any.get().possibleMoves(game, me, alloc);
             defer alloc.free(allMoves);
             var anyLegalMoves = false;
             for (allMoves) |move| {
                 const unMove = game.play(move);
                 defer game.unplay(unMove);
-                if (try reverseFromKingIsInCheck(game, me)) continue; // move illigal
+                if (game.inCheck(me)) continue; // move illigal
                 anyLegalMoves = true;
                 break;
             }
@@ -155,7 +156,7 @@ fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, alloc: st
     for (allMoves) |move| {
         const unMove = game.play(move);
         defer game.unplay(unMove);
-        if (try reverseFromKingIsInCheck(game, me)) continue; // move illigal
+        if (game.inCheck(me)) continue; // move illigal
 
         if (!countMates and (remainingDepth - 1) == 0) {
             results.games += 1;

@@ -40,6 +40,7 @@
         // This get's called each time something loads. Wait until everything is loaded...
         if (!wasmReady || window.chessJsReady === undefined || !chessImg.complete) return;
 
+        Engine.setup();
         document.getElementById("loading").style.display = "none";
         handleResize();
         document.getElementById("board").addEventListener("click", handleCanvasClick);
