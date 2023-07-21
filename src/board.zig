@@ -467,7 +467,7 @@ pub const Board = struct {
 
     // Caller owns the returned string.
     pub fn toFEN(self: *const Board, allocator: std.mem.Allocator) ![]u8 {
-        var letters = try std.ArrayList(u8).initCapacity(allocator, 64 + 8 + 30); // Bad idea!
+        var letters = try std.ArrayList(u8).initCapacity(allocator, 80);
         errdefer letters.deinit();
         try UCI.writeFen(self, letters.writer());
         return try letters.toOwnedSlice();

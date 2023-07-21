@@ -18,6 +18,7 @@ pub fn setup() void {
     for (&Magic.ZOIDBERG) |*ptr| {
         ptr.* = rand.next();
     }
+    @import("search.zig").initMemoTable(100) catch @panic("OOM");
 }
 
 pub fn nanoTimestamp() i128 {

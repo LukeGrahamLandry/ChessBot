@@ -5,7 +5,8 @@ const assert = std.debug.assert;
 const Colour = @import("board.zig").Colour;
 const Board = @import("board.zig").Board;
 const Piece = @import("board.zig").Piece;
-const search = @import("search.zig").Strategy(.{});
+const bestMove = @import("search.zig").bestMove;
+const isGameOver = @import("search.zig").isGameOver;
 const genAllMoves = @import("search.zig").genAllMoves;
 const Move = @import("board.zig").Move;
 const Magic = @import("common.zig").Magic;
@@ -26,14 +27,11 @@ const alloc = std.heap.wasm_allocator;
 var notTheRng = std.rand.DefaultPrng.init(0);
 var rng = notTheRng.random();
 
-var lines: ?Lines = null;
-
 extern fn jsConsoleLog(ptr: [*]const u8, len: usize) void;
 extern fn jsAlert(ptr: [*]const u8, len: usize) void; // TODO: use for assertions if enabled
 extern fn jsDrawCurrentBoard(depth: i32, eval: i32, index: u32, count: u32) void;
 pub extern fn jsPerformaceNow() f64;
 
-// TODO: log something whenever returning an error code.
 // TODO: think about this more. since printing is a comptime thing, commenting these out saves ~115kb (out of ~400).
 pub fn consolePrint(comptime fmt: []const u8, args: anytype) void {
     var buffer: [2048]u8 = undefined;
@@ -62,24 +60,17 @@ export fn restartGame() void {
 /// IN: internalBoard, boardView
 /// OUT: internalBoard, boardView, msgBuffer, lastMove
 export fn playNextMove() i32 {
-    if (lines) |oldLines| {
-        _ = oldLines;
-        lines.?.deinit();
-    }
-
-    const move = search.bestMove(&internalBoard, maxDepth, maxTimeMs, &@import("search.zig").NoTrackLines.I) catch |err| {
+    const move = bestMove(.{}, &internalBoard, maxDepth, maxTimeMs) catch |err| {
         switch (err) {
             error.GameOver => {
                 // Engine couldn't move.
                 const len = checkGameOver();
                 return if (len > 0) len else 1;
             },
-            else => logErr(err),
+            else => logErr(err, "playNextMove"),
         }
         return 1;
     };
-
-    // consolePrint("{} next moves.", .{lines.?.children.items.len});
 
     _ = internalBoard.play(move);
     lastMove = move;
@@ -89,7 +80,7 @@ export fn playNextMove() i32 {
 }
 
 fn checkGameOver() i32 {
-    const reason = search.isGameOver(&internalBoard, alloc) catch return -1;
+    const reason = isGameOver(&internalBoard, alloc) catch return -1;
     if (reason == .Continue) return 0;
     const str = @tagName(reason);
     print("Game over: {s}", .{str});
@@ -109,7 +100,7 @@ export fn getPossibleMoves(from: i32) u64 {
 
     var allMoves = std.ArrayList(Move).init(alloc);
     genAllMoves.collectOnePieceMoves(&allMoves, &internalBoard, @intCast(from), @intCast(file), @intCast(rank)) catch |err| {
-        logErr(err);
+        logErr(err, "getPossibleMoves");
         return 1;
     };
     defer allMoves.deinit();
@@ -127,7 +118,7 @@ export fn getPossibleMoves(from: i32) u64 {
 export fn setFromFen(length: u32) bool {
     const fenSlice = fenView[0..@as(usize, length)];
     const temp = Board.fromFEN(fenSlice) catch |err| {
-        logErr(err);
+        logErr(err, "setFromFen");
         return false;
     };
     internalBoard = temp;
@@ -139,15 +130,12 @@ export fn setFromFen(length: u32) bool {
 /// Returns the length of the string or 0 if error.
 /// IN: internalBoard
 /// OUT: fenView
-// TODO: unnecessary allocation just to memcpy.
 export fn getFen() u32 {
-    const fen = internalBoard.toFEN(alloc) catch |err| {
-        logErr(err);
+    var buffer = std.heap.FixedBufferAllocator.init(&fenView);
+    const fen = internalBoard.toFEN(buffer.allocator()) catch |err| {
+        logErr(err, "getFen");
         return 0;
     };
-    defer alloc.free(fen);
-    assert(fen.len <= fenView.len);
-    @memcpy(fenView[0..fen.len], fen);
     return fen.len;
 }
 
@@ -165,7 +153,7 @@ export fn playHumanMove(fromIndex: u32, toIndex: u32) i32 {
     lastMove = (@import("board.zig").inferPlayMove(&internalBoard, fromIndex, toIndex, alloc) catch |err| {
         switch (err) {
             error.IllegalMove => return 4,
-            else => logErr(err),
+            else => logErr(err, "playHumanMove"),
         }
         return 1;
     }).move;
@@ -173,8 +161,8 @@ export fn playHumanMove(fromIndex: u32, toIndex: u32) i32 {
     return 0;
 }
 
-fn logErr(err: anyerror) void {
-    print("Error: {}", .{err});
+fn logErr(err: anyerror, func: []const u8) void {
+    print("Error at {s}: {}", .{ func, err });
 }
 
 // TODO: one for illigal moves (because check)
@@ -233,51 +221,6 @@ export fn loadOpeningBook(ptr: [*]u32, len: usize) bool {
     return false;
 }
 
-// Sets up each board on internalBoard then calls drawCurrentBoard and fixes the state at the end.
-export fn walkPossibleMoves() void {
-    const colour = internalBoard.nextPlayer;
-    var allMoves = genAllMoves.possibleMoves(&internalBoard, colour, alloc) catch return;
-    defer alloc.free(allMoves);
-    const prev = lastMove;
-    for (allMoves) |move| {
-        const unMove = internalBoard.play(move);
-        defer internalBoard.unplay(unMove);
-        if (internalBoard.inCheck(colour)) continue;
-        lastMove = move;
-        boardView = @bitCast(internalBoard.squares);
-        jsDrawCurrentBoard(1, 0, 0, 0);
-    }
-    boardView = @bitCast(internalBoard.squares);
-    lastMove = prev;
-}
-
-// This stomps the internalBoard.
-export fn getNextLineMoves(indices: [*]const u32, len: u32) void {
-    if (lines) |current| {
-        lastMove = null;
-        var lineGame = current.game;
-        var children = current.children.items;
-        for (0..len) |depth| {
-            if (children.len <= indices[depth]) alertPrint("Invalid index {} at depth {}", .{ indices[depth], depth });
-            const node = children[indices[depth]];
-            children = node.children.items;
-
-            _ = lineGame.play(node.move);
-            lastMove = node.move;
-        }
-
-        for (children, 0..) |node, i| {
-            var txt = node.move.text() catch return;
-            jsDrawLineMove(&txt, 4, node.eval, node.remaining, i, node.alpha, node.beta);
-        }
-
-        internalBoard = lineGame;
-        boardView = @bitCast(internalBoard.squares);
-    } else {
-        consolePrint("No lines", .{});
-    }
-}
-
 var maxDepth: u32 = 0;
 var maxTimeMs: u32 = 0;
 // This will always be called at the beginning
@@ -285,5 +228,3 @@ export fn changeSettings(_maxTimeMs: u32, _maxDepth: u32) void {
     maxDepth = _maxDepth;
     maxTimeMs = _maxTimeMs;
 }
-
-extern fn jsDrawLineMove(ptr: [*]const u8, len: usize, eval: i32, remaining: u32, index: u32, alpha: i32, beta: i32) void;

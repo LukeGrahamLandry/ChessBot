@@ -237,7 +237,7 @@ function renderBoard() {
         const clickedIndex = frToIndex(clicked[0], clicked[1]);
         const targetSquaresFlag = Engine.getPossibleMoves(Number(clickedIndex));
         const clickedFlag = 1n << BigInt(clickedIndex);
-        if ((allPieces & clickedFlag) != 0)fillSquare(clicked[0], clicked[1], "yellow", true);
+        if ((allPieces & clickedFlag) != 0) fillSquare(clicked[0], clicked[1], "yellow", true);
         drawBitBoard(targetSquaresFlag, (whitePieces & clickedFlag) ? "lightblue" : "red");
     }
     
@@ -278,83 +278,6 @@ function handleResize(){
     board.width = size;
     board.height = size; 
     renderBoard();
-}
-
-function jsDrawCurrentBoard(depth, eval, index, count) {
-    const mainCtx = ctx;  // TODO: regreting having global variables right about now. 
-    const littleCanvas = document.createElement('canvas');
-    littleCanvas.style.background = "url(assets/board.svg)";
-    littleCanvas.style.border = "2px solid black"
-    littleCanvas.style.margin = "2px"
-    const size = 70;
-    littleCanvas.width = size;
-    littleCanvas.height = size; 
-    ctx = littleCanvas.getContext("2d");
-    document.body.appendChild(littleCanvas);
-    renderBoard();
-    ctx = mainCtx;
-}
-
-function handleDrawTree() {
-    // Engine.walkPossibleMoves();
-    engineRequestLine([]);
-}
-
-function engineRequestLine(indices) {
-    // TODO: hate this. just need some wasm accessable memory. 
-    if (indices.length*4 > FEN_BUFFER_SIZE) {
-        alert("overflow");
-        return;
-    }
-    const buffer = new Uint32Array(Engine.memory.buffer, Engine.fenView, FEN_BUFFER_SIZE / 4);
-    for (let i=0;i<indices.length;i++){
-        buffer[i] = indices[i];
-    }
-    Engine.getNextLineMoves(Engine.fenView, indices.length);
-    document.body.appendChild(document.createElement('hr'));
-    renderBoard();
-}
-
-let currentLinePath = [];
-let currentLineWords = [];
-function jsDrawLineMove(ptr, len, evall, depth, index, alpha, beta) {
-    const msgBuffer = new Uint8Array(Engine.memory.buffer, ptr, len);
-    const msgStr = textDecoder.decode(msgBuffer);
-    const btn = document.createElement('button');
-    btn.innerText = msgStr + " (E=" + evall + ", A=" + alpha + ", B=" + beta + ")";
-    btn.style.borderWidth = "2px";
-    if (evall > 0) {
-        btn.style.borderColor = "red";
-    } else if (evall < 0) {
-        btn.style.borderColor = "blue";
-    } else {
-        btn.style.borderColor = "purple";
-    }
-    btn.style.margin = "5px";
-    const previousPath = [...currentLinePath];
-    const previousPathWords = [...currentLineWords];
-    btn.onclick = () => {
-        currentLinePath = [...previousPath];
-        currentLinePath.push(index);
-        currentLineWords = [...previousPathWords];
-        currentLineWords.push(msgStr);
-        const info = document.createElement('button');
-        info.style.fontWeight = "bold";
-        info.innerText = currentLineWords + ". Eval: " + evall + ". Remaining: " + depth;
-
-        const freezePath = [...currentLinePath];
-        const freezeWords = [...currentLineWords];
-        info.onclick = () => {
-            currentLinePath = [...freezePath];
-            currentLineWords = [...freezeWords];
-            engineRequestLine(currentLinePath);
-            renderBoard();
-        }
-        document.body.appendChild(info);
-        document.body.appendChild(document.createElement('br'));
-        engineRequestLine(currentLinePath);
-    };
-    document.body.appendChild(btn);
 }
 
 let maxTimeMs = 0;

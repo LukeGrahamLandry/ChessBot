@@ -63,14 +63,8 @@
                 const msgStr = textDecoder.decode(msgBuffer);
                 alert(getWasmString(ptr, len));
             },
-            // TODO: this is silly but want to be able to start streaming wasm without waiting to load chess.js
-            jsDrawCurrentBoard: function(depth, eval, index, count) {
-                window.jsDrawCurrentBoard(depth, eval, index, count);
-            },
-            jsDrawLineMove: function (ptr, len, evall, depth, index, alpha, beta) {
-                window.jsDrawLineMove(ptr, len, evall, depth, index, alpha, beta);
-            }, 
-            jsPerformaceNow: () => performance.now(),  // TODO: why can't I just assign to performance.now? it says illigal invocation 
+            // TODO: why can't I just assign to performance.now? it says illigal invocation 
+            jsPerformaceNow: () => performance.now(),  
         }
     }
     if (typeof WebAssembly === "object" && WebAssembly.instantiateStreaming !== undefined) {

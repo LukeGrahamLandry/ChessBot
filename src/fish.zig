@@ -3,7 +3,7 @@
 const std = @import("std");
 const Board = @import("board.zig").Board;
 const Move = @import("board.zig").Move;
-const search = @import("search.zig").default;
+const search = @import("search.zig");
 const Timer = @import("common.zig").Timer;
 const GameOver = @import("board.zig").GameOver;
 const Magic = @import("common.zig").Magic;
@@ -82,7 +82,7 @@ pub fn playOneGame(fish: *Stockfish, gameIndex: usize, gamesTotal: u32) !GameOve
         log("[info]: Move {}. Game {}/{}.\n", .{ i, gameIndex, gamesTotal });
         log("[info]: I'm thinking.\n", .{});
         var t = Timer.start();
-        const move = search.bestMove(&board, config.myMaxDepth, config.myTimeLimitMS, &@import("search.zig").NoTrackLines.I) catch |err| {
+        const move = search.bestMove(.{}, &board, config.myMaxDepth, config.myTimeLimitMS) catch |err| {
             return try logGameOver(err, &board, &moveHistory, gt);
         };
 

@@ -4,7 +4,8 @@ const Colour = @import("board.zig").Colour;
 const Piece = @import("board.zig").Piece;
 const Kind = @import("board.zig").Kind;
 const StratOpts = @import("search.zig").StratOpts;
-const Strategy = @import("search.zig").Strategy;
+const bestMove = @import("search.zig").bestMove;
+const resetMemoTable = @import("search.zig").resetMemoTable;
 const MoveFilter = @import("movegen.zig").MoveFilter;
 const Move = @import("board.zig").Move;
 const Stats = @import("search.zig").Stats;
@@ -196,12 +197,11 @@ const bestMoveTests = [_]TestCase{
 };
 
 fn doesStratMakeBestMove(comptime opts: StratOpts) !void {
-    const strat = Strategy(opts);
-    const lines_out = &@import("search.zig").NoTrackLines.I; // TODO: hate this
     for (bestMoveTests) |position| {
+        resetMemoTable();
         var game = try Board.fromFEN(position.fen);
         const initialHash = game.zoidberg;
-        const move = try strat.bestMove(&game, maxDepth, maxTime, lines_out);
+        const move = try bestMove(opts, &game, maxDepth, maxTime);
 
         if (!std.mem.eql(u8, position.best[0..4], writeAlgebraic(move)[0..4])) {
             game.debugPrint();
@@ -216,6 +216,7 @@ fn doesStratMakeBestMove(comptime opts: StratOpts) !void {
 }
 
 test "default strat makes best move" {
+    setup();
     try doesStratMakeBestMove(.{});
 }
 
@@ -223,13 +224,16 @@ test "default strat makes best move" {
 // If only one part is wrong, the test with it disabled will still pass.
 
 test "no memo makes best move" {
+    setup();
     try doesStratMakeBestMove(.{ .doMemo = false });
 }
 
 test "no prune makes best move" {
+    setup();
     try doesStratMakeBestMove(.{ .doPruning = false });
 }
 
 test "no iter makes best move" {
+    setup();
     try doesStratMakeBestMove(.{ .doIterative = false });
 }

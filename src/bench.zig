@@ -25,7 +25,7 @@ pub fn main() !void {
 }
 
 fn replayGame(comptime opts: search.StratOpts) !std.ArrayList(board.Move) {
-    const strat = search.Strategy(opts);
+    search.resetMemoTable();
     var moves = std.mem.splitScalar(u8, gameStr, ' ');
     const t = Timer.start();
     var game = board.Board.initial();
@@ -34,7 +34,7 @@ fn replayGame(comptime opts: search.StratOpts) !std.ArrayList(board.Move) {
     var m: usize = 0;
     while (true) {
         // TODO: catch gameover on last move. 
-        try bestMoves.append(try strat.bestMove(&game, maxDepth, maxTime, &search.NoTrackLines.I));
+        try bestMoves.append(try search.bestMove(opts, &game, maxDepth, maxTime));
 
         const word = moves.next() orelse break;
         std.debug.assert(word.len == 4 or word.len == 5);
