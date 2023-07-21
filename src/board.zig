@@ -189,7 +189,7 @@ fn getZoidberg(piece: Piece, square: u6) u64 {
     return Magic.ZOIDBERG[index];
 }
 
-// TODO: Count moves for draw.
+// This is a chonker struct (if I store repititions inline) but that's fine because I only ever need one. 
 pub const Board = struct {
     // TODO: this could be a PackedIntArray if I remove padding from Piece and deal with re-encoding to bytes before sending to js. is that better?
     //       probably not since I dont need to hash all the bytes anymore and i dont copy them into table and dont copy to play moves so who cares how big this struct is

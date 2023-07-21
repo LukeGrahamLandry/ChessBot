@@ -222,6 +222,18 @@ export fn getFrenchMoveBB(board: *Board) u64 {
     }
 }
 
+export fn getAttackBB(board: *Board, colourI: u32) u64 {
+    const colour: Colour = if (colourI == 0) .White else .Black;
+    var out: @import("movegen.zig").GetAttackSquares = .{};
+    try @import("movegen.zig").genPossibleMoves(&out, board,colour,  std.testing.failing_allocator);
+    return out.getBB(board, colour);
+}
+
+export fn slidingChecksBB(board: *Board, colourI: u32) u64 {
+    const colour: Colour = if (colourI == 0) .White else .Black;
+    return @import("movegen.zig").slidingChecksBB(board, colour);
+}
+
 export fn isWhiteTurn(board: *Board) bool {
     return board.nextPlayer == .White;
 }

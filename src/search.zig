@@ -192,10 +192,6 @@ pub fn walkEval(comptime opts: StratOpts, game: *Board, remaining: i32, alphaIn:
     // TODO: should probably do this even less often 
     if (remaining > 2 and nanoTimestamp() >= endTime) return error.ForceStop;
 
-    // Want to mutate copies of values from parameters.
-    var alpha = alphaIn;
-    var beta = betaIn;
-
     var cacheHit: ?MemoValue = null;
     if (opts.doMemo) {
         if (memoMap.?.get(game)) |cached| {
@@ -205,13 +201,17 @@ pub fn walkEval(comptime opts: StratOpts, game: *Board, remaining: i32, alphaIn:
 
                 switch (cached.kind) {
                     .Exact => return cached.eval,
-                    .AlphaPrune => if (cached.eval <= alpha) return cached.eval,
-                    .BetaPrune => if (cached.eval >= beta) return cached.eval,
+                    .AlphaPrune => if (cached.eval <= alphaIn) return cached.eval,
+                    .BetaPrune => if (cached.eval >= betaIn) return cached.eval,
                 }
             }
             cacheHit = cached;
         }
     }
+
+    // Want to mutate copies of values from parameters.
+    var alpha = alphaIn;
+    var beta = betaIn;
 
     var moves = try genAllMoves.possibleMoves(game, me, alloc);
     defer alloc.free(moves);

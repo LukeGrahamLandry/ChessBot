@@ -1,3 +1,5 @@
+"use strict";
+
 const WHITE = 0;
 const BLACK = 1;
 const ENGINE_OK = -1;
@@ -8,6 +10,7 @@ const STR_BUFFER_SIZE = 512;
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 let mainCanvas = document.getElementById("board").getContext("2d");
+const enableBot = false;
 // const minMoveTimeMs = 500;  // When computer vs computer, if the engine is faster than this, it will wait before playing again. 
 
 // TODO: select which colour is human or computer. button to switch mid game for testing. ai vs ai mode. 
@@ -25,6 +28,8 @@ let ticker = null;
 let boardFenHistory = [];
 let gameOverMsg = null;
 function tickGame() {
+    if (!enableBot) return;
+
     const board = mainGame;
     const start = performance.now();
     const result = Engine.playBotMove(board, msgPtr, STR_BUFFER_SIZE);
@@ -97,7 +102,7 @@ function getFenFromEngine(board) {
 
 function isHumanTurn() {
     // This could be done by parsing the fen but that's a lot of extra code just to be slightly slower. 
-    return Engine.isWhiteTurn();
+    return !enableBot || Engine.isWhiteTurn();
 }
 
 let clicked = null;
@@ -192,6 +197,7 @@ function drawBitBoardPair(ctx, w, b) {
     }
 }
 
+const letters = ["A", "B", "C", "D", "E", "F", "G", "H"];
 function renderBoard(board, ctx) {
     const fen = getFenFromEngine(board);
     document.getElementById("fen").value = fen;
@@ -223,6 +229,15 @@ function renderBoard(board, ctx) {
             drawBitBoard(ctx, Engine.getFrenchMoveBB(board), "black");
             break;
         }
+        case "attacks": {
+            drawBitBoardPair(ctx, Engine.getAttackBB(board, WHITE), Engine.getAttackBB(board, BLACK));
+            break;
+        }
+        case "single_sliding_check": {
+            drawBitBoardPair(ctx, Engine.slidingChecksBB(board, WHITE), Engine.slidingChecksBB(board, BLACK));
+            break;
+        }
+        
         default: 
             console.log("Invalid bitBoardInfo string.");
     }
@@ -249,8 +264,7 @@ function renderBoard(board, ctx) {
                 const squareSize = ctx.canvas.width / 8;
                 ctx.font = "15px Arial";
                 ctx.fillStyle = "blue";
-                const letter = ["A", "B", "C", "D", "E", "F", "G", "H"][file];
-                ctx.fillText(letter + "" + (rank+1), (file) * squareSize, (7 - rank + 0.2) * squareSize);
+                ctx.fillText(letters[file] + "" + (rank+1), (file) * squareSize, (7 - rank + 0.2) * squareSize);
             }
         }
     }
@@ -297,7 +311,7 @@ let msgPtr;
 function startChess() {
     document.getElementById("loading").style.display = "none";
     if (Engine.protocolVersion() != 2) {
-        const msg = "Unrecognised engine protocol version (" + Engine.protocolVersion()  + "). Try force reloading the page!";
+        const msg = "Unrecognised engine protocol version (" + Engine.protocolVersion()  + "). Try force reloading the page and hope cloudflare doesn't cache everything!";
         alert(msg);
         document.getElementById("controls").innerText = msg;
         // window.location.reload(true);
@@ -316,7 +330,7 @@ function startChess() {
     document.getElementById("depth").addEventListener("input", handleSettingsChange);
     document.getElementById("time").addEventListener("input", handleSettingsChange);
     handleSettingsChange();
-    document.getElementById("showlabels").addEventListener("input", renderBoard);
+    document.getElementById("showlabels").addEventListener("input", () => renderBoard(mainGame, mainCanvas));
     renderBoard(mainGame, mainCanvas);
 }
 
