@@ -20,8 +20,6 @@ const PerftResult = struct {
     checkmates: u64 = 0,
 };
 
-const genKingCapturesOnly = @import("movegen.zig").MoveFilter.KingCapturesOnly.get();
-
 // TODO: try using a memo table here as well.
 fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, arenaAlloc: std.mem.Allocator, comptime countMates: bool) !PerftResult {
     var results: PerftResult = .{};
@@ -49,6 +47,12 @@ fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, arenaAllo
     }
 
     const allMoves = try MoveFilter.Any.get().possibleMoves(game, me, arenaAlloc);
+
+    // Trying to do depth 7 in one arena started using swap and got super slow. 
+    // TODO: does normal search have the same problem?
+    var arena2 = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var nextAlloc = if (remainingDepth == 7) arena2.allocator() else arenaAlloc;
+
     for (allMoves) |move| {
         const unMove = game.play(move);
         defer game.unplay(unMove);
@@ -57,11 +61,14 @@ fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, arenaAllo
         if (!countMates and (remainingDepth - 1) == 0) {
             results.games += 1;
         } else {
-            const next = try countPossibleGames(game, me.other(), remainingDepth - 1, arenaAlloc, countMates);
+            const next = try countPossibleGames(game, me.other(), remainingDepth - 1, nextAlloc, countMates);
             results.games += next.games;
             results.checkmates += next.checkmates;
         }
+
+        _ = arena2.reset(.retain_capacity);
     }
+    arena2.deinit();
 
     // Not checking for mate here, we only care about the ones on the bottom level.
     return results;
@@ -70,36 +77,32 @@ fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, arenaAllo
 // Tests that the move generation gets the right number of nodes at each depth.
 // Also exercises the Board.unplay function.
 // Can call this in a loop to test speed of raw movegen.
-pub fn runTestCountPossibleGames() !void {
+test "count possible games" {
     // https://en.wikipedia.org/wiki/Shannon_number
     try (PerftTest{
-        .possibleGames = &[_]u64{ 20, 400, 8902, 197281, 4865609 }, // 119060324 slow but passes. 3195901860 is too slow to deal with but also fails TODO uses a bunch of swap, need to clear the arena more!
-        .possibleMates = &[_]u64{ 0, 0, 0, 8, 347 }, //     10828                   435767
+        .possibleGames = &[_]u64{ 20, 400, 8902, 197281, 4865609 }, // 119060324, 3195901860 is too slow to deal with but passes
+        .possibleMates = &[_]u64{ 0, 0, 0, 8, 347 }, //                    10828      435767
         .fen = @import("board.zig").INIT_FEN,
     }).run();
-}
-
-test "count possible games" {
-    try runTestCountPossibleGames();
 }
 
 // This relies on tests not being run in parallel!
 var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 
-const PerftTest = struct {
+pub const PerftTest = struct {
     possibleGames: []const u64,
     possibleMates: []const u64,
     fen: []const u8,
     comptime countMates: bool = true,
 
-    fn run(self: PerftTest) !void {
+    pub fn run(self: PerftTest) !void {
         var game = try Board.fromFEN(self.fen);
         for (self.possibleGames, self.possibleMates, 1..) |expectedGames, expectedMates, i| {
-            // const start = std.time.nanoTimestamp();
+            const start = std.time.nanoTimestamp();
             const found = try countPossibleGames(&game, .White, i, arena.allocator(), self.countMates);
             const expected: PerftResult = .{ .games = expectedGames, .checkmates = (if (self.countMates) expectedMates else 0) };
             try std.testing.expectEqual(expected.games, found.games);
-            // print("- [{s}] Explored depth {} in {}ms.\n", .{ self.fen, i, @divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms)) });
+            if (!@import("builtin").is_test) print("- [{s}] Explored depth {} in {}ms.\n", .{ self.fen, i, @divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms)) });
 
             // Ensure that repeatedly calling unplay didn't mutate the board.
             try std.testing.expectEqual(game, try Board.fromFEN(self.fen));

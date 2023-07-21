@@ -51,8 +51,9 @@ var movesArena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 // TODO: should use the std mutex but i'm guessing wasm freestanding wont have one? 
 var stuffInUse = false;
 
-// TODO: make it more clear when in an arena and dont bother freeing.
+// This uses the global arenas above so individual dudes don't need to be dropped. 
 pub fn bestMove(comptime opts: StratOpts, game: *Board, maxDepth: usize, timeLimitMs: i128) !Move {
+    // Because RAII stands for "the code runs when the code damn well pleases" and we don't like that in this household apparently. 
     if (stuffInUse) return error.ThisIsntThreadSafe;
     stuffInUse = true;
     defer stuffInUse = false;
@@ -65,10 +66,8 @@ pub fn bestMove(comptime opts: StratOpts, game: *Board, maxDepth: usize, timeLim
     const endTime = startTime + (timeLimitMs * std.time.ns_per_ms);
     defer _ = upperArena.reset(.retain_capacity);
     var topLevelMoves = try genAllMoves.possibleMoves(game, me, upperArena.allocator());
-    defer upperArena.allocator().free(topLevelMoves);
 
     var evalGuesses = try std.ArrayList(i32).initCapacity(upperArena.allocator(), topLevelMoves.len);
-    defer evalGuesses.deinit();
 
     // Remove illigal moves.
     var m: usize = 0;
@@ -77,8 +76,7 @@ pub fn bestMove(comptime opts: StratOpts, game: *Board, maxDepth: usize, timeLim
         const unMove = game.play(move);
         defer game.unplay(unMove);
         if (game.inCheck(me)) {
-            // TODO: leak but arena
-            std.mem.swap(Move, &topLevelMoves[topLevelMoves.len - 1], &topLevelMoves[m]);
+            std.mem.swap(Move, &topLevelMoves[topLevelMoves.len - 1], &topLevelMoves[m]);  // Leak but arena so its fine
             topLevelMoves.len -= 1;
         } else {
             try evalGuesses.append(game.simpleEval);
@@ -191,6 +189,7 @@ pub fn walkEval(comptime opts: StratOpts, game: *Board, remaining: i32, alphaIn:
     if (game.halfMoveDraw >= 100 or game.hasInsufficientMaterial()) return Magic.DRAW_EVAL;
     // Getting the time at every leaf node slows it down. But don't want to wait to get all the way back to the top if we're out of time.
     // Note: since I'm not checking at top level, it just doen't limit time if maxDepth=2 but only matters if you give it <5 ms so don't care.
+    // TODO: should probably do this even less often 
     if (remaining > 2 and nanoTimestamp() >= endTime) return error.ForceStop;
 
     // Want to mutate copies of values from parameters.
@@ -277,30 +276,6 @@ pub fn walkEval(comptime opts: StratOpts, game: *Board, remaining: i32, alphaIn:
     }
 
     return bestVal;
-}
-
-// TODO: this could be faster if it didn't generate every possible move first
-pub fn hasAnyLegalMoves(game: *Board, alloc: std.mem.Allocator) !bool {
-    const colour = game.nextPlayer;
-    const moves = try genAllMoves.possibleMoves(game, colour, alloc);
-    defer alloc.free(moves);
-    if (moves.len == 0) return false;
-
-    for (moves) |move| {
-        const unMove = game.play(move);
-        defer game.unplay(unMove);
-        if (game.inCheck(colour)) continue;
-        return true;
-    }
-    return false;
-}
-
-pub fn isGameOver(game: *Board, alloc: std.mem.Allocator) !GameOver {
-    if (game.halfMoveDraw >= 100) return .FiftyMoveDraw;
-    if (game.hasInsufficientMaterial()) return .MaterialDraw;
-    if (try hasAnyLegalMoves(game, alloc)) return .Continue;
-    if (game.inCheck(game.nextPlayer)) return if (game.nextPlayer == .White) .BlackWins else .WhiteWins;
-    return .Stalemate;
 }
 
 pub const MemoEntry = struct {

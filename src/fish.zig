@@ -117,7 +117,7 @@ fn logGameOver(err: anyerror, board: *Board, moveHistory: *std.ArrayList([5]u8),
 
     switch (err) {
         error.GameOver => {
-            const result = try search.isGameOver(board, general.allocator());
+            const result = try board.gameOverReason(general.allocator());
             const msg = switch (result) {
                 .Continue => "Game over but player can still move? This is a bug!",
                 .Stalemate => "Draw (stalemate).",
@@ -189,16 +189,20 @@ fn playUciMove(fish: *Stockfish, board: *Board, moveHistory: *std.ArrayList([5]u
 
 const Stockfish = struct {
     process: std.ChildProcess,
+    buffer: Reader,
+    const Reader = std.io.BufferedReader(4096, std.fs.File.Reader);
 
     pub fn init() !Stockfish {
-        var stockFishProcess = std.ChildProcess.init(&[_][]const u8{"stockfish"}, general.allocator());
-        stockFishProcess.stdin_behavior = .Pipe;
-        stockFishProcess.stdout_behavior = .Pipe;
-        stockFishProcess.stderr_behavior = .Pipe;
-        stockFishProcess.stdout = std.io.getStdIn();
-        // TODO: helpful error message if stockfish isnt installed.
-        try stockFishProcess.spawn();
-        return .{ .process = stockFishProcess };
+        var process = std.ChildProcess.init(&[_][]const u8{"stockfish"}, general.allocator());
+        process.stdin_behavior = .Pipe;
+        process.stdout_behavior = .Pipe;
+        process.stderr_behavior = .Pipe;
+        process.stdout = std.io.getStdIn();
+        try process.spawn();  // TODO: helpful error message if stockfish isnt installed.
+        return .{ 
+            .process = process, 
+            .buffer = .{ .unbuffered_reader=process.stdout.?.reader() },
+        };
     }
 
     pub fn deinit(self: *Stockfish) !void {
@@ -212,9 +216,8 @@ const Stockfish = struct {
     pub fn recieve(self: *Stockfish) !UCI.UciResult {
         var buf: [16384]u8 = undefined;
         var resultStream = std.io.fixedBufferStream(&buf);
-        const in = self.process.stdout.?.reader();
         // Don't care about the max because fixedBufferStream will give a write error if it overflows.
-        try in.streamUntilDelimiter(resultStream.writer(), '\n', null);
+        try self.buffer.reader().streamUntilDelimiter(resultStream.writer(), '\n', null);
         const msg = resultStream.getWritten();
         return try UCI.UciResult.parse(msg);
     }

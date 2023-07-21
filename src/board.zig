@@ -30,7 +30,7 @@ pub const Colour = enum(u1) {
         return @enumFromInt(~@intFromEnum(self));
     }
 
-    pub inline fn dir(self: Colour) i32 {
+    pub fn dir(self: Colour) i32 {
         // 0 -> 1, 1 -> -1
         return 1 - 2 * @as(i32, @intFromEnum(self));
     }
@@ -129,6 +129,7 @@ pub const OldMove = struct {
     taken: Piece,
     original: Piece,
     old_castling: CastlingRights,
+    lastMove: ?Move,
     // TODO: remove or easy way to toggle off in release. probably doesnt matter but offends me.
     debugPeicePositions: BitBoardPair,
     debugSimpleEval: i32,
@@ -180,7 +181,7 @@ comptime {
 const FrenchMove = union(enum) { none, file: u4 };
 const slowTrackAllMoves = false;
 
-inline fn getZoidberg(piece: Piece, square: u6) u64 {
+fn getZoidberg(piece: Piece, square: u6) u64 {
     const kindOffset: usize = @intCast(@intFromEnum(piece.kind));
     const colourOffset: usize = @intCast(@intFromEnum(piece.colour));
     const offset = (kindOffset + colourOffset) * 64;
@@ -204,8 +205,12 @@ pub const Board = struct {
     castling: CastlingRights = .{},
     halfMoveDraw: u32 = 0,
     fullMoves: u32 = 1,
-    line: if (slowTrackAllMoves) std.BoundedArray(OldMove, 100) else void = if (slowTrackAllMoves) std.BoundedArray(OldMove, 100).init(0) catch @panic("Overflow line.") else {}, // inefficient but useful for debugging.
+    line: if (slowTrackAllMoves) std.BoundedArray(OldMove, 300) else void = if (slowTrackAllMoves) std.BoundedArray(OldMove, 300).init(0) catch @panic("Overflow line.") else {}, // inefficient but useful for debugging.
     zoidberg: u64 = 1,
+    lastMove: ?Move = null,  
+
+    // TODO: For draw by repetition. 
+    // pastBoardHashes: std.BoundedArray(u64, 300) = std.BoundedArray(u64, 300).init(0) catch @panic("OOM?"),
 
     pub fn blank() Board {
         return .{};
@@ -246,14 +251,12 @@ pub const Board = struct {
         const flag = @as(u64, 1) << i;
         const isEmpty = ((self.peicePositions.white & flag) | (self.peicePositions.black & flag)) == 0;
         return isEmpty;
-        // return self.squares[index].kind == .Empty;
     }
 
     /// This assumes that <move> is legal.
     pub fn play(self: *Board, move: Move) OldMove {
-        // print("start play\n", .{});
         assert(move.from != move.to);
-        const thisMove: OldMove = .{ .move = move, .taken = self.squares[move.to], .original = self.squares[move.from], .old_castling = self.castling, .debugPeicePositions = self.peicePositions, .debugSimpleEval = self.simpleEval, .frenchMove = self.frenchMove, .oldHalfMoveDraw = self.halfMoveDraw, .debugZoidberg = self.zoidberg };
+        const thisMove: OldMove = .{ .move = move, .taken = self.squares[move.to], .original = self.squares[move.from], .old_castling = self.castling, .debugPeicePositions = self.peicePositions, .debugSimpleEval = self.simpleEval, .frenchMove = self.frenchMove, .oldHalfMoveDraw = self.halfMoveDraw, .debugZoidberg = self.zoidberg, .lastMove=self.lastMove };
         assert(thisMove.original.colour == self.nextPlayer);
         const colour = thisMove.original.colour;
         self.simpleEval -= thisMove.taken.eval();
@@ -374,16 +377,20 @@ pub const Board = struct {
         }
 
         self.nextPlayer = self.nextPlayer.other();
-        // self.line.append(thisMove) catch @panic("Overflow line.");
+        if (slowTrackAllMoves) self.line.append(thisMove) catch @panic("Overflow line.");
+        self.lastMove = move;
+        // self.pastBoardHashes.append(self.zoidberg) catch {}; // TODO
         return thisMove;
     }
 
     // Thought this would be faster because less copying but almost no difference (at the time. TODO: check again).
     /// <move> must be the value returned from playing the most recent move.
     pub fn unplay(self: *Board, move: OldMove) void {
+        // _ = self.pastBoardHashes.pop();
         // print("start unplay\n", .{});
+        self.lastMove = move.lastMove;
         self.zoidberg ^= Magic.ZOIDBERG[Magic.ZOID_TURN_INDEX];
-        // assert(std.meta.eql(self.line.pop(), move));
+        if (slowTrackAllMoves) assert(std.meta.eql(self.line.pop(), move));
         const colour = move.original.colour;
         self.castling = move.old_castling;
         self.simpleEval += move.taken.eval();
@@ -454,13 +461,6 @@ pub const Board = struct {
         assert(self.zoidberg == move.debugZoidberg);
     }
 
-    /// Probably bad and slow! Only use for test code / debugging!
-    pub fn copyPlay(self: *const Board, move: Move) Board {
-        var board = self.*;
-        _ = board.play(move);
-        return board;
-    }
-
     pub fn fromFEN(fen: []const u8) error{InvalidFen}!Board {
         return try UCI.parseFen(fen);
     }
@@ -506,6 +506,30 @@ pub const Board = struct {
         return @import("movegen.zig").reverseFromKingIsInCheck(self, me);
     }
 
+    pub fn gameOverReason(game: *Board, alloc: std.mem.Allocator) !GameOver {
+        if (game.halfMoveDraw >= 100) return .FiftyMoveDraw;
+        if (game.hasInsufficientMaterial()) return .MaterialDraw;
+        if (try game.nextPlayerHasLegalMoves(alloc)) return .Continue;
+        if (game.inCheck(game.nextPlayer)) return if (game.nextPlayer == .White) .BlackWins else .WhiteWins;
+        return .Stalemate;
+    }
+
+    // This could be faster if it didn't generate every possible move first but it's not used in the search loop so nobody cares. 
+    pub fn nextPlayerHasLegalMoves(game: *Board, alloc: std.mem.Allocator) !bool {
+        const colour = game.nextPlayer;
+        const moves = try genAllMoves.possibleMoves(game, colour, alloc);
+        defer alloc.free(moves);
+        if (moves.len == 0) return false;
+
+        for (moves) |move| {
+            const unMove = game.play(move);
+            defer game.unplay(unMove);
+            if (game.inCheck(colour)) continue;
+            return true;
+        }
+        return false;
+    }
+
     // https://www.chess.com/article/view/how-chess-games-can-end-8-ways-explained#insufficient-material
     pub fn hasInsufficientMaterial(game: *Board) bool {
         const total = @popCount(game.peicePositions.white | game.peicePositions.white);
@@ -534,8 +558,8 @@ pub const Board = struct {
 
 pub const AppendErr = error{Overflow} || std.mem.Allocator.Error;
 
-// !!!Compiler bug!!! https://github.com/ziglang/zig/issues/16392
-pub const CastleMove = packed struct { rookFrom: u6, rookTo: u6 };
+// ? https://github.com/ziglang/zig/issues/16392
+pub const CastleMove = packed struct { rookFrom: u6, rookTo: u6, _fuck: u4 = 0 };
 
 // TODO: this seems much too big (8 bytes?). castling info is redunant cause other side can infer if king moves 2 squares, bool field is evil and redundant
 pub const Move = struct {

@@ -33,3 +33,10 @@ Running in Debug is super slow. ReleaseFast shouldn't be used when running the t
 ### Zobrist Hashing
 
 - https://en.wikipedia.org/wiki/Zobrist_hashing
+
+## Art
+
+The same textures every other low effort chess game in the universe found by googling for free chess icons. 
+
+- https://commons.wikimedia.org/wiki/File:Chess_Pieces_Sprite.svg jurgenwesterhof (adapted from work of Cburnett), CC BY-SA 3.0 <https://creativecommons.org/licenses/by-sa/3.0>, via Wikimedia Commons
+- https://commons.wikimedia.org/wiki/File:Chessboard480.svg החבלן, CC0, via Wikimedia Commons

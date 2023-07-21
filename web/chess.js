@@ -1,8 +1,13 @@
 const WHITE = 0;
 const BLACK = 1;
+const ENGINE_OK = -1;
+const ENGINE_ERROR = -2;
+const ENGINE_ILLEGAL_MOVE = -3;
+const STR_BUFFER_SIZE = 512;
+
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
-let ctx = document.getElementById("board").getContext("2d");
+let mainCanvas = document.getElementById("board").getContext("2d");
 // const minMoveTimeMs = 500;  // When computer vs computer, if the engine is faster than this, it will wait before playing again. 
 
 // TODO: select which colour is human or computer. button to switch mid game for testing. ai vs ai mode. 
@@ -14,31 +19,35 @@ let ctx = document.getElementById("board").getContext("2d");
 // TODO: show the line it thinks is best 
 // TODO: save game in local storage 
 // TODO: slider for memo table size
+// TODO: a board pointer and a canvas target could be a class instead of scattered global variables. 
 
 let ticker = null;
 let boardFenHistory = [];
 let gameOverMsg = null;
 function tickGame() {
+    const board = mainGame;
     const start = performance.now();
-    const result = Engine.playNextMove();
-    boardFenHistory.push(getFenFromEngine());
+    const result = Engine.playBotMove(board, msgPtr, STR_BUFFER_SIZE);
+    boardFenHistory.push(getFenFromEngine(board, fenPtr, STR_BUFFER_SIZE));
     const time = Math.round(performance.now() - start);
     console.log("Found move in " + time + "ms.");
-    renderBoard();
-    if (result == 0) {  // Continue
+    renderBoard(mainGame, mainCanvas);;
+    if (result == ENGINE_OK) { 
         // TODO: do this if computer vs computer.  
         // if (time < minMoveTimeMs) ticker = window.setTimeout(tickGame, minMoveTimeMs - time);
         // else ticker = window.setTimeout(tickGame, 1);
-    } else if (result > 1) {  // Game over
-        gameOverMsg = getWasmString(Engine.msgBuffer, result);
+    } else if (result > 0) {  // Game over
+        gameOverMsg = getWasmString(msgPtr, result);
         console.log(gameOverMsg);
-        renderBoard();
-    } else {  // Engine error
-        reportEngineMsg(result);
-        document.getElementById("resume").disabled = true;
-        document.getElementById("pause").disabled = true;
+        renderBoard(mainGame, mainCanvas);;
+    } else {
+        handleEngineError();
     }
 };
+
+function handleEngineError(){
+    document.getElementById("controls").style.display = "none";
+}
 
 function handleAskRestart() {
     if (confirm("Reset the game to the initial position?")) handleRestart();
@@ -47,10 +56,10 @@ function handleAskRestart() {
 function handleRestart() {
     handlePause();
     console.log(boardFenHistory);
-    Engine.restartGame();
-    boardFenHistory = [getFenFromEngine()];
+    Engine.restartGame(mainGame);
+    boardFenHistory = [getFenFromEngine(mainGame, fenPtr, STR_BUFFER_SIZE)];
     gameOverMsg = null;
-    renderBoard();
+    renderBoard(mainGame, mainCanvas);
 }
 
 function handlePause(){
@@ -65,27 +74,25 @@ function handleResume(){
     document.getElementById("pause").disabled = false;
 }
 
-const FEN_BUFFER_SIZE = 80;
-
 function handleSetFromFen(){
     handlePause();
     // The length here must match the size of fenView in Zig to prevent writes overflowing when string too long. 
-    const fenBuffer = new Uint8Array(Engine.memory.buffer, Engine.fenView, FEN_BUFFER_SIZE);
+    const fenBuffer = new Uint8Array(Engine.memory.buffer, fenPtr, STR_BUFFER_SIZE);
     const fenString = document.getElementById("fen").value;
     const length = textEncoder.encodeInto(fenString, fenBuffer).written;
-    const success = Engine.setFromFen(length);
+    const success = Engine.setFromFen(mainGame, fenPtr, length);
     if (!success) alert("Invalid FEN.");
-    renderBoard();
+    renderBoard(mainGame, mainCanvas);
     // tickGame();
 }
 
-function getFenFromEngine() {
-    const length = Engine.getFen();
+function getFenFromEngine(board) {
+    const length = Engine.getFen(board, fenPtr, STR_BUFFER_SIZE);
     if (length === 0) {
-        reportEngineMsg(1);
+        handleEngineError();
         return;
     }
-    return getWasmString(Engine.fenView, length);
+    return getWasmString(fenPtr, length);
 }
 
 function isHumanTurn() {
@@ -95,12 +102,12 @@ function isHumanTurn() {
 
 let clicked = null;
 function handleCanvasClick(e) {
-    const squareSize = ctx.canvas.getBoundingClientRect().width / 8;
+    const squareSize = mainCanvas.canvas.getBoundingClientRect().width / 8;
     const file = Math.floor(e.offsetX / squareSize);
     const rank = 7 - Math.floor(e.offsetY / squareSize);
     if (clicked === null){
         clicked = [file, rank];  // TODO: dont like this. use index or be object
-        renderBoard();
+        renderBoard(mainGame, mainCanvas);
     } else {
         if (!isHumanTurn()) {
             clicked = [file, rank];
@@ -111,36 +118,25 @@ function handleCanvasClick(e) {
         const toIndex = frToIndex(file, rank);
 
         // TODO: make sure trying to move while the engine is thinking doesn't let you use the wrong colour. 
-        const result = Engine.playHumanMove(fromIndex, toIndex);
+        const result = Engine.playHumanMove(mainGame, fromIndex, toIndex);
         switch (result) {
-            case 0:
+            case ENGINE_OK:
                 clicked = null;
-                boardFenHistory.push(getFenFromEngine());
-                renderBoard();
+                boardFenHistory.push(getFenFromEngine(mainGame, fenPtr, STR_BUFFER_SIZE));
+                renderBoard(mainGame, mainCanvas);
                 // TODO: only do this if other player is engine. 
                 setTimeout(tickGame, 25);  // Give it a chance to render.
                 break;
-            case 4: // Invalid move. 
+            case ENGINE_ILLEGAL_MOVE:
                 console.log("Player tried illigal move.");
                 clicked = [file, rank];
-                renderBoard();
-                break;
-            default:
-                reportEngineMsg(result);
+                renderBoard(mainGame, mainCanvas);;
                 break;
         }
     }
 }
 
-function reportEngineMsg(result) {
-    // TODO: give zig a way to return the type of error. 
-    msg = "Engine error " + result;
-    clearInterval(ticker);
-    document.getElementById("controls").style.display = "none";
-    document.getElementById("letters").innerText += "\n" + msg;
-}
-
-function drawPiece(file, rank, pieceByte) {
+function drawPiece(ctx, file, rank, pieceByte) {
     if (pieceByte === 0) return;
     
     const kind = BigInt(pieceByte) >> 1n;
@@ -151,6 +147,7 @@ function drawPiece(file, rank, pieceByte) {
     } else {
         const sX = (Number(kind) - 1) * imgSquareSize;
         const sY = (pieceByte % 2 === 0) ? 0 : imgSquareSize;  // White or Black
+
         ctx.drawImage(chessImg, sX, sY, imgSquareSize, imgSquareSize, file * squareSize, (7 - rank) * squareSize, squareSize, squareSize);
     }
     
@@ -167,36 +164,36 @@ let bitBoardInfo = "none";
 function handleBitboardSelect() {
     const value = document.getElementById("bitboard").value;
     bitBoardInfo = value;
-    renderBoard();
+    renderBoard(mainGame, mainCanvas);;
 }
 
-function drawBitBoard(targetSquaresFlag, colour) {
+function drawBitBoard(ctx, targetSquaresFlag, colour) {
+    if (targetSquaresFlag == 0n) return;
+
     // The 'n' suffix makes it use BigInt instead of doubles so I can use it as a u64 bit flag. 
     for (let i=0n;i<64n;i++) {
         const flag = 1n << i;
         if (targetSquaresFlag & flag) {
-            fillSquare(Number(i % 8n), Number(i / 8n), colour, true);
+            fillSquare(ctx, Number(i % 8n), Number(i / 8n), colour, true);
         }
     }
 }
 
-function drawBitBoardPair(magicEngineIndex) {
-    const w = Engine.getBitBoard(magicEngineIndex, WHITE);
-    const b = Engine.getBitBoard(magicEngineIndex, BLACK);
+function drawBitBoardPair(ctx, w, b) {
     for (let i=0n;i<64n;i++) {
         const flag = 1n << i;
         if (w & b & flag) {
-            fillSquare(Number(i % 8n), Number(i / 8n), "purple", false);
+            fillSquare(ctx, Number(i % 8n), Number(i / 8n), "purple", false);
         } else if (w & flag) {
-            fillSquare(Number(i % 8n), Number(i / 8n), "red", false);
+            fillSquare(ctx, Number(i % 8n), Number(i / 8n), "red", false);
         } else if (b & flag) {
-            fillSquare(Number(i % 8n), Number(i / 8n), "blue", false);
+            fillSquare(ctx, Number(i % 8n), Number(i / 8n), "blue", false);
         }
     }
 }
 
-function renderBoard() {
-    const fen = getFenFromEngine();
+function renderBoard(board, ctx) {
+    const fen = getFenFromEngine(board);
     document.getElementById("fen").value = fen;
     document.getElementById("player").innerText = gameOverMsg != null ? gameOverMsg : (Engine.isWhiteTurn() ? "White" : "Black") + "'s Turn";
     document.getElementById("mEval").innerText = Engine.getMaterialEval();
@@ -210,20 +207,20 @@ function renderBoard() {
         case "none":
             break;
         case "all": 
-            drawBitBoardPair(0);
+            drawBitBoardPair(ctx, Engine.getPositionsBB(board, WHITE), Engine.getPositionsBB(board, BLACK));
             break;
         case "king": 
-            drawBitBoardPair(1);
+            drawBitBoardPair(ctx, Engine.getKingsBB(board, WHITE), Engine.getKingsBB(board, BLACK));
             break;
         case "castle": 
-            drawBitBoardPair(2);
+            drawBitBoardPair(ctx, Engine.getCastlingBB(board, WHITE), Engine.getCastlingBB(board, BLACK));
             break;
         case "prev": {
-            drawBitBoard(Engine.getBitBoard(3, 0), "green");
+            drawBitBoard(ctx, Engine.getLastMoveBB(board), "green");
             break;
         }
         case "french": {
-            drawBitBoard(Engine.getBitBoard(4, 0), "black");
+            drawBitBoard(ctx, Engine.getFrenchMoveBB(board), "black");
             break;
         }
         default: 
@@ -231,22 +228,22 @@ function renderBoard() {
     }
 
     if (clicked != null) {
-        const whitePieces = BigInt(Engine.getBitBoard(0, WHITE));
-        const blackPieces = BigInt(Engine.getBitBoard(0, BLACK));
+        const whitePieces = BigInt(Engine.getPositionsBB(board, WHITE));
+        const blackPieces = BigInt(Engine.getPositionsBB(board, BLACK));
         const allPieces = whitePieces | blackPieces;
         const clickedIndex = frToIndex(clicked[0], clicked[1]);
-        const targetSquaresFlag = Engine.getPossibleMoves(Number(clickedIndex));
+        const targetSquaresFlag = Engine.getPossibleMovesBB(board, Number(clickedIndex));
         const clickedFlag = 1n << BigInt(clickedIndex);
-        if ((allPieces & clickedFlag) != 0) fillSquare(clicked[0], clicked[1], "yellow", true);
-        drawBitBoard(targetSquaresFlag, (whitePieces & clickedFlag) ? "lightblue" : "red");
+        if ((allPieces & clickedFlag) != 0) fillSquare(ctx, clicked[0], clicked[1], "yellow", true);
+        drawBitBoard(ctx, targetSquaresFlag, (whitePieces & clickedFlag) ? "lightblue" : "red");
     }
     
     // TODO: why do I need to remake this slice every time?
-    const board = new Uint8Array(Engine.memory.buffer, Engine.boardView);
+    const pieces = new Uint8Array(Engine.memory.buffer, Engine.getBoardData(board));
     for (let rank=0;rank<8;rank++){
         for (let file=0;file<8;file++){
-            const p = board[rank*8 + file];
-            drawPiece(file, rank, p);
+            const p = pieces[rank*8 + file];
+            drawPiece(ctx, file, rank, p);
 
             if (document.getElementById("showlabels").checked) {
                 const squareSize = ctx.canvas.width / 8;
@@ -259,7 +256,7 @@ function renderBoard() {
     }
 }
 
-function fillSquare(file, rank, colour, isSmall) {
+function fillSquare(ctx, file, rank, colour, isSmall) {
     const squareSize = ctx.canvas.width / 8;
     ctx.fillStyle = colour;
     if (isSmall) {
@@ -272,12 +269,11 @@ function fillSquare(file, rank, colour, isSmall) {
 
 function handleResize(){
     const size = Math.min(Math.min(window.innerWidth, window.innerHeight) * 0.9, 600);
-    const board = document.getElementById("board");
-    board.style.width = "";
-    board.style.height = "";
-    board.width = size;
-    board.height = size; 
-    renderBoard();
+    mainCanvas.canvas.style.width = "";
+    mainCanvas.canvas.style.height = "";
+    mainCanvas.canvas.width = size;
+    mainCanvas.canvas.height = size; 
+    renderBoard(mainGame, mainCanvas);
 }
 
 let maxTimeMs = 0;
@@ -295,19 +291,33 @@ function getWasmString(ptr, len) {
     return textDecoder.decode(buffer);
 }
 
+let mainGame;
+let fenPtr;
+let msgPtr;
 function startChess() {
-    Engine.setup();
     document.getElementById("loading").style.display = "none";
+    if (Engine.protocolVersion() != 2) {
+        const msg = "Unrecognised engine protocol version (" + Engine.protocolVersion()  + "). Try force reloading the page!";
+        alert(msg);
+        document.getElementById("controls").innerText = msg;
+        // window.location.reload(true);
+        return;
+    }
+
+    Engine.setup();
+    mainGame = Engine.createBoard();
+    fenPtr = Engine.alloc(STR_BUFFER_SIZE);
+    msgPtr = Engine.alloc(STR_BUFFER_SIZE);
     handleResize();
     document.getElementById("board").addEventListener("click", handleCanvasClick);
     addEventListener("resize", handleResize);
     handleRestart();
     handleBitboardSelect();
-    renderBoard();
     document.getElementById("depth").addEventListener("input", handleSettingsChange);
     document.getElementById("time").addEventListener("input", handleSettingsChange);
     handleSettingsChange();
     document.getElementById("showlabels").addEventListener("input", renderBoard);
+    renderBoard(mainGame, mainCanvas);
 }
 
 window.chessJsReady = true;

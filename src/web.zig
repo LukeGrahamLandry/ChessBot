@@ -5,32 +5,28 @@ const assert = std.debug.assert;
 const Colour = @import("board.zig").Colour;
 const Board = @import("board.zig").Board;
 const Piece = @import("board.zig").Piece;
-const bestMove = @import("search.zig").bestMove;
-const isGameOver = @import("search.zig").isGameOver;
-const genAllMoves = @import("search.zig").genAllMoves;
+const search = @import("search.zig");
 const Move = @import("board.zig").Move;
 const Magic = @import("common.zig").Magic;
-const Lines = @import("search.zig").Lines;
 const print = consolePrint;
 
-comptime {
-    assert(@sizeOf(Piece) == @sizeOf(u8));
-}
-// TODO: want multiple games so give js opaque pointers instead.
-var internalBoard: Board = Board.initial();
-export var boardView: [64]u8 = undefined;
-export var fenView: [80]u8 = undefined; // This length MUST match the one in js handleSetFromFen.
-export var msgBuffer: [80]u8 = undefined; // This length MUST match the one in js
-var lastMove: ?Move = null;
-
-const alloc = std.heap.wasm_allocator;
-var notTheRng = std.rand.DefaultPrng.init(0);
-var rng = notTheRng.random();
+const walloc = std.heap.wasm_allocator;
 
 extern fn jsConsoleLog(ptr: [*]const u8, len: usize) void;
 extern fn jsAlert(ptr: [*]const u8, len: usize) void; // TODO: use for assertions if enabled
 extern fn jsDrawCurrentBoard(depth: i32, eval: i32, index: u32, count: u32) void;
 pub extern fn jsPerformaceNow() f64;
+
+// This lets js detect if something got cached and its using a version of the wasm blob with an API it won't understand.
+export fn protocolVersion() i32 {
+    return 2;
+}
+
+const JsResult = enum(i32) {
+    Ok = -1,
+    Error = -2,
+    IllegalMove = -3,
+};
 
 // TODO: think about this more. since printing is a comptime thing, commenting these out saves ~115kb (out of ~400).
 pub fn consolePrint(comptime fmt: []const u8, args: anytype) void {
@@ -45,173 +41,189 @@ pub fn alertPrint(comptime fmt: []const u8, args: anytype) void {
     jsAlert(str.ptr, str.len);
 }
 
+export fn alloc(len: u32) ?[*]u8 {
+    const mem = walloc.alloc(u8, len) catch |err| {
+        logErr(err, "alloc");
+        return null;
+    };
+    return mem.ptr;
+}
+
+export fn drop(ptr: ?[*]u8, len: u32) void {
+    if (ptr) |nnptr| {
+        walloc.free(nnptr[0..len]);
+    }
+}
+
+export fn createBoard() ?*Board {
+    var board = walloc.create(Board) catch |err| {
+        logErr(err, "createBoard");
+        return null;
+    };
+    board.* = Board.initial();
+    return board;
+}
+
+export fn destroyBoard(board: *Board) void {
+    walloc.destroy(board);
+}
+
 export fn setup() void {
     @import("common.zig").setup();
 }
 
-/// OUT: internalBoard, boardView, lastMove
-export fn restartGame() void {
-    internalBoard = Board.initial();
-    boardView = @bitCast(internalBoard.squares);
-    lastMove = null;
+export fn restartGame(board: *Board) void {
+    board.* = Board.initial();
 }
 
-/// Returns 0->continue, 1->error, >1 -> game over string length
-/// IN: internalBoard, boardView
-/// OUT: internalBoard, boardView, msgBuffer, lastMove
-export fn playNextMove() i32 {
-    const move = bestMove(.{}, &internalBoard, maxDepth, maxTimeMs) catch |err| {
+comptime { assert(@sizeOf(Piece) == @sizeOf(u8)); }
+export fn getBoardData(board: *Board) [*]u8 {
+    return @ptrCast(&board.squares);
+}
+
+/// Returns 0 for continue or game over string length
+export fn playBotMove(board: *Board, msgPtr: [*] u8, maxLen: u32) i32 {
+    const move = search.bestMove(.{}, board, maxDepth, maxTimeMs) catch |err| {
         switch (err) {
             error.GameOver => {
                 // Engine couldn't move.
-                const len = checkGameOver();
-                return if (len > 0) len else 1;
+                const len = checkGameOver(board, msgPtr, maxLen);
+                return if (len > 0) len else @intFromEnum(JsResult.Error);
             },
             else => logErr(err, "playNextMove"),
         }
-        return 1;
+        return @intFromEnum(JsResult.Error);
     };
 
-    _ = internalBoard.play(move);
-    lastMove = move;
-    boardView = @bitCast(internalBoard.squares);
+    _ = board.play(move);
 
-    return checkGameOver(); // Check if human won't be able to move.
+    // Check if human won't be able to move next turn.
+    const len = checkGameOver(board, msgPtr, maxLen);
+    return if (len > 0) len else @intFromEnum(JsResult.Ok);
 }
 
-fn checkGameOver() i32 {
-    const reason = isGameOver(&internalBoard, alloc) catch return -1;
+fn checkGameOver(board: *Board, msgPtr: [*] u8, maxLen: u32) i32 {
+    const reason = board.gameOverReason(walloc) catch return -1;
     if (reason == .Continue) return 0;
     const str = @tagName(reason);
-    print("Game over: {s}", .{str});
-    // TODO: cringe global string buffer.
-    @memcpy(msgBuffer[0..str.len], str);
+    print("Game over: {s}\n", .{str});
+    @memcpy(msgPtr[0..@min(str.len, maxLen)], str);
     return @intCast(str.len);
 }
 
 /// Returns a bit board showing which squares the piece in <from> can move to.
-/// IN: internalBoard
-export fn getPossibleMoves(from: i32) u64 {
-    const piece = internalBoard.squares[@intCast(from)];
+export fn getPossibleMovesBB(board: *Board, from: i32) u64 {
+    const piece = board.squares[@intCast(from)];
     if (piece.empty()) return 0;
     var result: u64 = 0;
     const file = @mod(from, 8);
     const rank = @divFloor(from, 8);
 
-    var allMoves = std.ArrayList(Move).init(alloc);
-    genAllMoves.collectOnePieceMoves(&allMoves, &internalBoard, @intCast(from), @intCast(file), @intCast(rank)) catch |err| {
+    var allMoves = std.ArrayList(Move).init(walloc);
+    search.genAllMoves.collectOnePieceMoves(&allMoves, board, @intCast(from), @intCast(file), @intCast(rank)) catch |err| {
         logErr(err, "getPossibleMoves");
-        return 1;
+        return 0;
     };
     defer allMoves.deinit();
     for (allMoves.items) |move| {
-        const unMove = internalBoard.play(move);
-        defer internalBoard.unplay(unMove);
-        if (internalBoard.inCheck(piece.colour)) continue;
+        const unMove = board.play(move);
+        defer board.unplay(unMove);
+        if (board.inCheck(piece.colour)) continue;
         result |= @as(u64, 1) << @intCast(move.to);
     }
     return result;
 }
 
-/// IN: fenView
-/// OUT: internalBoard, boardView
-export fn setFromFen(length: u32) bool {
-    const fenSlice = fenView[0..@as(usize, length)];
+export fn setFromFen(board: *Board, ptr: [*] const u8, len: u32) bool {
+    const fenSlice = ptr[0..@as(usize, len)];
     const temp = Board.fromFEN(fenSlice) catch |err| {
         logErr(err, "setFromFen");
         return false;
     };
-    internalBoard = temp;
-    boardView = @bitCast(internalBoard.squares);
-    lastMove = null;
+    board.* = temp;
     return true;
 }
 
 /// Returns the length of the string or 0 if error.
-/// IN: internalBoard
-/// OUT: fenView
-export fn getFen() u32 {
-    var buffer = std.heap.FixedBufferAllocator.init(&fenView);
-    const fen = internalBoard.toFEN(buffer.allocator()) catch |err| {
+export fn getFen(board: *const Board, out_ptr: [*] u8, maxLen: u32) u32 {
+    var buffer = std.heap.FixedBufferAllocator.init(out_ptr[0..maxLen]);
+    const fen = board.toFEN(buffer.allocator()) catch |err| {
         logErr(err, "getFen");
         return 0;
     };
     return fen.len;
 }
 
-/// IN: internalBoard
-export fn getMaterialEval() i32 {
-    return internalBoard.simpleEval;
+export fn getMaterialEval(board: *Board) i32 {
+    return board.simpleEval;
 }
 
 /// Returns 0->continue, 1->error, 4->invalid move.
-/// IN: internalBoard, boardView
-/// OUT: internalBoard, boardView, msgBuffer
-export fn playHumanMove(fromIndex: u32, toIndex: u32) i32 {
-    if (fromIndex >= 64 or toIndex >= 64) return 1;
+export fn playHumanMove(board: *Board, fromIndex: u32, toIndex: u32) JsResult {
+    if (fromIndex >= 64 or toIndex >= 64) return .Error;
 
-    lastMove = (@import("board.zig").inferPlayMove(&internalBoard, fromIndex, toIndex, alloc) catch |err| {
+    _ = @import("board.zig").inferPlayMove(board, fromIndex, toIndex, walloc) catch |err| {
         switch (err) {
-            error.IllegalMove => return 4,
+            error.IllegalMove => return .IllegalMove,
             else => logErr(err, "playHumanMove"),
         }
-        return 1;
-    }).move;
-    boardView = @bitCast(internalBoard.squares);
-    return 0;
+        return .Error;
+    };
+    return .Ok;
 }
 
 fn logErr(err: anyerror, func: []const u8) void {
-    print("Error at {s}: {}", .{ func, err });
+    print("Error at {s}: {}\n", .{ func, err });
 }
 
-// TODO: one for illigal moves (because check)
-// TODO: seperate functions probably better than magic nubers
-/// IN: internalBoard
-const one: u64 = 1;
-export fn getBitBoard(magicEngineIndex: u32, colourIndex: u32) u64 {
-    const colour: Colour = if (colourIndex == 0) .White else .Black;
-    return switch (magicEngineIndex) {
-        0 => internalBoard.peicePositions.getFlag(colour),
-        1 => if (colour == .Black) (one << internalBoard.blackKingIndex) else (one << internalBoard.whiteKingIndex),
-        2 => {
-            const left = internalBoard.castling.get(colour, true);
-            const right = internalBoard.castling.get(colour, false);
-            var result: u64 = 0;
-            if (left) result |= one;
-            if (right) result |= one << 7;
-            if (colourIndex == 1) result <<= (8 * 7);
-            return result;
-        },
-        3 => {
-            if (lastMove) |move| {
-                var result: u64 = (one << move.to) | (one << move.from);
-                switch (move.action) {
-                    .castle => |info| {
-                        result |= (one << info.rookTo) | (one << info.rookFrom);
-                    },
-                    else => {},
-                }
-                return result;
-            } else {
-                return 0;
-            }
-        },
-        4 => { // en-passant
-            switch (internalBoard.frenchMove) {
-                .none => return 0,
-                .file => |targetFile| {
-                    const index = @as(u6, if (internalBoard.nextPlayer == .White) 5 else 2) * 8 + targetFile;
-                    return one << index;
-                },
-            }
-        },
-        else => 0,
-    };
+export fn getPositionsBB(board: *Board, colourI: u32) u64 {
+    const colour: Colour = if (colourI == 0) .White else .Black;
+    return board.peicePositions.getFlag(colour);
 }
 
-export fn isWhiteTurn() bool {
-    return internalBoard.nextPlayer == .White;
+export fn getKingsBB(board: *Board, colourI: u32) u64 {
+    const colour: Colour = if (colourI == 0) .White else .Black;
+    return if (colour == .Black) (@as(u64, 1) << board.blackKingIndex) else (@as(u64, 1) << board.whiteKingIndex);
+}
+
+export fn getCastlingBB(board: *Board, colourI: u32) u64 {
+    const colour: Colour = if (colourI == 0) .White else .Black;
+    const left = board.castling.get(colour, true);
+    const right = board.castling.get(colour, false);
+    var result: u64 = 0;
+    if (left) result |= @as(u64, 1);
+    if (right) result |= @as(u64, 1) << 7;
+    if (colour == .Black) result <<= (8 * 7);
+    return result;
+}
+
+export fn getLastMoveBB(board: *Board) u64 {
+    if (board.lastMove) |move| {
+        var result: u64 = (@as(u64, 1) << move.to) | (@as(u64, 1) << move.from);
+        switch (move.action) {
+            .castle => |info| {
+                result |= (@as(u64, 1) << info.rookTo) | (@as(u64, 1) << info.rookFrom);
+            },
+            else => {},
+        }
+        return result;
+    } else {
+        return 0;
+    }
+}
+
+export fn getFrenchMoveBB(board: *Board) u64 {
+    switch (board.frenchMove) {
+        .none => return 0,
+        .file => |targetFile| {
+            const index = @as(u6, if (board.nextPlayer == .White) 5 else 2) * 8 + targetFile;
+            return @as(u64, 1) << index;
+        },
+    }
+}
+
+export fn isWhiteTurn(board: *Board) bool {
+    return board.nextPlayer == .White;
 }
 
 export fn loadOpeningBook(ptr: [*]u32, len: usize) bool {
