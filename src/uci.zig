@@ -1,118 +1,24 @@
+//! Implements the universal chess interface: https://gist.github.com/DOBRO/2592c6dad754ba67e6dcaec8c90165bf  
+//! Utils for representing games as strings: FEN parsing, algebraic notation, etc. 
+
 const std = @import("std");
 const Board = @import("board.zig").Board;
+const Piece = @import("board.zig").Piece;
 const Move = @import("board.zig").Move;
 const search = @import("search.zig").default;
 const Timer = @import("common.zig").Timer;
 const GameOver = @import("board.zig").GameOver;
-const Magic = @import("magic.zig");
+const OldMove = @import("board.zig").OldMove;
+const inferPlayMove = @import("board.zig").inferPlayMove;
+const Magic = @import("common.zig").Magic;
 const assert = @import("common.zig").assert;
 
-// TODO: split into uci.zig and fish.zig
-// TODO: for just using support wasm32-wasi and wasm-freestanding (browser by exposing a uci_send(ptr, len) and uci_recieve(ptr, maxLen)->len function).
-// TODO: threads!!! 8x speed = goooood times.
-
-// TODO: auto run shorter matches while increasing my time until equal skill.
-const Opts = struct {
-    maxMoves: usize = 250,
-    gameCount: usize = 100,
-
-    // These are passed to stockfish to limit its strength.
-    fishSkillLevel: usize = 0, // 0-20.
-    fishTimeLimitMS: i128 = 2,
-
-    // These control my strength. The search stops when either time or depth is exceeded.
-    // Limiting my time and allowing high depth like real games rewards performance improvements.
-    myTimeLimitMS: i128 = 26,
-    myMaxDepth: usize = 50, // anything above 10 is basically unlimited other than endgame.
-};
-
-const config: Opts = .{};
-var shouldPrint = false;
-
 pub fn main() !void {
-    @import("common.zig").setup();
-    std.debug.print("[info] {}\n", .{config});
-    const fishLevelStr = try std.fmt.allocPrint(general.allocator(), "{}", .{config.fishSkillLevel});
-    defer general.allocator().free(fishLevelStr);
-    var fish = try Stockfish.init();
-    try fish.send(.Init);
-    fish.blockUntilRecieve(.InitOk);
-    try fish.send(.{ .SetOption = .{ .name = "Skill Level", .value = fishLevelStr } });
-
-    var gt = Timer.start();
-    var failed: u32 = 0;
-    var results = std.AutoHashMap(GameOver, u32).init(general.allocator());
-    for (1..config.gameCount + 1) |g| {
-        if (g != 0) {
-            std.debug.print("[info]: Win {}. Lose {}. Draw {}. Error {}.\n", .{ results.get(.WhiteWins) orelse 0, results.get(.BlackWins) orelse 0, (results.get(.Stalemate) orelse 0) + (results.get(.FiftyMoveDraw) orelse 0) + (results.get(.MaterialDraw) orelse 0), failed });
-        }
-        std.debug.print("Game {}/{}.\n", .{ g, config.gameCount });
-        const result = playOneGame(&fish, g, config.gameCount) catch |err| {
-            failed += 1;
-            std.debug.print("[info]: Game failed! {}\n", .{err});
-            search.resetMemoTable();
-            continue;
-        };
-        search.resetMemoTable();
-        const count = (results.get(result) orelse 0) + 1;
-        try results.put(result, count);
-    }
-
-    const time = gt.get();
-    std.debug.print("[info]: Done! Played {} games in {}ms.\n", .{ config.gameCount, time });
-    std.debug.print("[info]: Win {}. Lose {}. Draw {}. Error {}.\n", .{ results.get(.WhiteWins) orelse 0, results.get(.BlackWins) orelse 0, (results.get(.Stalemate) orelse 0) + (results.get(.FiftyMoveDraw) orelse 0) + (results.get(.MaterialDraw) orelse 0), failed });
-    std.debug.print("[info] {}\n", .{config});
-    try fish.deinit();
+    @panic("TODO: let my engine talk via uci");
 }
 
-// TODO: output pgn
-// TODO: alternate who plays white
-pub fn playOneGame(fish: *Stockfish, gameIndex: usize, gamesTotal: u32) !GameOver {
-    try fish.send(.NewGame);
-    try fish.send(.AreYouReady);
-    fish.blockUntilRecieve(.ReadyOk);
-
-    var alloc = general.allocator();
-    var moveHistory = std.ArrayList([5]u8).init(alloc);
-    var gt = Timer.start();
-    var board = Board.initial();
-    if (shouldPrint) board.debugPrint();
-
-    for (0..config.maxMoves) |i| {
-        print("[info]: Move {}. Game {}/{}.\n", .{ i, gameIndex, gamesTotal });
-        print("[info]: I'm thinking.\n", .{});
-        var t = Timer.start();
-        const move = search.bestMove(&board, config.myMaxDepth, config.myTimeLimitMS, &@import("search.zig").NoTrackLines.I) catch |err| {
-            return try logGameOver(err, &board, &moveHistory, gt);
-        };
-
-        const moveStr = writeAlgebraic(move);
-        try moveHistory.append(moveStr);
-        _ = board.play(move);
-        print("[info]: I played {s} in {}ms.\n", .{ moveStr, t.get() });
-        if (shouldPrint) board.debugPrint();
-
-        playUciMove(fish, &board, &moveHistory) catch |err| {
-            return try logGameOver(err, &board, &moveHistory, gt);
-        };
-        if (shouldPrint) board.debugPrint();
-    } else {
-        print("[info]: Played {} moves each. Stopping the game because nobody cares. \n", .{config.maxMoves});
-        board.debugPrint();
-        return error.GameTooLong;
-    }
-}
-
-var buffer = std.io.bufferedWriter(std.io.getStdOut());
-pub fn print(comptime fmt: []const u8, args: anytype) void {
-    // TODO: need to change debugPrint() to be buffered. unify all print/assert functions?
-    // buffer.writer().print(fmt, args) catch return;
-    if (shouldPrint) std.debug.print(fmt, args);
-}
-
-// https://gist.github.com/DOBRO/2592c6dad754ba67e6dcaec8c90165bf
 // TODO: do I want to use the same names as the commands?
-const UciCommand = union(enum) {
+pub const UciCommand = union(enum) {
     Init,
     AreYouReady,
     NewGame,
@@ -121,9 +27,40 @@ const UciCommand = union(enum) {
     Go: struct { maxSearchTimeMs: ?u64 = null, maxDepthPly: ?u64 = null },
     Stop,
     SetOption: struct { name: []const u8, value: []const u8 },
+
+    pub fn writeTo(cmd: UciCommand, writer: anytype) !void {
+        var buffer = std.io.bufferedWriter(writer);
+        var out = buffer.writer();
+        switch (cmd) {
+            .Init => try out.writeAll("uci"),
+            .AreYouReady => try out.writeAll("isready"),
+            .NewGame => try out.writeAll("ucinewgame"),
+            .SetPositionInitial => try out.writeAll("position startpos"),
+            .Go => |args| {
+                try out.writeAll("go");
+                if (args.maxSearchTimeMs) |movetime| {
+                    try out.print(" movetime {}", .{movetime});
+                }
+                if (args.maxDepthPly) |depth| {
+                    try out.print(" depth {}", .{depth});
+                }
+            },
+            .Stop => try out.writeAll("stop"),
+            .SetPositionMoves => |state| {
+                try out.writeAll("position fen ");
+                try writeFen(state.board, out);
+            },
+            .SetOption => |option| {
+                try out.print("setoption name {s} value {s}", .{ option.name, option.value });
+            },
+        }
+
+        try out.writeByte('\n');
+        try buffer.flush();
+    }
 };
 
-const UciInfo = struct {
+pub const UciInfo = struct {
     depth: ?u64 = null,
     seldepth: ?u64 = null,
     multipv: ?u64 = null,
@@ -148,7 +85,7 @@ const UciInfo = struct {
 //     promoteChar: u8,
 // };
 
-const UciResult = union(enum) {
+pub const UciResult = union(enum) {
     InitOk,
     ReadyOk,
     Info: UciInfo,
@@ -218,87 +155,147 @@ const UciResult = union(enum) {
     }
 };
 
-var general = (std.heap.GeneralPurposeAllocator(.{}){});
+const InvalidFenErr = error{InvalidFen};
+pub fn parseFen(fen: []const u8) error{InvalidFen}!Board {
+    var self = Board.blank();
 
-fn logGameOver(err: anyerror, board: *Board, moveHistory: *std.ArrayList([5]u8), gt: Timer) !GameOver {
-    for (moveHistory.items) |m| {
-        print("{s} ", .{m});
-    }
-    print("\n", .{});
+    var parts = std.mem.splitScalar(u8, fen, ' ');
+    if (parts.next()) |pieces| {
+        var file: u8 = 0;
+        var rank: u8 = 7;
+        var i: usize = 0;
+        for (pieces) |letter| {
+            defer i += 1;
+            if (letter == ' ') break;
 
-    switch (err) {
-        error.GameOver => {
-            const result = try search.isGameOver(board, general.allocator());
-            const msg = switch (result) {
-                .Continue => "Game over but player can still move? This is a bug!",
-                .Stalemate => "Draw (stalemate).",
-                .FiftyMoveDraw => "Draw (50 move rule).",
-                .MaterialDraw => "Draw (insufficient material).",
-                .WhiteWins => "White (luke) wins.",
-                .BlackWins => "Black (fish) wins.",
-            };
-            const time = gt.get();
-            std.debug.print("[info]: {s} The game lasted {} ply ({} ms). \n", .{ msg, moveHistory.items.len, time });
-            board.debugPrint();
-            return result;
-        },
-        else => return err,
-    }
-}
-
-fn playUciMove(fish: *Stockfish, board: *Board, moveHistory: *std.ArrayList([5]u8)) !void {
-    try fish.send(.AreYouReady);
-    fish.blockUntilRecieve(.ReadyOk);
-    if (moveHistory.items.len == 0) {
-        try fish.send(.SetPositionInitial);
-    } else {
-        try fish.send(.{ .SetPositionMoves = .{ .board = board, .moves = moveHistory.items } });
-    }
-    try fish.send(.{ .Go = .{ .maxSearchTimeMs = config.fishTimeLimitMS } });
-
-    const moveStr = m: {
-        var bestMove: ?[5]u8 = null;
-        var moveTime: u64 = 0;
-        while (true) {
-            const infoMsg = try fish.recieve();
-            switch (infoMsg) {
-                .Info => |info| {
-                    if (info.time) |time| {
-                        if (time <= config.fishTimeLimitMS) {
-                            if (info.pvFirstMove) |move| {
-                                bestMove = move;
-                                moveTime = time;
-                            }
-                        } else {
-                            try fish.send(.Stop);
-                            // Not breaking out of the loop because still want to consume all calculations that took too long.
-                        }
-                    }
-                },
-                .BestMove => |bestmove| {
-                    if (bestmove) |move| {
-                        if (bestMove == null) {
-                            return error.GameOver;
-                        } else {
-                            print("[info]: The fish played {s} in {}ms.\n", .{ move, moveTime });
-                            break :m move;
-                        }
-                    } else {
-                        print("[info]: The fish knows it has no moves!\n", .{});
-                        return error.GameOver;
-                    }
-                },
-                else => continue,
+            if (std.ascii.isDigit(letter)) {
+                const count = letter - '0';
+                file += count;
+            } else if (letter == '/') {
+                if (file != 8) return error.InvalidFen;
+                file = 0;
+                if (rank == 0) return error.InvalidFen; // This assumes no trailing '/'
+                rank -= 1;
+            } else {
+                self.set(file, rank, try Piece.fromChar(letter));
+                file += 1;
+                if (rank > 8) return error.InvalidFen;
             }
         }
-        unreachable;
-    };
+        if (file != 8) return error.InvalidFen;
+    } else {
+        return error.InvalidFen;
+    }
 
-    _ = try playAlgebraic(board, moveStr);
-    try moveHistory.append(moveStr);
+    if (parts.next()) |player| {
+        if (player.len != 1) return error.InvalidFen;
+        switch (player[0]) {
+            'w' => self.nextPlayer = .White,
+            'b' => self.nextPlayer = .Black,
+            else => return error.InvalidFen,
+        }
+    } else {
+        return error.InvalidFen;
+    }
+
+    // These fields are less important so are optional.
+
+    self.castling = @bitCast(@as(u4, 0));
+    if (parts.next()) |castling| {
+        if (castling.len == 1 and castling[0] == '-') {
+            // Nobody can castle
+        } else if (castling.len <= 4) {
+            for (castling) |c| {
+                switch (c) {
+                    'K' => self.castling.whiteRight = true,
+                    'Q' => self.castling.whiteLeft = true,
+                    'k' => self.castling.blackRight = true,
+                    'q' => self.castling.blackLeft = true,
+                    else => return error.InvalidFen,
+                }
+            }
+        } else {
+            return error.InvalidFen;
+        }
+    }
+
+    if (parts.next()) |frenchMove| {
+        switch (frenchMove.len) {
+            1 => if (frenchMove[0] != '-') return error.InvalidFen, // No french move is possible.
+            2 => {
+                // The target must be on the right rank given the player that just moved.
+                switch (self.nextPlayer) {
+                    .White => if (frenchMove[1] != '6') return error.InvalidFen,
+                    .Black => if (frenchMove[1] != '3') return error.InvalidFen,
+                }
+                const file = letterToFile(frenchMove[0]) catch return error.InvalidFen;
+                self.frenchMove = .{ .file = @intCast(file) };
+            },
+            else => return error.InvalidFen,
+        }
+    }
+
+    if (parts.next()) |halfMoves| {
+        self.halfMoveDraw = std.fmt.parseInt(u32, halfMoves, 10) catch return error.InvalidFen;
+    }
+
+    if (parts.next()) |fullMoves| {
+        self.fullMoves = std.fmt.parseInt(u32, fullMoves, 10) catch return error.InvalidFen;
+    }
+
+    return self;
 }
 
-pub fn playAlgebraic(board: *Board, moveStr: [5]u8) !@import("board.zig").OldMove {
+pub fn writeFen(self: *const Board, writer: anytype) !void {
+    var buffer = std.io.bufferedWriter(writer);
+    var out = buffer.writer();
+
+    for (0..8) |rank| {
+        var empty: u8 = 0;
+        for (0..8) |file| {
+            const p = self.get(file, 7 - rank);
+            if (p.empty()) {
+                empty += 1;
+                continue;
+            }
+            if (empty > 0) {
+                try out.writeByte('0' + empty);
+                empty = 0;
+            }
+            try out.writeByte(p.toChar());
+        }
+        if (empty > 0) {
+            try out.writeByte('0' + empty);
+        }
+        if (rank < 7) {
+            try out.writeByte('/');
+        }
+    }
+
+    const playerChar: u8 = if (self.nextPlayer == .White) 'w' else 'b';
+    try out.print(" {c} ", .{ playerChar });
+
+    if (self.castling.whiteRight) try out.writeByte('K');
+    if (self.castling.whiteLeft) try out.writeByte('Q');
+    if (self.castling.blackRight) try out.writeByte('k');
+    if (self.castling.blackLeft) try out.writeByte('q');
+    if (!self.castling.any()) try out.writeByte('-');
+
+    switch (self.frenchMove) {
+        .none => try out.writeAll(" - "),
+        .file => |file| {
+            const fileChar = fileToLetter(@intCast(file)) catch unreachable;
+            const rankChar: u8 = if (self.nextPlayer == .White) '6' else '3';
+            try out.print(" {c}{c} ", .{ fileChar, rankChar });
+        },
+    }
+
+    try out.print("{} {}", .{ self.halfMoveDraw, self.fullMoves});
+    try buffer.flush();
+}
+
+var general = (std.heap.GeneralPurposeAllocator(.{}){});
+pub fn playAlgebraic(board: *Board, moveStr: [5]u8) !OldMove {
     // TODO: promote
     const fromFile = try letterToFile(moveStr[0]);
     const fromRank = try letterToRank(moveStr[1]);
@@ -306,106 +303,60 @@ pub fn playAlgebraic(board: *Board, moveStr: [5]u8) !@import("board.zig").OldMov
     const toRank = try letterToRank(moveStr[3]);
     const fromIndex = fromRank * 8 + fromFile;
     const toIndex = toRank * 8 + toFile;
-    return try @import("board.zig").inferPlayMove(board, fromIndex, toIndex, general.allocator());
+    return try inferPlayMove(board, fromIndex, toIndex, general.allocator());
 }
 
-const Stockfish = struct {
-    process: std.ChildProcess,
+pub fn writeAlgebraic(move: Move) [5]u8 {
+    var moveStr: [5]u8 = std.mem.zeroes([5]u8);
+    const fromRank = @divFloor(move.from, 8);
+    const fromFile = @mod(move.from, 8);
+    const toRank = @divFloor(move.to, 8);
+    const toFile = @mod(move.to, 8);
 
-    pub fn init() !Stockfish {
-        var stockFishProcess = std.ChildProcess.init(&[_][]const u8{"stockfish"}, general.allocator());
-        stockFishProcess.stdin_behavior = .Pipe;
-        stockFishProcess.stdout_behavior = .Pipe;
-        stockFishProcess.stderr_behavior = .Pipe;
-        stockFishProcess.stdout = std.io.getStdIn();
-        // TODO: helpful error message if stockfish isnt installed.
-        try stockFishProcess.spawn();
-        return .{ .process = stockFishProcess };
-    }
+    // These return error on bounds check but Move from/to will always be within u6.
+    moveStr[0] = fileToLetter(fromFile) catch unreachable;
+    moveStr[1] = rankToLetter(fromRank) catch unreachable;
+    moveStr[2] = fileToLetter(toFile) catch unreachable;
+    moveStr[3] = rankToLetter(toRank) catch unreachable;
 
-    pub fn deinit(self: *Stockfish) !void {
-        _ = try self.process.kill();
-    }
-
-    pub fn send(self: *Stockfish, cmd: UciCommand) !void {
-        try sendUci(self.process.stdin.?.writer(), cmd);
-    }
-
-    pub fn recieve(self: *Stockfish) !UciResult {
-        return recieveUci(self.process.stdout.?.reader());
-    }
-
-    pub fn blockUntilRecieve(self: *Stockfish, expected: UciResult) void {
-        blockUntilRecieveUci(self.process.stdout.?.reader(), expected);
-    }
-};
-
-fn sendUci(out: anytype, cmd: UciCommand) !void {
-    var letters = try std.BoundedArray(u8, 16384).init(0); // Don't want to deal with passing down an allocator.
-    switch (cmd) {
-        .Init => try letters.appendSlice("uci"),
-        .AreYouReady => try letters.appendSlice("isready"),
-        .NewGame => try letters.appendSlice("ucinewgame"),
-        .SetPositionInitial => try letters.appendSlice("position startpos"),
-        .Go => |args| {
-            try letters.appendSlice("go");
-            if (args.maxSearchTimeMs) |movetime| {
-                try letters.appendSlice(" movetime ");
-                letters.len += @intCast(std.fmt.formatIntBuf(letters.unusedCapacitySlice(), movetime, 10, .lower, .{}));
-            }
-            if (args.maxDepthPly) |depth| {
-                try letters.appendSlice(" depth ");
-                letters.len += @intCast(std.fmt.formatIntBuf(letters.unusedCapacitySlice(), depth, 10, .lower, .{}));
-            }
+    switch (move.action) {
+        .promote => |kind| {
+            const char = @as(u8, switch (kind) {
+                .Queen => 'q',
+                .Knight => 'n',
+                .Rook => 'r',
+                .Bishop => 'b',
+                else => unreachable,
+            });
+            moveStr[4] = char;
         },
-        .Stop => try letters.appendSlice("stop"),
-        .SetPositionMoves => |state| {
-            try letters.appendSlice("position fen ");
-            try state.board.appendFEN(&letters);
-            // I thought you need this but if you include it plays for the wrong colour. just moves no fen and it erros always
-            // Its setup the fen as the initial state THEN play these moves!
-            // try letters.appendSlice(" moves");
-            // for (state.moves) |move| {
-            //     try letters.append(' ');
-            //     if (move[4] == 0) {
-            //         try letters.appendSlice(move[0..4]);
-            //     } else {
-            //         try letters.appendSlice(move[0..]);
-            //     }
-            // }
-        },
-        .SetOption => |option| {
-            try letters.appendSlice("setoption name ");
-            try letters.appendSlice(option.name);
-            try letters.appendSlice(" value ");
-            try letters.appendSlice(option.value);
-        },
+        else => {},
     }
 
-    try letters.append('\n');
-    print("[luke]: {s}", .{letters.slice()});
-    // TODO: retry on error?
-    return out.writeAll(letters.slice());
+    return moveStr;
 }
 
-fn recieveUci(in: anytype) !UciResult {
-    var buf: [16384]u8 = undefined;
-    var resultStream = std.io.fixedBufferStream(&buf);
-    // Don't care about the max because fixedBufferStream will give a write error if it overflows.
-    try in.streamUntilDelimiter(resultStream.writer(), '\n', null);
-    const msg = resultStream.getWritten();
-    print("[fish]: {s}\n", .{msg});
-    return try UciResult.parse(msg);
+pub fn fileToLetter(file: u6) !u8 {
+    if (file >= 8) return error.UnknownUciStr;
+    return @as(u8, @intCast(file)) + 'a';
 }
 
-fn blockUntilRecieveUci(in: anytype, expected: UciResult) void {
-    // TODO: timeout detect to if it died
-    while (true) {
-        const msg = recieveUci(in) catch continue;
-        if (std.meta.eql(msg, expected)) break;
-    }
+pub fn letterToFile(letter: u8) !u6 {
+    if (letter < 'a' or letter > 'h') return error.UnknownUciStr;
+    return @intCast(letter - 'a');
 }
 
+pub fn rankToLetter(rank: u6) !u8 {
+    if (rank >= 8) return error.UnknownUciStr;
+    return @as(u8, @intCast(rank)) + '1';
+}
+
+pub fn letterToRank(letter: u8) !u6 {
+    if (letter < '1' or letter > '8') return error.UnknownUciStr;
+    return @intCast(letter - '1');
+}
+
+// TODO: finish this. need to track pv and return that info every search iteration. 
 // TODO: another thread to do work.
 // TODO: search has global variables so this struct isn't thread safe.
 const Engine = struct {
@@ -462,55 +413,3 @@ const Engine = struct {
         _ = move;
     }
 };
-
-pub fn writeAlgebraic(move: Move) [5]u8 {
-    var moveStr: [5]u8 = std.mem.zeroes([5]u8);
-    const fromRank = @divFloor(move.from, 8);
-    const fromFile = @mod(move.from, 8);
-    const toRank = @divFloor(move.to, 8);
-    const toFile = @mod(move.to, 8);
-
-    // These return error on bounds check but Move from/to will always be within u6.
-    moveStr[0] = fileToLetter(fromFile) catch unreachable;
-    moveStr[1] = rankToLetter(fromRank) catch unreachable;
-    moveStr[2] = fileToLetter(toFile) catch unreachable;
-    moveStr[3] = rankToLetter(toRank) catch unreachable;
-
-    switch (move.action) {
-        .promote => |kind| {
-            const char = @as(u8, switch (kind) {
-                .Queen => 'q',
-                .Knight => 'n',
-                .Rook => 'r',
-                .Bishop => 'b',
-                else => unreachable,
-            });
-            moveStr[4] = char;
-        },
-        else => {},
-    }
-
-    return moveStr;
-}
-
-pub fn fileToLetter(file: u6) !u8 {
-    if (file >= 8) return error.UnknownUciStr;
-    return @as(u8, @intCast(file)) + 'a';
-}
-
-pub fn letterToFile(letter: u8) !u6 {
-    if (letter < 'a' or letter > 'h') return error.UnknownUciStr;
-    return @intCast(letter - 'a');
-}
-
-pub fn rankToLetter(rank: u6) !u8 {
-    if (rank >= 8) return error.UnknownUciStr;
-    return @as(u8, @intCast(rank)) + '1';
-}
-
-pub fn letterToRank(letter: u8) !u6 {
-    if (letter < '1' or letter > '8') return error.UnknownUciStr;
-    return @intCast(letter - '1');
-}
-
-// Two things: a binary that implements UCI and a binary that acts as the gui between two other UCI engines?

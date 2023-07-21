@@ -164,7 +164,7 @@ test "write fen" {
 
 test "sane zobrist numbers" {
     setup();
-    try expectNoDuplicates(u64, &@import("magic.zig").ZOIDBERG);
+    try expectNoDuplicates(u64, &@import("common.zig").Magic.ZOIDBERG);
 }
 
 test "dir" {

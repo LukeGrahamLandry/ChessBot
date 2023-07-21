@@ -8,7 +8,7 @@ const Piece = @import("board.zig").Piece;
 const search = @import("search.zig").Strategy(.{});
 const genAllMoves = @import("search.zig").genAllMoves;
 const Move = @import("board.zig").Move;
-const Magic = @import("magic.zig");
+const Magic = @import("common.zig").Magic;
 const Lines = @import("search.zig").Lines;
 const print = consolePrint;
 

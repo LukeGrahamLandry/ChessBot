@@ -1,7 +1,7 @@
 //! Generating the list of possible moves for a position.
 
 const std = @import("std");
-const Magic = @import("magic.zig");
+const Magic = @import("common.zig").Magic;
 const print = @import("common.zig").print;
 const assert = @import("common.zig").assert;
 const Board = @import("board.zig").Board;

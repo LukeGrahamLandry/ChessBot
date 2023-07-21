@@ -1,9 +1,10 @@
-//! Representing the game. Playing and unplaying moves. FEN parsing.
+//! Representing the game. Playing and unplaying moves. 
 
 const std = @import("std");
-const Magic = @import("magic.zig");
+const Magic = @import("common.zig").Magic;
 const print = @import("common.zig").print;
 const assert = @import("common.zig").assert;
+const UCI = @import("uci.zig");
 
 // Numbers matter because js sees them and for fen parsing.
 pub const Kind = enum(u4) {
@@ -16,15 +17,8 @@ pub const Kind = enum(u4) {
     King = 1,
 
     pub fn material(self: Kind) i32 {
-        return switch (self) {
-            .Pawn => 100,
-            .Bishop => 300,
-            .Knight => 300,
-            .Rook => 500,
-            .King => 100000,
-            .Queen => 900,
-            .Empty => 0,
-        };
+        const values = [_] i32 { 0, 100000, 900, 300, 300, 500, 100 };
+        return values[@intFromEnum(self)];
     }
 };
 
@@ -58,7 +52,7 @@ pub const Piece = packed struct {
         };
     }
 
-    pub fn fromChar(letter: u8) InvalidFenErr!Piece {
+    pub fn fromChar(letter: u8) error{InvalidFen}!Piece {
         return .{
             .colour = if (std.ascii.isUpper(letter)) Colour.White else Colour.Black,
             // This cast is stupid. https://github.com/ziglang/zig/issues/13353
@@ -102,9 +96,7 @@ pub const Piece = packed struct {
     }
 };
 
-const ASCII_ZERO_CHAR: u8 = 48;
 pub const INIT_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
-const InvalidFenErr = error{InvalidFen};
 
 const BitBoardPair = packed struct {
     white: u64 = 0,
@@ -145,14 +137,13 @@ pub const OldMove = struct {
     debugZoidberg: u64,
 };
 
-const CastlingRights = packed struct(u8) {
+const CastlingRights = packed struct(u4) {
     whiteLeft: bool = true,
     whiteRight: bool = true,
     blackLeft: bool = true,
     blackRight: bool = true,
-    _fuck: u4 = 0,
 
-    pub const NONE: CastlingRights = @bitCast(@as(u8, 0));
+    pub const NONE: CastlingRights = @bitCast(@as(u4, 0));
 
     // TODO: goingLeft should be an enum
     pub fn get(self: CastlingRights, colour: Colour, comptime goingLeft: bool) bool {
@@ -178,7 +169,7 @@ const CastlingRights = packed struct(u8) {
     }
 
     pub fn any(self: CastlingRights) bool {
-        return @as(u8, @bitCast(self)) != 0;
+        return @as(u4, @bitCast(self)) != 0;
     }
 };
 
@@ -470,164 +461,22 @@ pub const Board = struct {
         return board;
     }
 
-    // TODO: maybe move fen stuff to the uci file.
-    pub fn fromFEN(fen: []const u8) InvalidFenErr!Board {
-        var self = Board.blank();
-
-        var parts = std.mem.splitScalar(u8, fen, ' ');
-        if (parts.next()) |pieces| {
-            var file: u8 = 0;
-            var rank: u8 = 7;
-            var i: usize = 0;
-            for (pieces) |letter| {
-                defer i += 1;
-                if (letter == ' ') break;
-
-                if (std.ascii.isDigit(letter)) {
-                    const count = letter - ASCII_ZERO_CHAR;
-                    file += count;
-                } else if (letter == '/') {
-                    if (file != 8) return error.InvalidFen;
-                    file = 0;
-                    if (rank == 0) return error.InvalidFen; // This assumes no trailing '/'
-                    rank -= 1;
-                } else {
-                    self.set(file, rank, try Piece.fromChar(letter));
-                    file += 1;
-                    if (rank > 8) return error.InvalidFen;
-                }
-            }
-            if (file != 8) return error.InvalidFen;
-        } else {
-            return error.InvalidFen;
-        }
-
-        if (parts.next()) |player| {
-            if (player.len != 1) return error.InvalidFen;
-            switch (player[0]) {
-                'w' => self.nextPlayer = .White,
-                'b' => self.nextPlayer = .Black,
-                else => return error.InvalidFen,
-            }
-        } else {
-            return error.InvalidFen;
-        }
-
-        // These fields are less important so are optional.
-
-        self.castling = CastlingRights.NONE;
-        if (parts.next()) |castling| {
-            if (castling.len == 1 and castling[0] == '-') {
-                // Nobody can castle
-            } else if (castling.len <= 4) {
-                for (castling) |c| {
-                    switch (c) {
-                        'K' => self.castling.whiteRight = true,
-                        'Q' => self.castling.whiteLeft = true,
-                        'k' => self.castling.blackRight = true,
-                        'q' => self.castling.blackLeft = true,
-                        else => return error.InvalidFen,
-                    }
-                }
-            } else {
-                return error.InvalidFen;
-            }
-        }
-
-        if (parts.next()) |frenchMove| {
-            switch (frenchMove.len) {
-                1 => if (frenchMove[0] != '-') return error.InvalidFen, // No french move is possible.
-                2 => {
-                    // The target must be on the right rank given the player that just moved.
-                    switch (self.nextPlayer) {
-                        .White => if (frenchMove[1] != '6') return error.InvalidFen,
-                        .Black => if (frenchMove[1] != '3') return error.InvalidFen,
-                    }
-                    const file = @import("uci.zig").letterToFile(frenchMove[0]) catch return error.InvalidFen;
-                    self.frenchMove = .{ .file = @intCast(file) };
-                },
-                else => return error.InvalidFen,
-            }
-        }
-
-        if (parts.next()) |halfMoves| {
-            self.halfMoveDraw = std.fmt.parseInt(u32, halfMoves, 10) catch return error.InvalidFen;
-        }
-
-        if (parts.next()) |fullMoves| {
-            self.fullMoves = std.fmt.parseInt(u32, fullMoves, 10) catch return error.InvalidFen;
-        }
-
-        return self;
+    pub fn fromFEN(fen: []const u8) error{InvalidFen}!Board {
+        return try UCI.parseFen(fen);
     }
 
     // Caller owns the returned string.
-    pub fn toFEN(self: *const Board, allocator: std.mem.Allocator) AppendErr![]u8 {
+    pub fn toFEN(self: *const Board, allocator: std.mem.Allocator) ![]u8 {
         var letters = try std.ArrayList(u8).initCapacity(allocator, 64 + 8 + 30); // Bad idea!
         errdefer letters.deinit();
-        try self.appendFEN(&letters);
+        try UCI.writeFen(self, letters.writer());
         return try letters.toOwnedSlice();
-    }
-
-    // letters: pointer to ArrayList or BoundedArray
-    // TODO: take a std.io.Writer because both ^ have one
-    pub fn appendFEN(self: *const Board, letters: anytype) AppendErr!void {
-        for (0..8) |rank| {
-            var empty: u8 = 0;
-            for (0..8) |file| {
-                const p = self.get(file, 7 - rank);
-                if (p.empty()) {
-                    empty += 1;
-                    continue;
-                }
-                if (empty > 0) {
-                    try letters.append(empty + ASCII_ZERO_CHAR);
-                    empty = 0;
-                }
-                try letters.append(p.toChar());
-            }
-            if (empty > 0) {
-                try letters.append(empty + ASCII_ZERO_CHAR);
-            }
-            if (rank < 7) {
-                try letters.append('/');
-            }
-        }
-        try letters.append(' ');
-
-        try letters.append(if (self.nextPlayer == .White) 'w' else 'b');
-        try letters.append(' ');
-
-        // Order matters! Stockfish gets confused by qk.
-        if (self.castling.whiteRight) try letters.append('K');
-        if (self.castling.whiteLeft) try letters.append('Q');
-        if (self.castling.blackRight) try letters.append('k');
-        if (self.castling.blackLeft) try letters.append('q');
-        if (!self.castling.any()) try letters.append('-');
-        try letters.append(' ');
-
-        switch (self.frenchMove) {
-            .none => try letters.append('-'),
-            .file => |file| {
-                try letters.append(@import("uci.zig").fileToLetter(@intCast(file)) catch unreachable);
-                try letters.append(if (self.nextPlayer == .White) '6' else '3');
-            },
-        }
-        try letters.append(' ');
-
-        // TODO: ugly. want it to work on bounded + list
-        const half = std.fmt.formatIntBuf(letters.unusedCapacitySlice(), self.halfMoveDraw, 10, .lower, .{});
-        if (@hasField(@TypeOf(letters.*), "len")) letters.len += @intCast(half) else letters.items.len += half;
-        try letters.append(' ');
-
-        const full = std.fmt.formatIntBuf(letters.unusedCapacitySlice(), self.fullMoves, 10, .lower, .{});
-        if (@hasField(@TypeOf(letters.*), "len")) letters.len += @intCast(full) else letters.items.len += full;
     }
 
     // Caller owns the returned string.
     pub fn displayString(self: *const Board, allocator: std.mem.Allocator) ![]u8 {
         var letters = try std.ArrayList(u8).initCapacity(allocator, 64 + 8 + (64 * 3) + 64 + 8 + 8 + 2);
-        try self.appendFEN(&letters);
+        try UCI.writeFen(self, letters.writer());
         try letters.append('\n');
 
         for (0..8) |rank| {
@@ -686,7 +535,7 @@ pub const Board = struct {
 pub const AppendErr = error{Overflow} || std.mem.Allocator.Error;
 
 // !!!Compiler bug!!! https://github.com/ziglang/zig/issues/16392
-pub const CastleMove = packed struct { rookFrom: u6, rookTo: u6, fuck: u4 = 0 };
+pub const CastleMove = packed struct { rookFrom: u6, rookTo: u6 };
 
 // TODO: this seems much too big (8 bytes?). castling info is redunant cause other side can infer if king moves 2 squares, bool field is evil and redundant
 pub const Move = struct {
@@ -709,7 +558,7 @@ pub const Move = struct {
     }
 
     pub fn text(self: Move) ![5]u8 {
-        return @import("uci.zig").writeAlgebraic(self);
+        return UCI.writeAlgebraic(self);
     }
 };
 
