@@ -5,6 +5,8 @@ const Magic = @import("common.zig").Magic;
 const print = @import("common.zig").print;
 const assert = @import("common.zig").assert;
 const UCI = @import("uci.zig");
+const ChecksInfo = @import("movegen.zig").ChecksInfo;
+const getChecksInfo = @import("movegen.zig").getChecksInfo;
 
 // Numbers matter because js sees them and for fen parsing.
 pub const Kind = enum(u4) {
@@ -136,6 +138,7 @@ pub const OldMove = struct {
     frenchMove: FrenchMove,
     oldHalfMoveDraw: u32 = 0,
     debugZoidberg: u64,
+    oldChecks: ChecksInfo, 
 };
 
 const CastlingRights = packed struct(u4) {
@@ -208,6 +211,7 @@ pub const Board = struct {
     line: if (slowTrackAllMoves) std.BoundedArray(OldMove, 300) else void = if (slowTrackAllMoves) std.BoundedArray(OldMove, 300).init(0) catch @panic("Overflow line.") else {}, // inefficient but useful for debugging.
     zoidberg: u64 = 1,
     lastMove: ?Move = null,  
+    checks: ChecksInfo = .{}, 
 
     // TODO: For draw by repetition. 
     // pastBoardHashes: std.BoundedArray(u64, 300) = std.BoundedArray(u64, 300).init(0) catch @panic("OOM?"),
@@ -256,7 +260,7 @@ pub const Board = struct {
     /// This assumes that <move> is legal.
     pub fn play(self: *Board, move: Move) OldMove {
         assert(move.from != move.to);
-        const thisMove: OldMove = .{ .move = move, .taken = self.squares[move.to], .original = self.squares[move.from], .old_castling = self.castling, .debugPeicePositions = self.peicePositions, .debugSimpleEval = self.simpleEval, .frenchMove = self.frenchMove, .oldHalfMoveDraw = self.halfMoveDraw, .debugZoidberg = self.zoidberg, .lastMove=self.lastMove };
+        const thisMove: OldMove = .{ .move = move, .taken = self.squares[move.to], .original = self.squares[move.from], .old_castling = self.castling, .debugPeicePositions = self.peicePositions, .debugSimpleEval = self.simpleEval, .frenchMove = self.frenchMove, .oldHalfMoveDraw = self.halfMoveDraw, .debugZoidberg = self.zoidberg, .lastMove=self.lastMove, .oldChecks=self.checks };
         assert(thisMove.original.colour == self.nextPlayer);
         const colour = thisMove.original.colour;
         self.simpleEval -= thisMove.taken.eval();
@@ -379,6 +383,7 @@ pub const Board = struct {
         self.nextPlayer = self.nextPlayer.other();
         if (slowTrackAllMoves) self.line.append(thisMove) catch @panic("Overflow line.");
         self.lastMove = move;
+        self.checks = getChecksInfo(self, self.nextPlayer);
         // self.pastBoardHashes.append(self.zoidberg) catch {}; // TODO
         return thisMove;
     }
@@ -388,6 +393,7 @@ pub const Board = struct {
     pub fn unplay(self: *Board, move: OldMove) void {
         // _ = self.pastBoardHashes.pop();
         // print("start unplay\n", .{});
+        self.checks = move.oldChecks;
         self.lastMove = move.lastMove;
         self.zoidberg ^= Magic.ZOIDBERG[Magic.ZOID_TURN_INDEX];
         if (slowTrackAllMoves) assert(std.meta.eql(self.line.pop(), move));
@@ -462,7 +468,9 @@ pub const Board = struct {
     }
 
     pub fn fromFEN(fen: []const u8) error{InvalidFen}!Board {
-        return try UCI.parseFen(fen);
+        var b = try UCI.parseFen(fen);
+        b.checks = getChecksInfo(&b, b.nextPlayer.other());
+        return b;
     }
 
     // Caller owns the returned string.
@@ -503,7 +511,13 @@ pub const Board = struct {
     }
 
     pub fn inCheck(self: *Board, me: Colour) bool {
-        return @import("movegen.zig").reverseFromKingIsInCheck(self, me);
+        // return @import("movegen.zig").reverseFromKingIsInCheck(self, me);
+        if (me == self.nextPlayer) {
+            const kingFlag = @as(u64, 1) << @intCast(if (me == .White) self.whiteKingIndex else self.blackKingIndex);
+            return (kingFlag & self.checks.targetedSquares) != 0;
+        } else {
+            return @import("movegen.zig").reverseFromKingIsInCheck(self, me);
+        }
     }
 
     pub fn gameOverReason(game: *Board, alloc: std.mem.Allocator) !GameOver {

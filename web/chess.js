@@ -10,6 +10,8 @@ const STR_BUFFER_SIZE = 512;
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 let mainCanvas = document.getElementById("board").getContext("2d");
+
+// TODO: show the right player turn instead of always white. 
 const enableBot = false;
 // const minMoveTimeMs = 500;  // When computer vs computer, if the engine is faster than this, it will wait before playing again. 
 
@@ -237,7 +239,10 @@ function renderBoard(board, ctx) {
             drawBitBoardPair(ctx, Engine.slidingChecksBB(board, WHITE), Engine.slidingChecksBB(board, BLACK));
             break;
         }
-        
+        case "pins": {
+            drawBitBoardPair(ctx, Engine.pinsBB(board, WHITE), Engine.pinsBB(board, BLACK));
+            break;
+        }
         default: 
             console.log("Invalid bitBoardInfo string.");
     }
@@ -253,7 +258,6 @@ function renderBoard(board, ctx) {
         drawBitBoard(ctx, targetSquaresFlag, (whitePieces & clickedFlag) ? "lightblue" : "red");
     }
     
-    // TODO: why do I need to remake this slice every time?
     const pieces = new Uint8Array(Engine.memory.buffer, Engine.getBoardData(board));
     for (let rank=0;rank<8;rank++){
         for (let file=0;file<8;file++){
@@ -273,12 +277,8 @@ function renderBoard(board, ctx) {
 function fillSquare(ctx, file, rank, colour, isSmall) {
     const squareSize = ctx.canvas.width / 8;
     ctx.fillStyle = colour;
-    if (isSmall) {
-        const edge = squareSize * 0.25;
-        ctx.fillRect(file*squareSize + edge, (7-rank)*squareSize + edge, squareSize - edge*2, squareSize - edge*2);
-    } else {
-        ctx.fillRect(file*squareSize, (7-rank)*squareSize, squareSize, squareSize);
-    }
+    const edge = squareSize * (isSmall ? 0.25 : 0.05);
+    ctx.fillRect(file*squareSize + edge, (7-rank)*squareSize + edge, squareSize - edge*2, squareSize - edge*2);
 }
 
 function handleResize(){

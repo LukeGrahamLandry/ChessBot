@@ -117,7 +117,6 @@ fn pawnMove(out: anytype, board: *const Board, i: usize, file: usize, rank: usiz
 }
 
 fn frenchMove(out: anytype, board: *const Board, i: usize, targetFile: usize, targetRank: usize, colour: Colour) !void {
-    // TODO
     // Most of the time you can't en-passant so make that case as fast as possible.
     switch (board.frenchMove) {
         .none => return,
@@ -213,22 +212,15 @@ pub fn tryCastle(out: anytype, board: *Board, i: usize, file: usize, rank: usize
 }
 
 fn knightMove(out: anytype, board: *const Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
-    if (rank < 6) {
-        if (file < 7) try out.tryHop(board, i, file + 1, rank + 2, piece);
-        if (file > 0) try out.tryHop(board, i, file - 1, rank + 2, piece);
-    }
-    if (rank > 1) {
-        if (file < 7) try out.tryHop(board, i, file + 1, rank - 2, piece);
-        if (file > 0) try out.tryHop(board, i, file - 1, rank - 2, piece);
-    }
-
-    if (file < 6) {
-        if (rank < 7) try out.tryHop(board, i, file + 2, rank + 1, piece);
-        if (rank > 0) try out.tryHop(board, i, file + 2, rank - 1, piece);
-    }
-    if (file > 1) {
-        if (rank < 7) try out.tryHop(board, i, file - 2, rank + 1, piece);
-        if (rank > 0) try out.tryHop(board, i, file - 2, rank - 1, piece);
+    inline for (knightOffsets) |x| {
+        inline for (knightOffsets) |y| {
+            if (x != y and x != -y) {
+                var checkFile = @as(isize, @intCast(file)) + x;
+                var checkRank = @as(isize, @intCast(rank)) + y;
+                const invalid = checkFile > 7 or checkRank > 7 or checkFile < 0 or checkRank < 0;
+                if (!invalid) try out.tryHop(board, i, @intCast(checkFile), @intCast(checkRank), piece);
+            }
+        }
     }
 }
 
@@ -242,6 +234,8 @@ const directions = [8] [2] isize {
     [2] isize { -1, 1 },
     [2] isize { -1, -1 },
 };
+
+const knightOffsets = [4] isize { 1, -1, 2, -2 };
 
 const CollectMoves = struct {
     moves: *std.ArrayList(Move),
@@ -379,13 +373,9 @@ test "attacking" {
 }
 
 pub const GetAttackSquares = struct {
+    /// Includes your own peices when they could be taken back. Places the other king can't move. 
     bb: u64 = 0,
     comptime filter: MoveFilter = .Any,  // TODO: remove
-    
-    // This masks out your own squares. 
-    pub fn getBB(self: *GetAttackSquares, board: *const Board, colour: Colour) u64 {
-        return self.bb & ~board.peicePositions.getFlag(colour);
-    }
 
     fn tryHop(self: *GetAttackSquares, board: *const Board, i: usize, checkFile: usize, checkRank: usize, piece: Piece) !void {
         _ = piece;
@@ -440,42 +430,146 @@ pub const GetAttackSquares = struct {
     }
 };
 
-pub fn slidingChecksBB(game: *Board, attackingPlayer: Colour) u64 {
-    const mySquares = game.peicePositions.getFlag(attackingPlayer);
-    const allSquares = game.peicePositions.white | game.peicePositions.black;
-    const otherKingIndex = if (attackingPlayer == .White) game.blackKingIndex else game.whiteKingIndex;
+pub const ChecksInfo = struct { 
+    // If not in check: all ones. 
+    // If in single check: a piece must move TO one of these squares OR the king must move to a safe square. 
+    // Includes the enemy (even a single knight) because capturing is fine. 
+    blockSingleCheck: u64 = 0, 
+    // Your peices may not move FROM these squares because they will reveal a check from an enemy slider. 
+    pins: u64 = 0,
+    // If true, the king must move to a safe square, because multiple enemies can't be blocked/captured. 
+    doubleCheck: bool = false,
+    // Where the enemy can attack. The king may not move here. 
+    targetedSquares: u64 = 0,
+};
 
-    var resultFlag: u64 = 0;
-    var flag: u64 = 1;
-    for (0..64) |i| {
-        defer flag <<= 1; 
-        if ((flag & mySquares) == 0) continue;
-        const kind = game.squares[i].kind;
-        if (kind == .Pawn or kind == .King or kind == .Knight) continue;
-        inline for (directions[0..8], 0..) |offset, dir| {
-            const valid = !((dir < 4 and kind == .Bishop) or (dir >= 4 and kind == .Rook));
-            if (valid) {
-                var checkFile = @as(isize, @intCast(i % 8));
-                var checkRank = @as(isize, @intCast(i / 8));
-                var wipFlag: u64 = flag;
-                while (true) {
-                    checkFile += offset[0];
-                    checkRank += offset[1];
-                    if (checkFile > 7 or checkRank > 7 or checkFile < 0 or checkRank < 0) break;
-                    const checkFlag = toMask(@intCast(checkFile), @intCast(checkRank));
-                    const checkIndex = checkRank*8 + checkFile;
-                    if (checkIndex == otherKingIndex) {
-                        resultFlag |= wipFlag;
-                        break;
+// TODO: This is super branchy. Maybe I could do better if I had bit boards of each piece type. 
+// TODO: It would be very nice if I could update this iterativly as moves were made instead of recalculating every time. Feels almost possible? 
+// TODO: split into more manageable functions. 
+pub fn getChecksInfo(game: *Board, defendingPlayer: Colour) ChecksInfo {
+    const mySquares = game.peicePositions.getFlag(defendingPlayer);
+    const otherSquares = game.peicePositions.getFlag(defendingPlayer.other());
+    const allSquares = game.peicePositions.white | game.peicePositions.black;
+    _ = allSquares;
+    const otherKingIndex = if (defendingPlayer == .Black) game.blackKingIndex else game.whiteKingIndex;
+    _ = otherKingIndex;
+    const myKingIndex = if (defendingPlayer == .White) game.whiteKingIndex else game.blackKingIndex;
+
+    var result: ChecksInfo = .{};
+
+    // Queens, Rooks, Bishops and any resulting pins. 
+    // TODO: make sure you can't mvoe away along its line of sight 
+    inline for (directions[0..8], 0..) |offset, dir| outer: {
+        var checkFile = @as(isize, @intCast(myKingIndex % 8));
+        var checkRank = @as(isize, @intCast(myKingIndex / 8));
+        var wipFlag: u64 = 0;
+        var pinnedSquare: ?u64 = null;
+        while (true) {
+            checkFile += offset[0];
+            checkRank += offset[1];
+            if (checkFile > 7 or checkRank > 7 or checkFile < 0 or checkRank < 0) break;
+            const checkFlag = toMask(@intCast(checkFile), @intCast(checkRank));
+            const checkIndex = checkRank*8 + checkFile;
+            const kind = game.squares[@intCast(checkIndex)].kind;
+            const isEnemy = (otherSquares & checkFlag) != 0;
+            wipFlag |= checkFlag;
+            if (isEnemy) {
+                const isSlider = (kind == .Queen or ((dir < 4 and kind == .Rook) or (dir >= 4 and kind == .Bishop)));
+                if (isSlider) {
+                    if (pinnedSquare) |pinned| {  // Found a pin. Can't move the friend from before.  
+                        result.pins |= pinned;
+                    } else {
+                        if (result.blockSingleCheck != 0) {
+                            result.doubleCheck = true; 
+                            // Don't care about any other checks or pins. Just need to move king. 
+                            break :outer;
+                        }
+                        result.blockSingleCheck |= wipFlag;
                     }
-                    if ((checkFlag & allSquares) != 0) break;
-                    wipFlag |= checkFlag;
+                }
+
+                // Don't need to look for pins of enemy pieces. We're done this dir!
+                break;
+            }
+            const isFriend = (mySquares & checkFlag) != 0;
+            if (isFriend) {
+                if (pinnedSquare != null) break;  // Two friendly in a row means we're safe
+                // This piece might be pinned, so keep looking for an enemy behind us.
+                pinnedSquare = checkFlag;
+            }
+        }
+    }
+    
+    // Knights. Can't be blocked, they just take up one square in the flag and must be captured. 
+    inline for (knightOffsets) |x| {
+        inline for (knightOffsets) |y| {
+            if (x != y and x != -y) {
+                var checkFile = @as(isize, @intCast(@mod(myKingIndex, 8))) + x;
+                var checkRank = @as(isize, @intCast(@divFloor(myKingIndex, 8))) + y;
+                const invalid = checkFile > 7 or checkRank > 7 or checkFile < 0 or checkRank < 0;
+                if (!invalid){
+                    const checkIndex = checkRank*8 + checkFile;
+                    const p = game.squares[@intCast(checkIndex)];
+                    if (p.colour == defendingPlayer.other() and p.kind == .Knight) {
+                        if (result.blockSingleCheck == 0) {
+                            result.blockSingleCheck |= @as(u64, 1) << @as(u6, @intCast(checkIndex));
+                        } else {
+                            result.doubleCheck = true;
+                            // Want to break here but compiler seg faults. Not allowed in inline loops i guess? 
+                        }
+                    }
                 }
             }
         }
     }
 
-    return if (resultFlag == 0) ~resultFlag else resultFlag;
+    // Pawns. Don't care about going forward or french move. 
+    // They only move one so can't be blocked. 
+    // TODO: this is kinda copy-paste-y
+    var kingRank = @as(usize, @intCast(myKingIndex / 8));
+    var kingFile = @as(usize, @intCast(myKingIndex % 8));
+    const onEdge = if (defendingPlayer == .White) kingRank == 7 else kingRank == 0;
+    if (!onEdge) {
+        const targetRank = switch (defendingPlayer) {
+            .White => w: {
+                break :w kingRank + 1;
+            },
+            .Black => b: {
+                break :b kingRank - 1;
+            },
+        };
+
+        if (kingFile < 7 and game.get(kingFile + 1, targetRank).kind == .Pawn and game.get(kingFile + 1, targetRank).colour != defendingPlayer) { // right
+            if (result.blockSingleCheck == 0) {
+                const pawnIndex = targetRank * 8 + (kingFile + 1);
+                result.blockSingleCheck |= @as(u64, 1) << @intCast(pawnIndex);
+            } else {
+                result.doubleCheck = true;
+            }
+        }
+        if (kingFile > 0 and game.get(kingFile - 1, targetRank).kind == .Pawn and game.get(kingFile - 1, targetRank).colour != defendingPlayer) {
+            if (result.blockSingleCheck == 0) {
+                const pawnIndex = targetRank * 8 + (kingFile + 1);
+                result.blockSingleCheck |= @as(u64, 1) << @intCast(pawnIndex);
+            } else {
+                result.doubleCheck = true;
+            }
+        }
+    }
+
+    // Can never be in check from the other king. Don't need to consider it. 
+
+    if (result.doubleCheck){  // Must move king. 
+        result.blockSingleCheck = 0;
+    } else if (result.blockSingleCheck == 0) {  // Not in check. 
+        result.blockSingleCheck = ~result.blockSingleCheck;
+    }
+
+    var out: GetAttackSquares = .{};
+    // Can't fail because this consumer doesn't allocate memory 
+    genPossibleMoves(&out, game, defendingPlayer.other(), std.testing.failing_allocator) catch unreachable;
+    result.targetedSquares = out.bb;
+    return result;
 }
 
 // TODO: this is bascilly a copy paste from the other one. could have all the move functions be generic over a function to call when you get each move.

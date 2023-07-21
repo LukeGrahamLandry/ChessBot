@@ -226,12 +226,17 @@ export fn getAttackBB(board: *Board, colourI: u32) u64 {
     const colour: Colour = if (colourI == 0) .White else .Black;
     var out: @import("movegen.zig").GetAttackSquares = .{};
     try @import("movegen.zig").genPossibleMoves(&out, board,colour,  std.testing.failing_allocator);
-    return out.getBB(board, colour);
+    return out.bb;
 }
 
 export fn slidingChecksBB(board: *Board, colourI: u32) u64 {
     const colour: Colour = if (colourI == 0) .White else .Black;
-    return @import("movegen.zig").slidingChecksBB(board, colour);
+    return @import("movegen.zig").getChecksInfo(board, colour).blockSingleCheck;
+}
+
+export fn pinsBB(board: *Board, colourI: u32) u64 {
+    const colour: Colour = if (colourI == 0) .White else .Black;
+    return @import("movegen.zig").getChecksInfo(board, colour).pins;
 }
 
 export fn isWhiteTurn(board: *Board) bool {
