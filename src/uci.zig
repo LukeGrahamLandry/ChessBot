@@ -23,8 +23,8 @@ pub const UciCommand = union(enum) {
     AreYouReady,
     NewGame,
     SetPositionInitial,
-    SetPositionMoves: struct { board: *Board, moves: [][5]u8 }, // lifetime! don't save these pointers!
-    Go: struct { maxSearchTimeMs: ?u64 = null, maxDepthPly: ?u64 = null },
+    SetPositionMoves: struct { board: *Board, moves: ?[][5]u8 }, // lifetime! don't save these pointers!
+    Go: struct { maxSearchTimeMs: ?u64 = null, maxDepthPly: ?u64 = null, perft: ?u64 = null,},
     Stop,
     SetOption: struct { name: []const u8, value: []const u8 },
 
@@ -38,6 +38,9 @@ pub const UciCommand = union(enum) {
             .SetPositionInitial => try out.writeAll("position startpos"),
             .Go => |args| {
                 try out.writeAll("go");
+                if (args.perft) |perft| {
+                    try out.print(" perft {}", .{perft});
+                }
                 if (args.maxSearchTimeMs) |movetime| {
                     try out.print(" movetime {}", .{movetime});
                 }
@@ -85,11 +88,15 @@ pub const UciInfo = struct {
 //     promoteChar: u8,
 // };
 
+pub const PerftNode = struct { move: [5]u8, count: u64 };
+
 pub const UciResult = union(enum) {
     InitOk,
     ReadyOk,
     Info: UciInfo,
     BestMove: ?[5]u8,
+    PerftDivide: PerftNode,
+    PerftDone: struct { total: u64 },
 
     pub fn parse(str: []const u8) !UciResult {
         // TODO: this sucks. some crazy comptime perfect hash thing?
@@ -149,8 +156,26 @@ pub const UciResult = union(enum) {
                 @memcpy(move[0..first.len], first);
                 return .{ .BestMove = move };
             }
+        } else if ((str.len > 4 and str[4] == ':') or (str.len > 5 and str[5] == ':')) { // perft
+            var words = std.mem.splitSequence(u8, str, ": ");
+            // TODO: handle errors
+            const move = words.next().?;
+            var result: [5] u8 = std.mem.zeroes([5] u8);
+            if (move.len <= 5) {
+                @memcpy(result[0..move.len], move);
+            } else {
+                return error.UnknownUciStr;
+            }
+            const count = std.fmt.parseInt(u64, words.next() orelse return error.UnknownUciStr, 10) catch return error.UnknownUciStr;
+            return .{ .PerftDivide = .{ .move=result, .count = count}};
+        } else if (std.mem.startsWith(u8, str, "Nodes searched:")) {
+            var words = std.mem.splitSequence(u8, str, ": ");
+            _ = words.next().?;
+            const count = std.fmt.parseInt(u64, words.next() orelse return error.UnknownUciStr, 10) catch return error.UnknownUciStr;
+            return .{ .PerftDone = .{ .total=count }};
         }
 
+        // std.debug.print("UnknownUciStr: {s}\n", .{str});
         return error.UnknownUciStr;
     }
 };

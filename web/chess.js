@@ -118,6 +118,7 @@ function handleCanvasClick(e) {
     } else {
         if (!isHumanTurn()) {
             clicked = [file, rank];
+            renderBoard(mainGame, mainCanvas);
             return;
         }
 

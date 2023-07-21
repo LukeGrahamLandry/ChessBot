@@ -34,6 +34,7 @@ sample <pid> -f zig-out/temp_profile_info.sample
 filtercalltree zig-out/temp_profile_info.sample
 ```
 
+
 ## Learning Zig 
 
 - @truncate explicitly removes high bits but @intCast asserts that the number fits in the new type. So intCast is just better for my usize->u6 of board indexes because it means debug builds catch dumb mistakes and in release builds it becomes (i assume?) a no-op. 

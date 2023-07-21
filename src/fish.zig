@@ -187,7 +187,7 @@ fn playUciMove(fish: *Stockfish, board: *Board, moveHistory: *std.ArrayList([5]u
     try moveHistory.append(moveStr);
 }
 
-const Stockfish = struct {
+pub const Stockfish = struct {
     process: std.ChildProcess,
     buffer: Reader,
     const Reader = std.io.BufferedReader(4096, std.fs.File.Reader);

@@ -128,7 +128,7 @@ export fn getPossibleMovesBB(board: *Board, from: i32) u64 {
     for (allMoves.items) |move| {
         const unMove = board.play(move);
         defer board.unplay(unMove);
-        if (board.inCheck(piece.colour)) continue;
+        if (board.slowInCheck(piece.colour)) continue;
         result |= @as(u64, 1) << @intCast(move.to);
     }
     return result;

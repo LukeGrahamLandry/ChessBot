@@ -75,7 +75,7 @@ pub fn bestMove(comptime opts: StratOpts, game: *Board, maxDepth: usize, timeLim
         const move = topLevelMoves[m];
         const unMove = game.play(move);
         defer game.unplay(unMove);
-        if (game.inCheck(me)) {
+        if (game.slowInCheck(me)) {
             std.mem.swap(Move, &topLevelMoves[topLevelMoves.len - 1], &topLevelMoves[m]);  // Leak but arena so its fine
             topLevelMoves.len -= 1;
         } else {
@@ -234,7 +234,7 @@ pub fn walkEval(comptime opts: StratOpts, game: *Board, remaining: i32, alphaIn:
     for (moves) |move| {
         const unMove = game.play(move);
         defer game.unplay(unMove);
-        if (game.inCheck(me)) {
+        if (game.slowInCheck(me)) {
             checksSkipped += 1;
             continue;
         }
@@ -264,7 +264,7 @@ pub fn walkEval(comptime opts: StratOpts, game: *Board, remaining: i32, alphaIn:
     }
 
     if (noLegalMoves) { // <me> can't make any moves. Either got checkmated or its a draw.
-        if (game.inCheck(me)) {
+        if (game.slowInCheck(me)) {
             return (IM_MATED_EVAL - remaining) * me.dir();
         } else {
             return Magic.DRAW_EVAL;

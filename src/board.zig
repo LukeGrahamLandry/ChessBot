@@ -469,7 +469,7 @@ pub const Board = struct {
 
     pub fn fromFEN(fen: []const u8) error{InvalidFen}!Board {
         var b = try UCI.parseFen(fen);
-        b.checks = getChecksInfo(&b, b.nextPlayer.other());
+        b.checks = getChecksInfo(&b, b.nextPlayer);
         return b;
     }
 
@@ -510,21 +510,15 @@ pub const Board = struct {
         print("{s}\n", .{s});
     }
 
-    pub fn inCheck(self: *Board, me: Colour) bool {
-        // return @import("movegen.zig").reverseFromKingIsInCheck(self, me);
-        if (me == self.nextPlayer) {
-            const kingFlag = @as(u64, 1) << @intCast(if (me == .White) self.whiteKingIndex else self.blackKingIndex);
-            return (kingFlag & self.checks.targetedSquares) != 0;
-        } else {
-            return @import("movegen.zig").reverseFromKingIsInCheck(self, me);
-        }
+    pub fn slowInCheck(self: *Board, me: Colour) bool {
+        return @import("movegen.zig").reverseFromKingIsInCheck(self, me);
     }
 
     pub fn gameOverReason(game: *Board, alloc: std.mem.Allocator) !GameOver {
         if (game.halfMoveDraw >= 100) return .FiftyMoveDraw;
         if (game.hasInsufficientMaterial()) return .MaterialDraw;
         if (try game.nextPlayerHasLegalMoves(alloc)) return .Continue;
-        if (game.inCheck(game.nextPlayer)) return if (game.nextPlayer == .White) .BlackWins else .WhiteWins;
+        if (game.slowInCheck(game.nextPlayer)) return if (game.nextPlayer == .White) .BlackWins else .WhiteWins;
         return .Stalemate;
     }
 
@@ -538,7 +532,7 @@ pub const Board = struct {
         for (moves) |move| {
             const unMove = game.play(move);
             defer game.unplay(unMove);
-            if (game.inCheck(colour)) continue;
+            if (game.slowInCheck(colour)) continue;
             return true;
         }
         return false;
@@ -631,7 +625,7 @@ pub fn inferPlayMove(board: *Board, fromIndex: u32, toIndex: u32, alloc: std.mem
     }
 
     const unMove = board.play(realMove);
-    if (board.inCheck(colour)) {
+    if (board.slowInCheck(colour)) {
         board.unplay(unMove);
         return error.IllegalMove;
     }

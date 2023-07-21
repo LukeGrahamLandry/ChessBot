@@ -16,6 +16,7 @@ pub fn build(b: *std.Build) void {
     // makeBin(b, "uci", target, optimize);
     makeBin(b, "fish", target, optimize);
     makeBin(b, "bench", target, optimize);
+    makeBin(b, "perft", target, optimize);
 
     const unit_tests = b.addTest(.{
         .root_source_file = .{ .path = "src/tests.zig" },

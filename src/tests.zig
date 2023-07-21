@@ -15,25 +15,27 @@ const assert = @import("common.zig").assert;
 const setup = @import("common.zig").setup;
 const Timer = @import("bench.zig").Timer;
 
-const PerftResult = struct {
+pub const PerftResult = struct {
     games: u64 = 0,
     checkmates: u64 = 0,
 };
 
 // TODO: try using a memo table here as well.
-fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, arenaAlloc: std.mem.Allocator, comptime countMates: bool) !PerftResult {
+pub fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, arenaAlloc: std.mem.Allocator, countMates: bool) !PerftResult {
     var results: PerftResult = .{};
+
+    // @import("movegen.zig").printBitBoard(game.checks.targetedSquares);
 
     if (remainingDepth == 0) {
         if (!countMates) @panic("Should early exit on remainingDepth == 0");
 
-        if (game.inCheck(me)) {
+        if (game.slowInCheck(me)) {
             const allMoves = try MoveFilter.Any.get().possibleMoves(game, me, arenaAlloc);
             var anyLegalMoves = false;
             for (allMoves) |move| {
                 const unMove = game.play(move);
                 defer game.unplay(unMove);
-                if (game.inCheck(me)) continue; // move illigal
+                if (game.slowInCheck(me)) continue; // move illigal
                 anyLegalMoves = true;
                 break;
             }
@@ -56,7 +58,9 @@ fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, arenaAllo
     for (allMoves) |move| {
         const unMove = game.play(move);
         defer game.unplay(unMove);
-        if (game.inCheck(me)) continue; // move illigal
+        if (game.slowInCheck(me)) continue; // move illigal
+
+        // print("{s}\n", .{try move.text()});
 
         if (!countMates and (remainingDepth - 1) == 0) {
             results.games += 1;
@@ -86,6 +90,18 @@ test "count possible games" {
     }).run();
 }
 
+
+test "another perft" {
+    // http://www.rocechess.ch/perft.html
+    try (PerftTest{
+        .possibleGames = &[_]u64{ 48, 2039, 97862, 4085603 },
+        .possibleMates = &[_]u64{0,0,0,0},
+        .fen = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+        .countMates = false,
+    }).run();
+}
+
+
 // This relies on tests not being run in parallel!
 var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 
@@ -93,7 +109,7 @@ pub const PerftTest = struct {
     possibleGames: []const u64,
     possibleMates: []const u64,
     fen: []const u8,
-    comptime countMates: bool = true,
+    countMates: bool = true,
 
     pub fn run(self: PerftTest) !void {
         var game = try Board.fromFEN(self.fen);
