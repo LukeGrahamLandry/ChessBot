@@ -238,6 +238,7 @@ pub const Board = struct {
     }
 
     pub fn initial() Board {
+        @setEvalBranchQuota(5000);
         // This is kinda cool. It's a compile error if this fails to parse, so the function doesn't return an error union.
         return comptime try fromFEN(INIT_FEN);
     }
@@ -257,8 +258,15 @@ pub const Board = struct {
         return isEmpty;
     }
 
-    /// This assumes that <move> is legal.
+
     pub fn play(self: *Board, move: Move) OldMove {
+        const unMove = self.playNoUpdateChecks(move);
+        self.checks = getChecksInfo(self, self.nextPlayer);
+        return unMove;
+    }
+
+    /// This assumes that <move> is legal.
+    pub fn playNoUpdateChecks(self: *Board, move: Move) OldMove {
         assert(move.from != move.to);
         const thisMove: OldMove = .{ .move = move, .taken = self.squares[move.to], .original = self.squares[move.from], .old_castling = self.castling, .debugPeicePositions = self.peicePositions, .debugSimpleEval = self.simpleEval, .frenchMove = self.frenchMove, .oldHalfMoveDraw = self.halfMoveDraw, .debugZoidberg = self.zoidberg, .lastMove=self.lastMove, .oldChecks=self.checks };
         assert(thisMove.original.colour == self.nextPlayer);
@@ -383,7 +391,6 @@ pub const Board = struct {
         self.nextPlayer = self.nextPlayer.other();
         if (slowTrackAllMoves) self.line.append(thisMove) catch @panic("Overflow line.");
         self.lastMove = move;
-        self.checks = getChecksInfo(self, self.nextPlayer);
         // self.pastBoardHashes.append(self.zoidberg) catch {}; // TODO
         return thisMove;
     }
@@ -393,6 +400,10 @@ pub const Board = struct {
     pub fn unplay(self: *Board, move: OldMove) void {
         // _ = self.pastBoardHashes.pop();
         // print("start unplay\n", .{});
+        if (self.lastMove) |expected| {
+            const wrongMove = std.meta.isError(std.testing.expectEqual(expected, move.move));
+            if (wrongMove) @panic("unplayed the wrong move");
+        }
         self.checks = move.oldChecks;
         self.lastMove = move.lastMove;
         self.zoidberg ^= Magic.ZOIDBERG[Magic.ZOID_TURN_INDEX];
@@ -465,6 +476,16 @@ pub const Board = struct {
         assert(std.meta.eql(move.debugPeicePositions, self.peicePositions));
         assert(self.simpleEval == move.debugSimpleEval);
         assert(self.zoidberg == move.debugZoidberg);
+        const recalc = getChecksInfo(self, self.nextPlayer);
+        const failed = std.meta.isError(std.testing.expectEqual(recalc, self.checks));
+        if (failed){
+            self.debugPrint();
+            print("{any}\n{any}\n", .{self.checks, recalc});
+            @import("movegen.zig").printBitBoard(self.checks.targetedSquares);
+            @import("movegen.zig").printBitBoard(recalc.targetedSquares);
+            // @panic("wrong");
+            self.checks = recalc;
+        }
     }
 
     pub fn fromFEN(fen: []const u8) error{InvalidFen}!Board {

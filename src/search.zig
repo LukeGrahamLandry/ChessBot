@@ -65,7 +65,7 @@ pub fn bestMove(comptime opts: StratOpts, game: *Board, maxDepth: usize, timeLim
     const startTime = nanoTimestamp();
     const endTime = startTime + (timeLimitMs * std.time.ns_per_ms);
     defer _ = upperArena.reset(.retain_capacity);
-    var topLevelMoves = try genAllMoves.possibleMoves(game, me, upperArena.allocator());
+    var topLevelMoves = try movegen.MoveFilter.Any.get().possibleMoves(game, me, upperArena.allocator());
 
     var evalGuesses = try std.ArrayList(i32).initCapacity(upperArena.allocator(), topLevelMoves.len);
 
@@ -76,8 +76,17 @@ pub fn bestMove(comptime opts: StratOpts, game: *Board, maxDepth: usize, timeLim
         const unMove = game.play(move);
         defer game.unplay(unMove);
         if (game.slowInCheck(me)) {
-            std.mem.swap(Move, &topLevelMoves[topLevelMoves.len - 1], &topLevelMoves[m]);  // Leak but arena so its fine
-            topLevelMoves.len -= 1;
+            print("move: {}\n", .{move});
+            print("after:\n", .{});
+            game.debugPrint();
+            game.unplay(unMove);
+            print("before:\n", .{});
+            game.debugPrint();
+            panic("movegen game illegal move .", .{});
+            @panic("bestMove movegen gave illigal move");
+
+            // std.mem.swap(Move, &topLevelMoves[topLevelMoves.len - 1], &topLevelMoves[m]);  // Leak but arena so its fine
+            // topLevelMoves.len -= 1;
         } else {
             try evalGuesses.append(game.simpleEval);
             m += 1;
@@ -213,7 +222,7 @@ pub fn walkEval(comptime opts: StratOpts, game: *Board, remaining: i32, alphaIn:
     var alpha = alphaIn;
     var beta = betaIn;
 
-    var moves = try genAllMoves.possibleMoves(game, me, alloc);
+    var moves = try movegen.MoveFilter.Any.get().possibleMoves(game, me, alloc);
     defer alloc.free(moves);
 
     if (cacheHit) |cached| {
@@ -235,6 +244,15 @@ pub fn walkEval(comptime opts: StratOpts, game: *Board, remaining: i32, alphaIn:
         const unMove = game.play(move);
         defer game.unplay(unMove);
         if (game.slowInCheck(me)) {
+            print("move: {s}\n", .{try move.text()});
+            print("after:\n", .{});
+            game.debugPrint();
+            game.unplay(unMove);
+            print("before:\n", .{});
+            game.debugPrint();
+            const recalcInfo = @import("movegen.zig").getChecksInfo(game, me);
+            print("{any}", .{std.testing.expectEqual(game.checks, recalcInfo)});
+            panic("walkEval movegen gave illegal move.", .{});
             checksSkipped += 1;
             continue;
         }

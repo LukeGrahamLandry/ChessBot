@@ -81,6 +81,13 @@ pub fn genOnePieceMoves(out: anytype, board: *Board, i: usize, file: usize, rank
 }
 
 fn rookSlide(out: anytype, board: *const Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
+    // If pinned by a bishop, you can't move straight. 
+    const startFlag = @as(u64, 1) << @intCast(i);
+    if (out.filter != .CurrentlyCalcChecks) {
+        if ((board.checks.pinsByBishop & startFlag) != 0) return;
+    }
+
+    const startPinned = (board.checks.pinsByRook & startFlag) != 0;
     inline for (directions[0..4]) |offset| {
         var checkFile = @as(isize, @intCast(file));
         var checkRank = @as(isize, @intCast(rank));
@@ -88,33 +95,59 @@ fn rookSlide(out: anytype, board: *const Board, i: usize, file: usize, rank: usi
             checkFile += offset[0];
             checkRank += offset[1];
             if (checkFile > 7 or checkRank > 7 or checkFile < 0 or checkRank < 0) break;
-            if (try out.trySlide(board, i, @intCast(checkFile), @intCast(checkRank), piece)) break;
+            // TODO: can i check this once by direction?
+            // If pinned by a rook, you need to stay on the pin lines
+            if (out.filter != .CurrentlyCalcChecks) {
+                const toFlag = @as(u64, 1) << @intCast(checkRank*8 + checkFile);
+                const endPinned = (board.checks.pinsByRook & toFlag) != 0;
+                if (startPinned and !endPinned) break;
+                if ((board.checks.blockSingleCheck & toFlag) == 0) {
+                    if (board.emptyAt(@intCast(checkFile), @intCast(checkRank))) {
+                        continue;
+                    } else {
+                        break;
+                    }
+                }
+            }
+            // For calculating where the king isn't allowed to move, you need to keep going after hitting the king. 
+            const skip = out.filter == .CurrentlyCalcChecks and board.get(@intCast(checkFile), @intCast(checkRank)).is(piece.colour.other(), .King);
+            if (try out.trySlide(board, i, @intCast(checkFile), @intCast(checkRank), piece) and !skip) break;
         }
     }
 }
 
 fn pawnMove(out: anytype, board: *const Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
+    const startFlag = @as(u64, 1) << @intCast(i);
+    const rookPinned = (board.checks.pinsByRook & startFlag) != 0 and out.filter != .CurrentlyCalcChecks;
+    const bishopPinned = (board.checks.pinsByBishop & startFlag) != 0 and out.filter != .CurrentlyCalcChecks;
+
+    // TODO: rook pin
     const targetRank = switch (piece.colour) {
         // Asserts can't have a pawn at the end in real games because it would have promoted.
         .White => w: {
             assert(rank < 7);
-            if (out.filter == .Any and rank == 1 and board.emptyAt(file, 2) and board.emptyAt(file, 3)) { // forward two
-                try out.pawnForwardTwo(i, file, 3); // cant promote
+            if (!bishopPinned and out.filter == .Any and rank == 1 and board.emptyAt(file, 2) and board.emptyAt(file, 3)) { // forward two
+                try out.pawnForwardTwo(board, i, file, 3); // cant promote
             }
             break :w rank + 1;
         },
         .Black => b: {
             assert(rank > 0);
-            if (out.filter == .Any and rank == 6 and board.emptyAt(file, 5) and board.emptyAt(file, 4)) { // forward two
-                try out.pawnForwardTwo(i, file, 4); // cant promote
+            if (!bishopPinned and out.filter == .Any and rank == 6 and board.emptyAt(file, 5) and board.emptyAt(file, 4)) { // forward two
+                try out.pawnForwardTwo(board, i, file, 4); // cant promote
             }
             break :b rank - 1;
         },
     };
 
+    // TODO: rook pin
     if (out.filter == .Any and board.emptyAt(file, targetRank)) { // forward
         try out.maybePromote(board, i, file, targetRank, piece.colour);
     }
+
+    if (rookPinned) return;
+    
+    // TODO: bishop pin
     if (file < 7) { // right
         try out.pawnAttack(board, i, file + 1, targetRank, piece.colour);
         // TODO: are these right?
@@ -143,6 +176,13 @@ fn frenchMove(out: anytype, board: *const Board, i: usize, targetFile: usize, ta
 }
 
 fn bishopSlide(out: anytype, board: *const Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
+    // If pinned by a rook, you can't move diagnally. 
+    const startFlag = @as(u64, 1) << @intCast(i);
+    if (out.filter != .CurrentlyCalcChecks) {
+        if ((board.checks.pinsByRook & startFlag) != 0) return;
+    }
+
+    const startPinned = (board.checks.pinsByBishop & startFlag) != 0;
     inline for (directions[4..8]) |offset| {
         var checkFile = @as(isize, @intCast(file));
         var checkRank = @as(isize, @intCast(rank));
@@ -150,46 +190,67 @@ fn bishopSlide(out: anytype, board: *const Board, i: usize, file: usize, rank: u
             checkFile += offset[0];
             checkRank += offset[1];
             if (checkFile > 7 or checkRank > 7 or checkFile < 0 or checkRank < 0) break;
-            if (try out.trySlide(board, i, @intCast(checkFile), @intCast(checkRank), piece)) break;
+            // TODO: can i check this once by direction?
+            // If pinned by a pishop, you need to stay on the pin lines
+            if (out.filter != .CurrentlyCalcChecks) {
+                const toFlag = @as(u64, 1) << @intCast(checkRank*8 + checkFile);
+                const endPinned = (board.checks.pinsByBishop & toFlag) != 0;
+                if (startPinned and !endPinned) break;
+                if ((board.checks.blockSingleCheck & toFlag) == 0) {
+                    if (board.emptyAt(@intCast(checkFile), @intCast(checkRank))) {
+                        continue;
+                    } else {
+                        break;
+                    }
+                }
+            }
+            // For calculating where the king isn't allowed to move, you need to keep going after hitting the king. 
+            const skip = out.filter == .CurrentlyCalcChecks and board.get(@intCast(checkFile), @intCast(checkRank)).is(piece.colour.other(), .King);
+            if (try out.trySlide(board, i, @intCast(checkFile), @intCast(checkRank), piece) and !skip) break;
         }
     }
+}
+
+fn trySlideKing(out: anytype, board: *Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
+    const endFlag = @as(u64, 1) << @intCast(rank*8 + file);
+    if (out.filter != .CurrentlyCalcChecks and (board.checks.targetedSquares & endFlag) != 0) return;
+    _ = try out.trySlide(board, i, file, rank, piece);
 }
 
 // TODO: This is suck!
 fn kingMove(out: anytype, board: *Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
     // forward
     if (file < 7) {
-        _ = try out.trySlide(board, i, file + 1, rank, piece);
-        if (rank < 7) _ = try out.trySlide(board, i, file + 1, rank + 1, piece);
-        if (rank > 0) _ = try out.trySlide(board, i, file + 1, rank - 1, piece);
+        try trySlideKing(out, board, i, file + 1, rank, piece);
+        if (rank < 7) try trySlideKing(out, board, i, file + 1, rank + 1, piece);
+        if (rank > 0) try trySlideKing(out, board, i, file + 1, rank - 1, piece);
     }
     // back
     if (file > 0) {
-        _ = try out.trySlide(board, i, file - 1, rank, piece);
-        if (rank < 7) _ = try out.trySlide(board, i, file - 1, rank + 1, piece);
-        if (rank > 0) _ = try out.trySlide(board, i, file - 1, rank - 1, piece);
+        try trySlideKing(out, board, i, file - 1, rank, piece);
+        if (rank < 7) try trySlideKing(out, board, i, file - 1, rank + 1, piece);
+        if (rank > 0 )try trySlideKing(out, board, i, file - 1, rank - 1, piece);
     }
     // horizontal
-    if (rank < 7) _ = try out.trySlide(board, i, file, rank + 1, piece);
-    if (rank > 0) _ = try out.trySlide(board, i, file, rank - 1, piece);
+    if (rank < 7) try trySlideKing(out, board, i, file, rank + 1, piece);
+    if (rank > 0) try trySlideKing(out, board, i, file, rank - 1, piece);
 
     try tryCastle(out, board, i, file, rank, piece.colour, true);
     try tryCastle(out, board, i, file, rank, piece.colour, false);
 }
 
+// TODO: move this into tryCastle and use the same mask for checking empty squares
 fn castlingIsLegal(out: anytype, board: *Board, i: usize, colour: Colour, comptime goingLeft: bool) !bool {
+    _ = colour;
     if (out.filter == .CurrentlyCalcChecks) return false;
-    if (board.slowInCheck(colour)) return false;
     // Note this test doesn't go all the way to the rook on the left, its allowed to go through check!
-    const path = if (goingLeft) [_]usize{ i - 1, i - 2 } else [_]usize{ i + 1, i + 2 };
+    // TODO: THIS SHOULD NOT HAVE JUMPS. just build the mask, we know where the king is if it can castle!
+    const path = if (goingLeft) [_]u64{ i, i - 1, i - 2 } else [_]u64{ i, i + 1, i + 2 };
+    var flag: u64 = 0;
     for (path) |sq| {
-        // TODO: do this without playing the move? It annoys me that this makes getPossibleMoves take a mutable board pointer (would also be fixed by doing it later with other legal move checks).
-        const move = ii(@intCast(i), @intCast(sq), false);
-        const unMove = board.play(move);
-        defer board.unplay(unMove);
-        if (board.slowInCheck(colour)) return false;
+        flag |= @as(u64, 1) << @intCast(sq);
     }
-    return true;
+    return (board.checks.targetedSquares & flag) == 0;
 }
 
 // TODO: do all the offsets on i instead of on (x, y) since we know rooks/king are in start pos so can't wrap around board.
@@ -205,7 +266,6 @@ pub fn tryCastle(out: anytype, board: *Board, i: usize, file: usize, rank: usize
             (board.emptyAtI(i + 1) and board.emptyAtI(i + 2));
 
         if (pathClear) {
-            // TODO: do this later like other check checks. That way don't need to do the expensive check if it gets pruned out. Probably won't save much since you generally want to castle anyway.
             if (!try castlingIsLegal(out, board, i, colour, goingLeft)) return;
 
             const kingFrom: u6 = @intCast(rank * 8 + file);
@@ -226,13 +286,23 @@ pub fn tryCastle(out: anytype, board: *Board, i: usize, file: usize, rank: usize
 }
 
 fn knightMove(out: anytype, board: *const Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
+    // Pinned knights can never move. 
+    if (out.filter != .CurrentlyCalcChecks) {  // TODO: get rid of this check everywhere by setting the checks info to 0/1 so it gets ignored 
+        const flag = @as(u64, 1) << @intCast(i);
+        if (((board.checks.pinsByBishop | board.checks.pinsByRook) & flag) != 0) return;
+    }
+
     inline for (knightOffsets) |x| {
         inline for (knightOffsets) |y| {
             if (x != y and x != -y) {
                 var checkFile = @as(isize, @intCast(file)) + x;
                 var checkRank = @as(isize, @intCast(rank)) + y;
                 const invalid = checkFile > 7 or checkRank > 7 or checkFile < 0 or checkRank < 0;
-                if (!invalid) try out.tryHop(board, i, @intCast(checkFile), @intCast(checkRank), piece);
+                if (!invalid) {
+                    const toFlag = @as(u64, 1) << @intCast(checkRank*8 + checkFile);
+                    const skip = out.filter != .CurrentlyCalcChecks and (board.checks.blockSingleCheck & toFlag) == 0;
+                    if (!skip) try out.tryHop(board, i, @intCast(checkFile), @intCast(checkRank), piece);
+                }
             }
         }
     }
@@ -290,7 +360,7 @@ const CollectMoves = struct {
             if (piece.kind != .King and (board.checks.blockSingleCheck & toFlag) == 0) {
                 return (anyPieces & toFlag) != 0;
             }
-            if (piece.kind == .King and (board.checks.targetedSquares & toFlag) != 0) return true;
+            if (piece.kind == .King and (board.checks.targetedSquares & toFlag) != 0) return (anyPieces & toFlag) != 0;
         }
        
         var mine: u64 = undefined;
@@ -334,8 +404,13 @@ const CollectMoves = struct {
         return false;
     }
 
-    pub fn pawnForwardTwo(self: CollectMoves, fromIndex: usize, toFile: usize, toRank: usize) !void {
+    pub fn pawnForwardTwo(self: CollectMoves, board: *const Board, fromIndex: usize, toFile: usize, toRank: usize) !void {
         // std.debug.assert(fromIndex < 64 and toFile < 8 and toRank < 8);
+        const toFlag = @as(u64, 1) << @intCast(toRank*8 + toFile);
+        const fromFlag = @as(u64, 1) << @intCast(fromIndex);
+        if ((board.checks.blockSingleCheck & toFlag) == 0) return;
+        if ((board.checks.pinsByRook & fromFlag) != 0 and (board.checks.pinsByRook & toFlag) == 0) return;
+        
         const move: Move = .{ .from = @intCast(fromIndex), .to = @intCast(toRank * 8 + toFile), .action = .allowFrenchMove, .isCapture = false, .bonus = Magic.PUSH_PAWN * 2 };
         try self.moves.append(move);
     }
@@ -353,6 +428,18 @@ const CollectMoves = struct {
     }
 
     fn maybePromote(self: CollectMoves, board: *const Board, fromIndex: usize, toFile: usize, toRank: usize, colour: Colour) !void {
+        if (self.filter != .CurrentlyCalcChecks) {
+            const toFlag = @as(u64, 1) << @intCast(toRank*8 + toFile);
+            if ((board.checks.blockSingleCheck & toFlag) == 0) return;
+            const fromFlag = @as(u64, 1) << @intCast(fromIndex);
+
+            // TODO: no and. can both be crushed it together into one bit thing? 
+            const rookPinned = (board.checks.pinsByRook & fromFlag) != 0;
+            const bishopPinned = (board.checks.pinsByBishop & fromFlag) != 0;
+            if (rookPinned and (board.checks.pinsByRook & toFlag) == 0) return;
+            if (bishopPinned and (board.checks.pinsByBishop & toFlag) == 0) return;
+        }
+
         // TODO: including promotions on fast path should be seperate option
         const check = board.get(toFile, toRank);
 
@@ -417,7 +504,8 @@ pub const GetAttackSquares = struct {
         return !board.emptyAtI(toIndexx);
     }
 
-    pub fn pawnForwardTwo(self: *GetAttackSquares, fromIndex: usize, toFile: usize, toRank: usize) !void {
+    pub fn pawnForwardTwo(self: *GetAttackSquares, board: *const Board, fromIndex: usize, toFile: usize, toRank: usize) !void {
+        _ = board;
         _ = toRank;
         _ = toFile;
         _ = fromIndex;
@@ -454,7 +542,9 @@ pub const ChecksInfo = struct {
     // Includes the enemy (even a single knight) because capturing is fine. 
     blockSingleCheck: u64 = 0, 
     // Your peices may not move FROM these squares because they will reveal a check from an enemy slider. 
-    pins: u64 = 0,
+    // Directions must be tracked seperatly because you can move along the pin axis. It works out so they never overlaop and let you move between pins.
+    pinsByRook: u64 = 0,
+    pinsByBishop: u64 = 0,
     // If true, the king must move to a safe square, because multiple enemies can't be blocked/captured. 
     doubleCheck: bool = false,
     // Where the enemy can attack. The king may not move here. 
@@ -478,7 +568,7 @@ pub fn getChecksInfo(game: *Board, defendingPlayer: Colour) ChecksInfo {
         var checkFile = @as(isize, @intCast(myKingIndex % 8));
         var checkRank = @as(isize, @intCast(myKingIndex / 8));
         var wipFlag: u64 = 0;
-        var pinnedSquare: ?u64 = null;
+        var lookingForPin = false;
         while (true) {
             checkFile += offset[0];
             checkRank += offset[1];
@@ -491,8 +581,12 @@ pub fn getChecksInfo(game: *Board, defendingPlayer: Colour) ChecksInfo {
             if (isEnemy) {
                 const isSlider = (kind == .Queen or ((dir < 4 and kind == .Rook) or (dir >= 4 and kind == .Bishop)));
                 if (isSlider) {
-                    if (pinnedSquare) |pinned| {  // Found a pin. Can't move the friend from before.  
-                        result.pins |= pinned;
+                    if (lookingForPin) {  // Found a pin. Can't move the friend from before.  
+                        if (dir < 4) {
+                            result.pinsByRook |= wipFlag;
+                        } else {
+                            result.pinsByBishop |= wipFlag;
+                        }
                     } else {
                         if (result.blockSingleCheck != 0) {
                             result.doubleCheck = true; 
@@ -508,9 +602,9 @@ pub fn getChecksInfo(game: *Board, defendingPlayer: Colour) ChecksInfo {
             }
             const isFriend = (mySquares & checkFlag) != 0;
             if (isFriend) {
-                if (pinnedSquare != null) break;  // Two friendly in a row means we're safe
+                if (lookingForPin) break;  // Two friendly in a row means we're safe
                 // This piece might be pinned, so keep looking for an enemy behind us.
-                pinnedSquare = checkFlag;
+                lookingForPin = true;
             }
         }
     }
@@ -584,6 +678,7 @@ pub fn getChecksInfo(game: *Board, defendingPlayer: Colour) ChecksInfo {
     // Can't fail because this consumer doesn't allocate memory 
     genPossibleMoves(&out, game, defendingPlayer.other(), std.testing.failing_allocator) catch @panic("unreachable alloc");
     result.targetedSquares = out.bb;
+
     return result;
 }
 

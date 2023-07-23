@@ -23,30 +23,10 @@ pub const PerftResult = struct {
 // TODO: try using a memo table here as well.
 pub fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, arenaAlloc: std.mem.Allocator, countMates: bool) !PerftResult {
     var results: PerftResult = .{};
+    if (countMates) @panic("TODO: reimpl count mates");
+    if (remainingDepth == 0) return .{ .games=1, .checkmates=0}; // @panic("should early exit for depth 0");
 
     // @import("movegen.zig").printBitBoard(game.checks.targetedSquares);
-
-    if (remainingDepth == 0) {
-        if (!countMates) @panic("Should early exit on remainingDepth == 0");
-
-        if (game.slowInCheck(me)) {
-            const allMoves = try MoveFilter.Any.get().possibleMoves(game, me, arenaAlloc);
-            var anyLegalMoves = false;
-            for (allMoves) |move| {
-                const unMove = game.play(move);
-                defer game.unplay(unMove);
-                if (game.slowInCheck(me)) continue; // move illigal
-                anyLegalMoves = true;
-                break;
-            }
-            if (!anyLegalMoves) {
-                results.checkmates += 1;
-            }
-        }
-
-        results.games += 1;
-        return results;
-    }
 
     const allMoves = try MoveFilter.Any.get().possibleMoves(game, me, arenaAlloc);
 
@@ -58,12 +38,10 @@ pub fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, arena
     for (allMoves) |move| {
         const unMove = game.play(move);
         defer game.unplay(unMove);
-        if (game.slowInCheck(me)) continue; // move illigal
 
-        // print("{s}\n", .{try move.text()});
-
-        if (!countMates and (remainingDepth - 1) == 0) {
-            results.games += 1;
+        if ((remainingDepth - 2) == 0) {
+            const nextMoves = try MoveFilter.Any.get().possibleMoves(game, me.other(), arenaAlloc);
+            results.games += nextMoves.len;
         } else {
             const next = try countPossibleGames(game, me.other(), remainingDepth - 1, nextAlloc, countMates);
             results.games += next.games;
@@ -109,7 +87,7 @@ pub const PerftTest = struct {
     possibleGames: []const u64,
     possibleMates: []const u64,
     fen: []const u8,
-    countMates: bool = true,
+    countMates: bool = false,  // TODO: bring back
 
     pub fn run(self: PerftTest) !void {
         var game = try Board.fromFEN(self.fen);

@@ -120,15 +120,13 @@ export fn getPossibleMovesBB(board: *Board, from: i32) u64 {
     const rank = @divFloor(from, 8);
 
     var allMoves = std.ArrayList(Move).init(walloc);
+    // TODO: check if in check and not moving king here because its done in genAllMoves
     search.genAllMoves.collectOnePieceMoves(&allMoves, board, @intCast(from), @intCast(file), @intCast(rank)) catch |err| {
         logErr(err, "getPossibleMoves");
         return 0;
     };
     defer allMoves.deinit();
     for (allMoves.items) |move| {
-        const unMove = board.play(move);
-        defer board.unplay(unMove);
-        if (board.slowInCheck(piece.colour)) continue;
         result |= @as(u64, 1) << @intCast(move.to);
     }
     return result;
@@ -234,9 +232,14 @@ export fn slidingChecksBB(board: *Board, colourI: u32) u64 {
     return @import("movegen.zig").getChecksInfo(board, colour).blockSingleCheck;
 }
 
-export fn pinsBB(board: *Board, colourI: u32) u64 {
+export fn pinsByBishopBB(board: *Board, colourI: u32) u64 {
     const colour: Colour = if (colourI == 0) .White else .Black;
-    return @import("movegen.zig").getChecksInfo(board, colour).pins;
+    return @import("movegen.zig").getChecksInfo(board, colour).pinsByBishop;
+}
+
+export fn pinsByRookBB(board: *Board, colourI: u32) u64 {
+    const colour: Colour = if (colourI == 0) .White else .Black;
+    return @import("movegen.zig").getChecksInfo(board, colour).pinsByRook;
 }
 
 export fn isWhiteTurn(board: *Board) bool {

@@ -104,7 +104,7 @@ function getFenFromEngine(board) {
 
 function isHumanTurn() {
     // This could be done by parsing the fen but that's a lot of extra code just to be slightly slower. 
-    return !enableBot || Engine.isWhiteTurn();
+    return !enableBot || Engine.isWhiteTurn(mainGame);
 }
 
 let clicked = null;
@@ -204,7 +204,7 @@ const letters = ["A", "B", "C", "D", "E", "F", "G", "H"];
 function renderBoard(board, ctx) {
     const fen = getFenFromEngine(board);
     document.getElementById("fen").value = fen;
-    document.getElementById("player").innerText = gameOverMsg != null ? gameOverMsg : (Engine.isWhiteTurn() ? "White" : "Black") + "'s Turn";
+    document.getElementById("player").innerText = gameOverMsg != null ? gameOverMsg : (Engine.isWhiteTurn(board) ? "White" : "Black") + "'s Turn";
     document.getElementById("mEval").innerText = Engine.getMaterialEval();
 
     // TODO: If I really cared I could just render the diff instead of clearing the board
@@ -240,8 +240,12 @@ function renderBoard(board, ctx) {
             drawBitBoardPair(ctx, Engine.slidingChecksBB(board, WHITE), Engine.slidingChecksBB(board, BLACK));
             break;
         }
-        case "pins": {
-            drawBitBoardPair(ctx, Engine.pinsBB(board, WHITE), Engine.pinsBB(board, BLACK));
+        case "bishop_pins": {
+            drawBitBoardPair(ctx, Engine.pinsByBishopBB(board, WHITE), Engine.pinsByBishopBB(board, BLACK));
+            break;
+        }
+        case "rook_pins": {
+            drawBitBoardPair(ctx, Engine.pinsByRookBB(board, WHITE), Engine.pinsByRookBB(board, BLACK));
             break;
         }
         default: 
