@@ -1,27 +1,3 @@
-## Ideas
-
-- Know about check, mate, castling, en-passant, and draws!
-- Support extra fen string info. 
-- Be able to run tests in parrallel. Write custom test runner that just uses seperate processes? 
-- Have the UI show lines for debugging
-- Give yourself extra depth only looking at captures because it thinks hanging pieces on move n+1 is fine. 
-- Opening book. Maybe order by board hash and binary search because normal hashmap wastes space to avoid collissions. Only bother with lookup in first x moves. 
-- Endgame book. ^
-- Partial heap sort for move ordering. Then I can have a more complex eval function? 
-- Use n-1 depth for move ordering of n search. Then you can cancel at anytime and use previous results. 
-- Run engine on another thread so it doesn't hang the UI and can be canceled when it goes to long. Put a flag somewhere that it checks to break out of the recursion. 
-
-## Methods note
-
-"~2x as fast" means `old_time/new_time == 2`. 
-
-- Not very scientific because I just run a few times then take one number. The improvements are so large/consistant that it feels trustworthy. Should make something that runs it multiple times and averages (throw away outliers?) eventually. 
-- Was originally getting numbers by running 5 moves each playing against itself. Which means I'm measuring the beginning of the game where not a lot of captures and should probably be openings book anyway. So should revise that to more interesting position. But depth 4 from move 5 is probably like a real game state.  
-- Currently benchmarking on native (m1), should do in wasm if that's what I care about. 
-- I've been increasing depth as it gets faster which might bias it but at the very least means absolute ms numbers can't be compared accoss runs.
-- Make sure logging doesn't become a bottle neck.  
-
-Interesting that the first run of a new executable is often a bit slower (time does not include compile!), something caching it? 
 
 ### Profiling 
 
@@ -34,6 +10,18 @@ sample <pid> -f zig-out/temp_profile_info.sample
 filtercalltree zig-out/temp_profile_info.sample
 ```
 
+## Ideas
+
+- Know about check, mate, castling, en-passant, and draws!
+- Support extra fen string info. 
+- Be able to run tests in parrallel. Write custom test runner that just uses seperate processes? 
+- Have the UI show lines for debugging
+- Give yourself extra depth only looking at captures because it thinks hanging pieces on move n+1 is fine. 
+- Opening book. Maybe order by board hash and binary search because normal hashmap wastes space to avoid collissions. Only bother with lookup in first x moves. 
+- Endgame book. ^
+- Partial heap sort for move ordering. Then I can have a more complex eval function? 
+- Use n-1 depth for move ordering of n search. Then you can cancel at anytime and use previous results. 
+- Run engine on another thread so it doesn't hang the UI and can be canceled when it goes to long. Put a flag somewhere that it checks to break out of the recursion. 
 
 ## Learning Zig 
 
@@ -49,8 +37,24 @@ filtercalltree zig-out/temp_profile_info.sample
 - Should try to get used to the auto-format. 
 - Is there an IDE that can actually report errors? VS code with Zig Language seems to get very confused. Completions for enums and struct initialization seem to just give things from all your types? 
 
+## Switching to legal move generation 
+
+The replay game benchmark is immediately slower but making it not do the checks prep for the finished leaf nodes makes it about the same speed as before. But now I can see more opportunities to make the move gen code better. Interesting that the bulk counting perft this enables makes that like 3x as fast. So that's really counting a different thing than when you need to play every move. Without bulk counting the old one was 4x as fast. Using playNoUpdateChecks at the bottom level but still playing the move is still ~1.5x faster than the old one and I'd expect that to be very similar to what search is doing so strange that it doesn't seem faster. 
+
 ## much better memo table 
 
+
+## Methods note
+
+"~2x as fast" means `old_time/new_time == 2`. 
+
+- Not very scientific because I just run a few times then take one number. The improvements are so large/consistant that it feels trustworthy. Should make something that runs it multiple times and averages (throw away outliers?) eventually. 
+- Was originally getting numbers by running 5 moves each playing against itself. Which means I'm measuring the beginning of the game where not a lot of captures and should probably be openings book anyway. So should revise that to more interesting position. But depth 4 from move 5 is probably like a real game state.  
+- Currently benchmarking on native (m1), should do in wasm if that's what I care about. 
+- I've been increasing depth as it gets faster which might bias it but at the very least means absolute ms numbers can't be compared accoss runs.
+- Make sure logging doesn't become a bottle neck.  
+
+Interesting that the first run of a new executable is often a bit slower (time does not include compile!), something caching it? 
 
 ## counting possible moves 
 

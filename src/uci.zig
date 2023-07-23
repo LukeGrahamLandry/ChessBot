@@ -225,7 +225,7 @@ pub fn parseFen(fen: []const u8) error{InvalidFen}!Board {
 
     // These fields are less important so are optional.
 
-    self.castling = @bitCast(@as(u4, 0));
+    self.castling = @bitCast(@as(u8, 0));
     if (parts.next()) |castling| {
         if (castling.len == 1 and castling[0] == '-') {
             // Nobody can castle

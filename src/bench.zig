@@ -21,9 +21,9 @@ pub fn main() !void {
     // _ = try replayGame(.{ .doIterative = false });
     // _ = try replayGame(.{ .doMemo = false });
     // _ = try replayGame(.{ .doMemo = false, .doIterative = false });
-    // _ = try replayGame(.{ .doPruning = false });  // Takes sooooo long
+    // // _ = try replayGame(.{ .doPruning = false });  // Takes sooooo long
 
-    // For working on move gen. 
+    // // For working on move gen. 
     try (@import("tests.zig").PerftTest{
         .possibleGames = &[_]u64{ 20, 400, 8902, 197281, 4865609, 119060324 },  // 3195901860
         .possibleMates = &[_]u64{ 0, 0, 0, 8, 347, 10828 },  // 435767

@@ -33,7 +33,7 @@ pub fn main() !void {
     std.debug.print("[info]: {}\n", .{config});
     const fishLevelStr = try std.fmt.allocPrint(general.allocator(), "{}", .{config.fishSkillLevel});
     defer general.allocator().free(fishLevelStr);
-    var fish = try Stockfish.init();
+    var fish = try Stockfish.init(general.allocator());
     try fish.send(.Init);
     fish.blockUntilRecieve(.InitOk);
     try fish.send(.{ .SetOption = .{ .name = "Skill Level", .value = fishLevelStr } });
@@ -192,8 +192,10 @@ pub const Stockfish = struct {
     buffer: Reader,
     const Reader = std.io.BufferedReader(4096, std.fs.File.Reader);
 
-    pub fn init() !Stockfish {
-        var process = std.ChildProcess.init(&[_][]const u8{"stockfish"}, general.allocator());
+    // I think the allocator is just used for arg strings and stuff. 
+    // TODO: make sure its not putting all output there but that seems dumb and I think I would notice. 
+    pub fn init(alloc: std.mem.Allocator) !Stockfish {
+        var process = std.ChildProcess.init(&[_][]const u8{"stockfish"}, alloc);
         process.stdin_behavior = .Pipe;
         process.stdout_behavior = .Pipe;
         process.stderr_behavior = .Pipe;

@@ -29,6 +29,7 @@ pub fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, arena
     // @import("movegen.zig").printBitBoard(game.checks.targetedSquares);
 
     const allMoves = try MoveFilter.Any.get().possibleMoves(game, me, arenaAlloc);
+    if (remainingDepth == 1) return .{ .games=allMoves.len, .checkmates=0};
 
     // Trying to do depth 7 in one arena started using swap and got super slow. 
     // TODO: does normal search have the same problem?
@@ -39,14 +40,9 @@ pub fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, arena
         const unMove = game.play(move);
         defer game.unplay(unMove);
 
-        if ((remainingDepth - 2) == 0) {
-            const nextMoves = try MoveFilter.Any.get().possibleMoves(game, me.other(), arenaAlloc);
-            results.games += nextMoves.len;
-        } else {
-            const next = try countPossibleGames(game, me.other(), remainingDepth - 1, nextAlloc, countMates);
-            results.games += next.games;
-            results.checkmates += next.checkmates;
-        }
+        const next = try countPossibleGames(game, me.other(), remainingDepth - 1, nextAlloc, countMates);
+        results.games += next.games;
+        results.checkmates += next.checkmates;
 
         _ = arena2.reset(.retain_capacity);
     }

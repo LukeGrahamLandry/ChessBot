@@ -232,9 +232,20 @@ pub fn walkEval(comptime opts: StratOpts, game: *Board, remaining: i32, alphaIn:
     var memoKind: MemoKind = .Exact;
     var foundMove: ?Move = null;
     for (moves) |move| {
-        const unMove = game.play(move);
-        defer game.unplay(unMove);
-        const eval = try walkEval(opts, game, remaining - 1, alpha, beta, alloc, stats, capturesOnly, endTime);
+        const eval = e: {
+            if (remaining > 1) {
+                const unMove = game.play(move);
+                defer game.unplay(unMove);
+                break :e try walkEval(opts, game, remaining - 1, alpha, beta, alloc, stats, capturesOnly, endTime);
+            } else {
+                // Don't need to do the extra work to prep for legal move generation if this is a leaf node. 
+                // This trick was the justification for switching from pseudo-legal generation. 
+                const unMove = game.playNoUpdateChecks(move);
+                defer game.unplay(unMove);
+                break :e game.simpleEval;
+            }
+        };
+        
         switch (me) {
             .White => {
                 bestVal = @max(bestVal, eval);

@@ -141,13 +141,15 @@ pub const OldMove = struct {
     oldChecks: ChecksInfo, 
 };
 
-const CastlingRights = packed struct(u4) {
+const CastlingRights = packed struct(u8) {
     whiteLeft: bool = true,
     whiteRight: bool = true,
     blackLeft: bool = true,
     blackRight: bool = true,
 
-    pub const NONE: CastlingRights = @bitCast(@as(u4, 0));
+    _fuck: u4 = 0,
+
+    pub const NONE: CastlingRights = @bitCast(@as(u8, 0));
 
     // TODO: goingLeft should be an enum
     pub fn get(self: CastlingRights, colour: Colour, comptime goingLeft: bool) bool {
@@ -173,7 +175,7 @@ const CastlingRights = packed struct(u4) {
     }
 
     pub fn any(self: CastlingRights) bool {
-        return @as(u4, @bitCast(self)) != 0;
+        return @as(u8, @bitCast(self)) != 0;
     }
 };
 
@@ -258,7 +260,7 @@ pub const Board = struct {
         return isEmpty;
     }
 
-
+    /// This assumes that <move> is legal.
     pub fn play(self: *Board, move: Move) OldMove {
         const unMove = self.playNoUpdateChecks(move);
         self.checks = getChecksInfo(self, self.nextPlayer);
@@ -307,21 +309,29 @@ pub const Board = struct {
 
             // If you move your rook, you can't castle on that side.
             if (thisMove.original.kind == .Rook) {
-                if (move.from == 0 or move.from == (7 * 8)) {
-                    self.castling.set(colour, true, false);
-                } else if (move.from == 7 or move.from == (7 * 8 + 7)) {
-                    self.castling.set(colour, false, false);
+                const fromRank = @divFloor(move.from, 8);
+                const rookRank: u6 = if (colour == .White) 0 else 7;
+                if (fromRank == rookRank){  // check for weird consturcted positions where your rook got to the other side. TODO: do it by colour instead
+                    if (move.from == 0 or move.from == (7 * 8)) {
+                        self.castling.set(colour, true, false);
+                    } else if (move.from == 7 or move.from == (7 * 8 + 7)) {
+                        self.castling.set(colour, false, false);
+                    }
                 }
             }
 
             // If you take a rook, they can't castle on that side.
-            if (thisMove.taken.kind == .Rook) {
+            if (thisMove.taken.kind == .Rook) {  
                 assert(thisMove.taken.colour == colour.other());
-                if (move.to == 0 or move.to == (7 * 8)) {
-                    self.castling.set(colour.other(), true, false);
-                } else if (move.to == 7 or move.to == (7 * 8 + 7)) {
-                    self.castling.set(colour.other(), false, false);
-                }
+                const toRank = @divFloor(move.to, 8);
+                const rookRank: u6 = if (colour.other() == .White) 0 else 7;
+                if (toRank == rookRank){   // check for weird consturcted positions where your rook got to the other side
+                    if (move.to == 0 or move.to == (7 * 8)) {
+                        self.castling.set(colour.other(), true, false);
+                    } else if (move.to == 7 or move.to == (7 * 8 + 7)) {
+                        self.castling.set(colour.other(), false, false);
+                    }
+                } 
             }
         }
 
