@@ -12,7 +12,7 @@ const textDecoder = new TextDecoder();
 let mainCanvas = document.getElementById("board").getContext("2d");
 
 // TODO: show the right player turn instead of always white. 
-const enableBot = false;
+const enableBot = true;
 // const minMoveTimeMs = 500;  // When computer vs computer, if the engine is faster than this, it will wait before playing again. 
 
 // TODO: select which colour is human or computer. button to switch mid game for testing. ai vs ai mode. 
@@ -248,6 +248,15 @@ function renderBoard(board, ctx) {
             drawBitBoardPair(ctx, Engine.pinsByRookBB(board, WHITE), Engine.pinsByRookBB(board, BLACK));
             break;
         }
+        case "french_bishop_pins": {
+            drawBitBoardPair(ctx, Engine.pinsFrenchByBishopBB(board, WHITE), Engine.pinsFrenchByBishopBB(board, BLACK));
+            break;
+        }
+        case "french_rook_pins": {
+            drawBitBoardPair(ctx, Engine.pinsFrenchByRookBB(board, WHITE), Engine.pinsFrenchByRookBB(board, BLACK));
+            break;
+        }
+        
         default: 
             console.log("Invalid bitBoardInfo string.");
     }

@@ -242,6 +242,16 @@ export fn pinsByRookBB(board: *Board, colourI: u32) u64 {
     return @import("movegen.zig").getChecksInfo(board, colour).pinsByRook;
 }
 
+export fn pinsFrenchByBishopBB(board: *Board, colourI: u32) u64 {
+    const colour: Colour = if (colourI == 0) .White else .Black;
+    return @import("movegen.zig").getChecksInfo(board, colour).frenchPinByBishop;
+}
+
+export fn pinsFrenchByRookBB(board: *Board, colourI: u32) u64 {
+    const colour: Colour = if (colourI == 0) .White else .Black;
+    return @import("movegen.zig").getChecksInfo(board, colour).frenchPinByRook;
+}
+
 export fn isWhiteTurn(board: *Board) bool {
     return board.nextPlayer == .White;
 }

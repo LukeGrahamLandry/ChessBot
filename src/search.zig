@@ -69,28 +69,14 @@ pub fn bestMove(comptime opts: StratOpts, game: *Board, maxDepth: usize, timeLim
 
     var evalGuesses = try std.ArrayList(i32).initCapacity(upperArena.allocator(), topLevelMoves.len);
 
-    // Remove illigal moves.
+    // TODO: remove this. it used to remove illigal moves but now i dont generate them.
     var m: usize = 0;
     while (m < topLevelMoves.len) {
         const move = topLevelMoves[m];
         const unMove = game.play(move);
         defer game.unplay(unMove);
-        if (game.slowInCheck(me)) {
-            print("move: {}\n", .{move});
-            print("after:\n", .{});
-            game.debugPrint();
-            game.unplay(unMove);
-            print("before:\n", .{});
-            game.debugPrint();
-            panic("movegen game illegal move .", .{});
-            @panic("bestMove movegen gave illigal move");
-
-            // std.mem.swap(Move, &topLevelMoves[topLevelMoves.len - 1], &topLevelMoves[m]);  // Leak but arena so its fine
-            // topLevelMoves.len -= 1;
-        } else {
-            try evalGuesses.append(game.simpleEval);
-            m += 1;
-        }
+        try evalGuesses.append(game.simpleEval);
+        m += 1;
     }
     if (topLevelMoves.len == 0) return error.GameOver;
 
@@ -225,6 +211,14 @@ pub fn walkEval(comptime opts: StratOpts, game: *Board, remaining: i32, alphaIn:
     var moves = try movegen.MoveFilter.Any.get().possibleMoves(game, me, alloc);
     defer alloc.free(moves);
 
+    if (moves.len == 0) { // <me> can't make any moves. Either got checkmated or its a draw.
+        if (game.nextPlayerInCheck()) {
+            return (IM_MATED_EVAL - remaining) * me.dir();
+        } else {
+            return Magic.DRAW_EVAL;
+        }
+    }
+
     if (cacheHit) |cached| {
         for (0..moves.len) |i| {
             if (moves[i].from == cached.move.from and moves[i].to == cached.move.to) {
@@ -235,29 +229,11 @@ pub fn walkEval(comptime opts: StratOpts, game: *Board, remaining: i32, alphaIn:
     }
 
     var bestVal: i32 = LOWEST_EVAL * me.dir();
-    var checksSkipped: usize = 0;
-    var startEvaling: usize = 0;
     var memoKind: MemoKind = .Exact;
     var foundMove: ?Move = null;
-    var noLegalMoves = true;
     for (moves) |move| {
         const unMove = game.play(move);
         defer game.unplay(unMove);
-        if (game.slowInCheck(me)) {
-            print("move: {s}\n", .{try move.text()});
-            print("after:\n", .{});
-            game.debugPrint();
-            game.unplay(unMove);
-            print("before:\n", .{});
-            game.debugPrint();
-            const recalcInfo = @import("movegen.zig").getChecksInfo(game, me);
-            print("{any}", .{std.testing.expectEqual(game.checks, recalcInfo)});
-            panic("walkEval movegen gave illegal move.", .{});
-            checksSkipped += 1;
-            continue;
-        }
-        startEvaling += 1;
-        noLegalMoves = false;
         const eval = try walkEval(opts, game, remaining - 1, alpha, beta, alloc, stats, capturesOnly, endTime);
         switch (me) {
             .White => {
@@ -278,14 +254,6 @@ pub fn walkEval(comptime opts: StratOpts, game: *Board, remaining: i32, alphaIn:
                     break;
                 }
             },
-        }
-    }
-
-    if (noLegalMoves) { // <me> can't make any moves. Either got checkmated or its a draw.
-        if (game.slowInCheck(me)) {
-            return (IM_MATED_EVAL - remaining) * me.dir();
-        } else {
-            return Magic.DRAW_EVAL;
         }
     }
 

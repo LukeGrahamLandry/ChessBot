@@ -4,6 +4,7 @@ const std = @import("std");
 const Magic = @import("common.zig").Magic;
 const print = @import("common.zig").print;
 const assert = @import("common.zig").assert;
+const panic = @import("common.zig").panic;
 const Board = @import("board.zig").Board;
 const Colour = @import("board.zig").Colour;
 const Piece = @import("board.zig").Piece;
@@ -24,6 +25,21 @@ pub const MoveFilter = enum {
                 var moves = try std.ArrayList(Move).initCapacity(alloc, 50);
                 const out: CollectMoves = .{ .moves=&moves, .filter=self };
                 try genPossibleMoves(out, board, me, alloc);
+
+                if (@import("common.zig").debugCheckLegalMoves) {
+                    for (moves.items) |move| {
+                        const unMove = board.play(move);
+                        if (board.slowInCheck(me)) {
+                            board.unplay(unMove);
+                            print("original position:\n", .{});
+                            board.debugPrint();
+                            panic("movegen gave illegal move {s}.", .{try move.text()});
+                        } else {
+                            board.unplay(unMove);
+                        }
+                    }
+                }
+
                 return try moves.toOwnedSlice();  // TODO: make sure this isn't reallocating
             }
 
@@ -169,6 +185,26 @@ fn frenchMove(out: anytype, board: *const Board, i: usize, targetFile: usize, ta
             const endIndex = targetRank * 8 + targetFile;
             const captureIndex = ((if (colour == .White) targetRank - 1 else targetRank + 1) * 8) + targetFile;
             if (!board.squares[captureIndex].is(colour.other(), .Pawn)) return; // TODO: why isnt this always true?
+            const toFlag = @as(u64, 1) << @intCast(endIndex);
+            const captureFlag = @as(u64, 1) << @intCast(captureIndex);
+            // Works because block**Single**Check so only one thing will be attacking. 
+            if ((board.checks.blockSingleCheck & toFlag) == 0 and (board.checks.blockSingleCheck & captureFlag) == 0) return;
+            const fromFlag = @as(u64, 1) << @intCast(i);
+            
+            // TODO: no and. can both be crushed it together into one bit thing? 
+
+            // Normal pins
+            const rookPinned = (board.checks.pinsByRook & fromFlag) != 0;
+            const bishopPinned = (board.checks.pinsByBishop & fromFlag) != 0;
+            if (rookPinned and (board.checks.pinsByRook & toFlag) == 0) return;
+            if (bishopPinned and (board.checks.pinsByBishop & toFlag) == 0) return;
+
+            // Fancy pins        
+            const frenchRookPinned = (board.checks.frenchPinByRook & captureFlag) != 0;
+            const frenchBishopPinned = (board.checks.frenchPinByBishop & captureFlag) != 0;
+            if (frenchRookPinned and (board.checks.frenchPinByRook & toFlag) == 0) return;
+            if (frenchBishopPinned and (board.checks.frenchPinByBishop & toFlag) == 0) return;
+
             // assert(board.squares[captureIndex].is(colour.other(), .Pawn));
             try out.appendPawn(.{ .from = @intCast(i), .to = @intCast(endIndex), .action = .{ .useFrenchMove = @intCast(captureIndex) }, .isCapture = true });
         },
@@ -549,6 +585,10 @@ pub const ChecksInfo = struct {
     doubleCheck: bool = false,
     // Where the enemy can attack. The king may not move here. 
     targetedSquares: u64 = 0,
+
+    // Pin lines like above but for enemy pawn that could have be captured en-passant but might reveal a check. 
+    frenchPinByBishop: u64 = 0,
+    frenchPinByRook: u64 = 0,
 };
 
 // TODO: This is super branchy. Maybe I could do better if I had bit boards of each piece type. 
@@ -563,7 +603,6 @@ pub fn getChecksInfo(game: *Board, defendingPlayer: Colour) ChecksInfo {
     var result: ChecksInfo = .{};
 
     // Queens, Rooks, Bishops and any resulting pins. 
-    // TODO: make sure you can't mvoe away along its line of sight 
     inline for (directions[0..8], 0..) |offset, dir| outer: {
         var checkFile = @as(isize, @intCast(myKingIndex % 8));
         var checkRank = @as(isize, @intCast(myKingIndex / 8));
@@ -632,7 +671,7 @@ pub fn getChecksInfo(game: *Board, defendingPlayer: Colour) ChecksInfo {
         }
     }
 
-    // Pawns. Don't care about going forward or french move. 
+    // Pawns. Don't care about going forward or french move because those can't capture a king. 
     // They only move one so can't be blocked. 
     // TODO: this is kinda copy-paste-y
     var kingRank = @as(usize, @intCast(myKingIndex / 8));
@@ -668,18 +707,109 @@ pub fn getChecksInfo(game: *Board, defendingPlayer: Colour) ChecksInfo {
 
     // Can never be in check from the other king. Don't need to consider it. 
 
-    if (result.doubleCheck){  // Must move king. 
-        result.blockSingleCheck = 0;
-    } else if (result.blockSingleCheck == 0) {  // Not in check. 
-        result.blockSingleCheck = ~result.blockSingleCheck;
-    }
 
     var out: GetAttackSquares = .{};
     // Can't fail because this consumer doesn't allocate memory 
     genPossibleMoves(&out, game, defendingPlayer.other(), std.testing.failing_allocator) catch @panic("unreachable alloc");
     result.targetedSquares = out.bb;
 
+    if (result.doubleCheck){  // Must move king. 
+        result.blockSingleCheck = 0;
+    } else {
+        // Don't need to bother doing this if we we're in double check because king must move. 
+        switch (game.frenchMove) {
+            .none => {
+                // No french available so don't care. 
+            },
+            .file => |file| {
+                // TODO: another easy check to avoid work is see if the enemy is targeting its french pawn
+                getFrenchPins(game, defendingPlayer, file, &result);
+            }
+        }
+
+        if (result.blockSingleCheck == 0) {  // Not in check. 
+            result.blockSingleCheck = ~result.blockSingleCheck;
+        }
+    }
+
     return result;
+}
+
+// TODO: This is fricken branch town. Is there a better way to do this? 
+pub fn getFrenchPins(game: *Board, defendingPlayer: Colour, frenchFile: u4, result: *ChecksInfo) void {
+    const mySquares = game.peicePositions.getFlag(defendingPlayer);
+    const otherSquares = game.peicePositions.getFlag(defendingPlayer.other());
+    const myKingIndex = if (defendingPlayer == .White) game.whiteKingIndex else game.blackKingIndex;
+    const capturedPawnRank = if (defendingPlayer == .White) @as(u64, 4) else @as(u64, 3);
+
+    // TODO: checking all directions seems silly, should only look towards the pawn. 
+    // TODO: before the loop, check if I have any pawns in the right squares to capture. because it actually happening is rare 
+    inline for (directions[0..8], 0..) |offset, dir| {
+        var checkFile = @as(isize, @intCast(myKingIndex % 8));
+        var checkRank = @as(isize, @intCast(myKingIndex / 8));
+        var wipFlag: u64 = 0;
+        var lookingForPin = false;
+        var sawAPotentialFrenchFriend = false;
+        while (true) {
+            checkFile += offset[0];
+            checkRank += offset[1];
+            if (checkFile > 7 or checkRank > 7 or checkFile < 0 or checkRank < 0) break;
+            const checkFlag = toMask(@intCast(checkFile), @intCast(checkRank));
+            const checkIndex = checkRank*8 + checkFile;
+            const kind = game.squares[@intCast(checkIndex)].kind;
+            const isEnemy = (otherSquares & checkFlag) != 0;
+            wipFlag |= checkFlag;
+            if (isEnemy) {
+                if (lookingForPin) {
+                    const isSlider = (kind == .Queen or ((dir < 4 and kind == .Rook) or (dir >= 4 and kind == .Bishop)));
+                    if (isSlider) { 
+                        // ok heck, we're pinned! 
+                        if (dir < 4) {
+                            result.frenchPinByRook |= wipFlag;
+                        } else {
+                            result.frenchPinByBishop |= wipFlag;
+                        }
+                    } else {
+                        // hit something that blocks but can't slide so don't care any move
+                        break;
+                    }
+                } else {
+                    if (kind == .Pawn){
+                        if (checkRank == capturedPawnRank and checkFile == frenchFile) {
+                            lookingForPin = true;
+                            // this is the pawn we care about and we didn't see anything blocking line of sight so keep looking for sliders. 
+                            continue;
+                        } else { 
+                            // wrong pawn. dont care
+                            break;
+                        }
+                    } else {
+                        // We didn't hit the french target pawn so don't care. 
+                        break;
+                    }
+                }
+            }
+            const isFriend = (mySquares & checkFlag) != 0;
+            if (isFriend) {
+                const isLeft = frenchFile > 0 and (frenchFile - 1 == checkFile);
+                const isRight = frenchFile < 7 and (frenchFile + 1 == checkFile);
+
+                if (kind == .Pawn and checkRank == capturedPawnRank and (isLeft or isRight)) {
+                    // this is our pawn that would move
+                    if (sawAPotentialFrenchFriend) { // this is our second time here, we block ourselves, so its fine
+                        break;
+                    } else {
+                        sawAPotentialFrenchFriend = true;
+                        // need to keep looking to see if we're pinned
+                        continue;
+                    }
+                } else {
+                    // otherwise, it can't be a french pin, dont care. 
+                    break;  
+                }
+            }
+        }
+    }
 }
 
 // TODO: this is bascilly a copy paste from the other one. could have all the move functions be generic over a function to call when you get each move.

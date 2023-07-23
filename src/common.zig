@@ -6,6 +6,8 @@ pub const print = if (isWasm) @import("web.zig").consolePrint else std.debug.pri
 pub const panic = if (isWasm) @import("web.zig").alertPrint else std.debug.panic;
 pub const assert = std.debug.assert;
 
+pub const debugCheckLegalMoves = false;
+
 // TODO: do memo table here as well // memoTableMB: u64
 pub fn setup() void {
     if (!isTest) print("Zobrist Xoshiro256 seed is {any}.\n", .{Magic.ZOIDBERG_SEED});

@@ -401,7 +401,7 @@ pub const Board = struct {
         // _ = self.pastBoardHashes.pop();
         // print("start unplay\n", .{});
         if (self.lastMove) |expected| {
-            const wrongMove = std.meta.isError(std.testing.expectEqual(expected, move.move));
+            const wrongMove = !std.meta.eql(expected, move.move);
             if (wrongMove) @panic("unplayed the wrong move");
         }
         self.checks = move.oldChecks;
@@ -476,16 +476,6 @@ pub const Board = struct {
         assert(std.meta.eql(move.debugPeicePositions, self.peicePositions));
         assert(self.simpleEval == move.debugSimpleEval);
         assert(self.zoidberg == move.debugZoidberg);
-        const recalc = getChecksInfo(self, self.nextPlayer);
-        const failed = std.meta.isError(std.testing.expectEqual(recalc, self.checks));
-        if (failed){
-            self.debugPrint();
-            print("{any}\n{any}\n", .{self.checks, recalc});
-            @import("movegen.zig").printBitBoard(self.checks.targetedSquares);
-            @import("movegen.zig").printBitBoard(recalc.targetedSquares);
-            // @panic("wrong");
-            self.checks = recalc;
-        }
     }
 
     pub fn fromFEN(fen: []const u8) error{InvalidFen}!Board {
@@ -535,11 +525,17 @@ pub const Board = struct {
         return @import("movegen.zig").reverseFromKingIsInCheck(self, me);
     }
 
+    pub fn nextPlayerInCheck(self: *Board) bool {
+        const myKingIndex = if (self.nextPlayer == .White) self.whiteKingIndex else self.blackKingIndex;
+        const kingFlag = @as(u64, 1) << @intCast(myKingIndex);
+        return (self.checks.targetedSquares & kingFlag) != 0;
+    }
+
     pub fn gameOverReason(game: *Board, alloc: std.mem.Allocator) !GameOver {
         if (game.halfMoveDraw >= 100) return .FiftyMoveDraw;
         if (game.hasInsufficientMaterial()) return .MaterialDraw;
         if (try game.nextPlayerHasLegalMoves(alloc)) return .Continue;
-        if (game.slowInCheck(game.nextPlayer)) return if (game.nextPlayer == .White) .BlackWins else .WhiteWins;
+        if (game.nextPlayerInCheck()) return if (game.nextPlayer == .White) .BlackWins else .WhiteWins;
         return .Stalemate;
     }
 
@@ -548,15 +544,7 @@ pub const Board = struct {
         const colour = game.nextPlayer;
         const moves = try genAllMoves.possibleMoves(game, colour, alloc);
         defer alloc.free(moves);
-        if (moves.len == 0) return false;
-
-        for (moves) |move| {
-            const unMove = game.play(move);
-            defer game.unplay(unMove);
-            if (game.slowInCheck(colour)) continue;
-            return true;
-        }
-        return false;
+        return moves.len > 0;
     }
 
     // https://www.chess.com/article/view/how-chess-games-can-end-8-ways-explained#insufficient-material
@@ -645,11 +633,5 @@ pub fn inferPlayMove(board: *Board, fromIndex: u32, toIndex: u32, alloc: std.mem
         return error.IllegalMove;
     }
 
-    const unMove = board.play(realMove);
-    if (board.slowInCheck(colour)) {
-        board.unplay(unMove);
-        return error.IllegalMove;
-    }
-
-    return unMove;
+    return board.play(realMove);
 }
