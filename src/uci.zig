@@ -319,7 +319,6 @@ pub fn writeFen(self: *const Board, writer: anytype) !void {
     try buffer.flush();
 }
 
-var general = (std.heap.GeneralPurposeAllocator(.{}){});
 pub fn playAlgebraic(board: *Board, moveStr: [5]u8) !OldMove {
     // TODO: promote
     const fromFile = try letterToFile(moveStr[0]);
@@ -328,7 +327,7 @@ pub fn playAlgebraic(board: *Board, moveStr: [5]u8) !OldMove {
     const toRank = try letterToRank(moveStr[3]);
     const fromIndex = fromRank * 8 + fromFile;
     const toIndex = toRank * 8 + toFile;
-    return try inferPlayMove(board, fromIndex, toIndex, general.allocator());
+    return try inferPlayMove(board, fromIndex, toIndex, &@import("common.zig").lists);
 }
 
 pub fn writeAlgebraic(move: Move) [5]u8 {

@@ -12,7 +12,7 @@ const textDecoder = new TextDecoder();
 let mainCanvas = document.getElementById("board").getContext("2d");
 
 // TODO: show the right player turn instead of always white. 
-const enableBot = false;
+const enableBot = true;
 // const minMoveTimeMs = 500;  // When computer vs computer, if the engine is faster than this, it will wait before playing again. 
 
 // TODO: select which colour is human or computer. button to switch mid game for testing. ai vs ai mode. 
@@ -205,7 +205,7 @@ function renderBoard(board, ctx) {
     const fen = getFenFromEngine(board);
     document.getElementById("fen").value = fen;
     document.getElementById("player").innerText = gameOverMsg != null ? gameOverMsg : (Engine.isWhiteTurn(board) ? "White" : "Black") + "'s Turn";
-    document.getElementById("mEval").innerText = Engine.getMaterialEval();
+    document.getElementById("mEval").innerText = Engine.getMaterialEval(board);
 
     // TODO: If I really cared I could just render the diff instead of clearing the board
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);

@@ -9,6 +9,9 @@ const search = @import("search.zig");
 const Move = @import("board.zig").Move;
 const Magic = @import("common.zig").Magic;
 const print = consolePrint;
+const ListPool = @import("movegen.zig").ListPool;
+
+var theLists = &@import("common.zig").lists;
 
 const walloc = std.heap.wasm_allocator;
 
@@ -28,7 +31,7 @@ const JsResult = enum(i32) {
     IllegalMove = -3,
 };
 
-// TODO: think about this more. since printing is a comptime thing, commenting these out saves ~115kb (out of ~400).
+// TODO: think about this more. since printing is a comptime thing, commenting these out saves ~45kb (out of ~250).
 pub fn consolePrint(comptime fmt: []const u8, args: anytype) void {
     var buffer: [2048]u8 = undefined;
     var str = std.fmt.bufPrint(&buffer, fmt, args) catch "Error while printing!";
@@ -69,7 +72,7 @@ export fn destroyBoard(board: *Board) void {
 }
 
 export fn setup() void {
-    @import("common.zig").setup();
+    @import("common.zig").setup(null);
 }
 
 export fn restartGame(board: *Board) void {
@@ -103,7 +106,7 @@ export fn playBotMove(board: *Board, msgPtr: [*] u8, maxLen: u32) i32 {
 }
 
 fn checkGameOver(board: *Board, msgPtr: [*] u8, maxLen: u32) i32 {
-    const reason = board.gameOverReason(walloc) catch return -1;
+    const reason = board.gameOverReason(theLists) catch return -1;
     if (reason == .Continue) return 0;
     const str = @tagName(reason);
     print("Game over: {s}\n", .{str});
@@ -119,13 +122,16 @@ export fn getPossibleMovesBB(board: *Board, from: i32) u64 {
     const file = @mod(from, 8);
     const rank = @divFloor(from, 8);
 
-    var allMoves = std.ArrayList(Move).init(walloc);
+    var allMoves = theLists.get() catch |err| {
+        logErr(err, "getPossibleMoves");
+        return 0;
+    };
+    defer theLists.release(allMoves);
     // TODO: check if in check and not moving king here because its done in genAllMoves
     search.genAllMoves.collectOnePieceMoves(&allMoves, board, @intCast(from), @intCast(file), @intCast(rank)) catch |err| {
         logErr(err, "getPossibleMoves");
         return 0;
     };
-    defer allMoves.deinit();
     for (allMoves.items) |move| {
         result |= @as(u64, 1) << @intCast(move.to);
     }
@@ -160,7 +166,7 @@ export fn getMaterialEval(board: *Board) i32 {
 export fn playHumanMove(board: *Board, fromIndex: u32, toIndex: u32) JsResult {
     if (fromIndex >= 64 or toIndex >= 64) return .Error;
 
-    _ = @import("board.zig").inferPlayMove(board, fromIndex, toIndex, walloc) catch |err| {
+    _ = @import("board.zig").inferPlayMove(board, fromIndex, toIndex, theLists) catch |err| {
         switch (err) {
             error.IllegalMove => return .IllegalMove,
             else => logErr(err, "playHumanMove"),
@@ -223,7 +229,7 @@ export fn getFrenchMoveBB(board: *Board) u64 {
 export fn getAttackBB(board: *Board, colourI: u32) u64 {
     const colour: Colour = if (colourI == 0) .White else .Black;
     var out: @import("movegen.zig").GetAttackSquares = .{};
-    try @import("movegen.zig").genPossibleMoves(&out, board,colour,  std.testing.failing_allocator);
+    try @import("movegen.zig").genPossibleMoves(&out, board,colour);
     return out.bb;
 }
 

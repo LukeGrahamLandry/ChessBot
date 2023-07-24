@@ -37,6 +37,41 @@ filtercalltree zig-out/temp_profile_info.sample
 - Should try to get used to the auto-format. 
 - Is there an IDE that can actually report errors? VS code with Zig Language seems to get very confused. Completions for enums and struct initialization seem to just give things from all your types? 
 
+## Running perft on a bunch of threads 
+
+more threads don't scale the time linearly. better clock time but worse NPS. 
+
+| Cores | MNPS/C  | Time |
+| ----- | ---     | ---- |
+| 1     | 72      | 66s  |
+| 4     | 56-62   | 22s  |
+| 8     | 36-48   | 20s  |
+
+Saw that the last task to finish was 58/126. They were all just waiting on the last guy. Verified by printing thread idle time, with 4 cores, one thread finished in 16s but the last took until 22s. Tried putting longer lasting tasks at the front of the file. Now I sort the list by number of nodes after loading it and there's <1ms idle time at the end.
+
+| Cores | MNPS/C  | Time |
+| ----- | ------- | ---- |
+| 4     | 62-65   | 19s  |
+| 8     | 28-32   | 19s  | 
+
+Debug mode profiler says lots of time in __ulock_wait, I guess thats contention for the atomic task index at the end. 
+So removed that shared index, instead each thread starts at thier id and increments by the number of threads. Now there's more idle time, the sort makes it unfair because the first thread gets the hardest job in each group of x. At 8 threads, the last to finish did 2x as many nodes as the first and 6/8 were idle > 5s. 
+
+| Cores | MNPS/C  | Time |
+| ----- | ------- | ---- |
+| 4     | 57-63   | 23s  |
+| 8     | 36-49   | 20s  | 
+
+Still lots of __ulock_wait even though no atomics, so that must be the main thread in joining everyone at the end? Which the call graph confirms. Should have looked at that first! So that just doesn't matter. I put it back to the atomics because I like the fairness. 
+
+One of my problems was using an insane amount of memory. Doing each perft in an arena where all the move lists wern't dropped until the end. Most of the time it was fast but when using lots of threads it would get to the edge of my ram and start using swap. Now using a pool of lists and it uses literally 6 orders of magnitude less memory for my current perfts. It's still about the same speed for normal play where ram wasn't a problem but this will enable higher depth if I manage to speed everything else up. Really arenas was the right answer, its just that each list needs to be its own. Absolutly insane that I didn't notice that until now. Perft NPS still doesn't scale linearly with threads but its getting closer. Seems to win a few more games against cripplefish. 
+
+| Cores | MNPS/C  | Time |
+| ----- | ------- | ---- |
+| 1     | 74      | 64s  |
+| 4     | 62-66   | 18s  |
+| 8     | 41-47   | 13s  | 
+
 ## Switching to legal move generation 
 
 The replay game benchmark is immediately slower but making it not do the checks prep for the finished leaf nodes makes it about the same speed as before. But now I can see more opportunities to make the move gen code better. Interesting that the bulk counting perft this enables makes that like 3x as fast. So that's really counting a different thing than when you need to play every move. Without bulk counting the old one was 4x as fast. Using playNoUpdateChecks at the bottom level but still playing the move is still ~1.5x faster than the old one and I'd expect that to be very similar to what search is doing so strange that it doesn't seem faster. 

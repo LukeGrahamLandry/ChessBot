@@ -15,12 +15,12 @@ const maxTime = 10000;
 const gameStr = "b1c3 d7d5 a1b1 d5d4 c3b5 g8f6 b1a1 d4d3 g1h3 e7e5 h1g1 f8c5 g1h1 c8h3 a2a3 d3e2 d1e2 h3e6 f2f4 c5a3 a1a3 d8d2 e1d2 e5e4 b5c7 e8e7 c7a8 e4e3 d2e3 b8a6 b2b3 h8d8 a8c7 e6b3 a3a6 b3c2 a6a7 c2d3 e2b2 e7d7 b2d4 d7c7 a7b7 c7c8 b7b8 c8b8 d4d8 b8b7 f1d3 f6g4 e3e2 b7a7 d8c8 f7f5 c8c7 a7a8 c1b2";
 // const gameStr = "b2b3 g8f6 f2f3 a7a6 c1a3 d7d5 e2e3 g7g6 a3b2 f8g7 f1d3 c7c5 b2e5 h7h5 e1e2 h5h4 d1e1 b8d7 e5c3 b7b5 e1d1 d5d4 e3d4 b5b4 c3b2 a6a5 d4c5 c8a6 c5c6 d7b8 d3a6 a8a6 e2f2 f6g4 f2e1 g7b2 f3g4 e8g8 d1e2 b8c6 e2a6 d8d6 g1f3 f8b8 e1e2 c6d4 f3d4 d6a6 e2e1 b2d4 c2c3 d4a7 g4g5 a6e6 e1d1 e6c6 d1c1 c6g2 h1e1 b4c3 b1c3 e7e5 a1b1 b8d8 e1d1 h4h3 c1c2 a7d4 d1e1 d8c8 c2c1 g8f8 c1d1 f8g7 b3b4 c8d8 c3e4 g2f3 d1c2 f3a3 c2d1 a3a2 d1e2 a2c2 b1c1 c2a2 c1c6 d4a7 e1d1 a2d5 c6g6 f7g6 e4f2 a5b4 f2h3 d5e4 e2f1 d8f8 h3f2 f8f2 f1g1";
 pub fn main() !void {
-    @import("common.zig").setup();
-    // print("maxDepth={}. maxTime={}ms. \nGame: {s} \n", .{maxDepth, maxTime, gameStr});
-    // _ = try replayGame(.{});
-    // _ = try replayGame(.{ .doIterative = false });
-    // _ = try replayGame(.{ .doMemo = false });
-    // _ = try replayGame(.{ .doMemo = false, .doIterative = false });
+    @import("common.zig").setup(100);
+    print("maxDepth={}. maxTime={}ms. \nGame: {s} \n", .{maxDepth, maxTime, gameStr});
+    _ = try replayGame(.{});
+    _ = try replayGame(.{ .doIterative = false });
+    _ = try replayGame(.{ .doMemo = false });
+    _ = try replayGame(.{ .doMemo = false, .doIterative = false });
     // // _ = try replayGame(.{ .doPruning = false });  // Takes sooooo long
 
     // // For working on move gen. 

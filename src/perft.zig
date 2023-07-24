@@ -18,14 +18,10 @@ const Stockfish = @import("fish.zig").Stockfish;
 const MoveFilter = @import("movegen.zig").MoveFilter;
 const countPossibleGames = @import("tests.zig").countPossibleGames;
 const PerftResult = @import("tests.zig").PerftResult;
+const ListPool = @import("movegen.zig").ListPool;
 
-var failed: usize = 0;
-var nodesSeen: usize = 0;
 const doFishDebugOnFail = true;
-
 const positionData = @embedFile("perft.txt");
-
-// TODO: fall back to the fish if I get the wrong answer. 
 
 // For things I don't care about freeing. 
 var foreverArena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -33,24 +29,21 @@ var forever = foreverArena.allocator();
 
 const Shared = std.atomic.Atomic(usize);
 
-// These could be pointers stored in Worker if I was serious about the global variable holy war, but I don't need to bother yet. 
-// TODO: Should probably have each thread count and then add up at the end? but that shouldn't matter because it takes so long to finish one anyway? 
-var passedCount = Shared.init(0);
-var failedCount = Shared.init(0);
-var totalNodes = Shared.init(0);
-
 pub fn main() !void {
-    @import("common.zig").setup();
-    const t = Timer.start();
+    @import("common.zig").setup(0);
     const perfts = (try parsePerfts()).items;
+    
+    // For best parallelism, don't put the longest tasks at the end. You don't want time at the end where only one therad is working. 
+    std.sort.insertion(Perfts, perfts, {}, lessThanFn);
 
-    // TODO: adding more threads doesn't make it faster. maybe they're all just waiting on the last guy
     const cores = 4;
     var taskIndex = Shared.init(0);
     var workers = try forever.alloc(Worker, cores);
     for (0..cores) |i| {
         workers[i] = .{
+            .id = i,
             .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+            .lists = try ListPool.init(forever),
             .fish = try Stockfish.init(forever),
             .thread = try std.Thread.spawn(.{}, workerFn, .{ &workers[i] }),
             .nextTask = &taskIndex,
@@ -62,15 +55,27 @@ pub fn main() !void {
         worker.thread.join();
     }
 
-    // Time info is meaningless if it includes the extra debug walking. 
-    if (!doFishDebugOnFail or failedCount.loadUnchecked() == 0) print("Finished {} perfts in {} ms. {} nodes per second per core. \n", .{ perfts.len, t.get(), @divFloor(totalNodes.loadUnchecked(), t.get()) * (1000 / cores) });
-    
-    print("Passed {}. Failed {}.\n", .{ passedCount.loadUnchecked(), failedCount.loadUnchecked() });
+    const endTime = std.time.nanoTimestamp();
+    var failed: u64 = 0;
+    for (workers) |worker| {
+        print("{}ms, ", .{@divFloor(endTime - worker.endTime, std.time.ns_per_ms)});
+        failed += worker.failedCount;
+    }
+    print("; idle thread time.\n", .{});
+
+
+    if (failed == 0){
+        print("Memory usage: {} KB.\n", .{foreverArena.queryCapacity() / 1024});
+        print("Passed All {}.\n", .{ perfts.len });
+    } else {
+        print("Failed {}/{}.\n", .{ failed, perfts.len });
+    }
 }
 
 pub const Perfts = struct {
     fen: []const u8,
     levels: [] Perft,
+    allCount: u64 // for sorting
 };
 
 pub const Perft = struct {
@@ -79,85 +84,53 @@ pub const Perft = struct {
 };
 
 const Worker = struct {
+    id: usize,
     thread: std.Thread,
     arena: std.heap.ArenaAllocator,
+    lists: ListPool,
     fish: Stockfish,
     nextTask: *Shared,
     tasks: [] Perfts,
+    failedCount: u64 = 0,
+    passedCount: u64 = 0,
+    totalNodes: u64 = 0,
+    endTime: i128 = 0,
 };
 
 fn workerFn(self: *Worker) !void {
-    std.time.sleep(250);  // Just make absolutly sure the other thread finishes setting the array. 
+    std.time.sleep(50);  // Just make absolutly sure the other thread finishes setting the array. 
+    const startTime = std.time.nanoTimestamp();
     while (true) {
         const nextTask = self.nextTask.fetchAdd(1, .SeqCst);
         if (nextTask >= self.tasks.len) break;
 
         const position = self.tasks[nextTask];
-        var anyFails = false;
-        var total: u64 = 0;
         var game = try Board.fromFEN(position.fen);
         for (position.levels) |perft| {
-            const nodes = (try @import("tests.zig").countPossibleGames(&game, game.nextPlayer, perft.depth, self.arena.allocator(), false)).games;
-            _ = self.arena.reset(.retain_capacity);
-            total += nodes;
+            const nodes = (try @import("tests.zig").countPossibleGames(&game, game.nextPlayer, perft.depth, &self.lists, false)).games;
+            self.totalNodes += nodes;
             if (nodes != perft.nodes) {
-                print("{}/{}. Failed {s} depth {}. Expected {} but found {}.\n", .{ nextTask, self.tasks.len, position.fen, perft.depth, perft.nodes, nodes });
-                anyFails = true;
-                if (doFishDebugOnFail) try debugPerft(&self.fish, position.fen, perft.depth, &self.arena);
+                print("[{}/{}] Failed {s} depth {}. Expected {} but found {}.\n", .{ nextTask+1, self.tasks.len, position.fen, perft.depth, perft.nodes, nodes });
+                self.failedCount += 1;
+                if (doFishDebugOnFail) {
+                    try debugPerft(&self.fish, position.fen, perft.depth, &self.arena, &self.lists);
+                    _ = self.arena.reset(.retain_capacity);
+                }
                 break; // All deeper levels will also fail. 
             } else {
-                print("{}/{}. Passed {s} depth {}.\n", .{ nextTask, self.tasks.len, position.fen, perft.depth });
+                print("[{}/{}] Passed {s} depth {}.\n", .{ nextTask+1, self.tasks.len, position.fen, perft.depth });
             }
+        } else {
+            self.passedCount += 1;
         }
+    }
 
-        _ = totalNodes.fetchAdd(total, .SeqCst);
-        _ = (if (anyFails) failedCount else passedCount).fetchAdd(1, .SeqCst);
+    self.endTime = std.time.nanoTimestamp();
+    if (self.failedCount == 0){
+        const ms = @divFloor((self.endTime - startTime), std.time.ns_per_ms);
+        print("Thread {} finished {} perfts in {}ms. {} nodes / second.\n", .{self.id, self.passedCount, ms, @divFloor(self.totalNodes * 1000, ms)});
     }
 }
-
-// pub fn oldMain() !void {
-//     @import("common.zig").setup();
-//     const t = Timer.start();
-//     var fish = try Stockfish.init(forever);
-//     try fish.send(.Init);
-//     fish.blockUntilRecieve(.InitOk);
-
-//     print("=== Perft Starting ===\n", .{});
-
-//     // http://www.rocechess.ch/perft.html
-//     try debugPerft(&fish, "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1", 3);
-//     try debugPerft(&fish, "n1n5/PPPk4/8/8/8/8/4Kppp/5N1N b - - 0 1", 4);  // promotions
-//     try debugPerft(&fish, "rnb1kbnr/pp1ppppp/8/q1p3N1/8/8/PPPPPPPP/RNBQKB1R w KQkq - 2 3", 2);  // has a pin
-//     try debugPerft(&fish, "rnbqkbnr/p1p1pppp/1p6/1B1p4/4P3/1P6/P1PP1PPP/RNBQK1NR b KQkq - 1 3", 2);  // has a bishop check
-
-//     try debugPerft(&fish, "rnbq1bnr/pppQpkpp/5p2/8/8/2P5/PP1PPPPP/RNB1KBNR b KQ - 0 3", 2);  // jump forward from initial pos, only hit on depth 6 
-    
-//     // https://www.chessprogramming.org/Perft_Results
-//     try debugPerft(&fish, "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w", 5); 
-//     try debugPerft(&fish, "8/8/8/1Ppp3r/1K3p1k/8/4P1P1/1R6 w - c6 0 3", 5);  // french capture the pawn attacking your king 
-
-//     // constructed 
-//     try debugPerft(&fish, "2K5/8/8/4Pp2/8/7b/8/k7 w - f6 0 1", 2); // french move capturing something revealing a check
-//     try debugPerft(&fish, "5K2/8/8/4Pp2/8/8/8/k4r2 w - f6 0 29", 2); // french pin but you end up still blocking so its fine 
-//     try debugPerft(&fish, "8/8/8/KPpP3r/1R3p1k/8/6P1/8 w - c6 0 3", 2); // french pin by rook but theres another friendly pawn between so its fine
-
-//     // mistakes from fish games
-//     try debugPerft(&fish, "r1bqkb1r/1pp2p1p/p1n5/4pP2/4p3/1P6/P1PPKPPP/R1B2BNR w kq - 0 11", 2);
-//     try debugPerft(&fish, "r1bqk2r/1pp2ppp/p1nbpn2/8/P7/1P1PpP1N/1BP1P1PP/RN2KB1R w KQkq - 0 9", 2);
-//     try debugPerft(&fish, "5k2/6pp/8/3B1p2/P2PrR2/2PK4/7P/RN6 w - - 1 45", 2);
-//     try debugPerft(&fish, "2krq2r/1pp3Qp/p7/bb2Pp1K/8/P1Pn1PPB/3P3P/RN4NR w - f6 0 29", 2);  // french while in check
-//     try debugPerft(&fish, "r1b5/4q1pk/2pr1p1p/3p3P/1P2pP2/p1PBP3/P2N2P1/3RK1NR b - f3 0 33", 2);  // french move capturing but my pawn is pinned
-
-//     try debugPerft(&fish, "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", 4);  // startpos
-    
-//     try fish.deinit();
-//     print("Finished full perft in {} ms. Visited {} nodes. {} nodes per second. \n", .{ t.get(), nodesSeen, @divFloor(nodesSeen, t.get()) * 1000 });
-//     if (failed > 0) {
-//         print("=== Perft Failed {} ===\n", .{ failed });
-//     } else { 
-//         print("=== Perft Passed ===\n", .{});
-//     }
-// }
 
 fn parsePerfts() !std.ArrayList(Perfts) {
     var all = std.ArrayList(Perfts).init(forever);
@@ -169,6 +142,7 @@ fn parsePerfts() !std.ArrayList(Perfts) {
         const fen = parts.next() orelse unreachable;
         _ = Board.fromFEN(fen) catch |err| std.debug.panic("{}. Failed to parse fen: {s}", .{err, fen});
         var perfts = std.ArrayList(Perft).init(forever);
+        var total: u64 = 0;
         while (parts.next()) |level| {
             var info = std.mem.splitScalar(u8, level, ' ');
             const depthInfo = info.next() orelse std.debug.panic("Failed to parse. {s}", .{line});
@@ -177,18 +151,24 @@ fn parsePerfts() !std.ArrayList(Perfts) {
             const depth = std.fmt.parseInt(u64, depthInfo[1..], 10) catch |err| std.debug.panic("{}. Failed to parse. {s}    LINE: {s}", .{err, depthInfo, line});
             const nodes = std.fmt.parseInt(u64, nodesInfo, 10) catch |err| std.debug.panic("{}. Failed to parse. {s}    LINE: {s}", .{err, nodesInfo, line});
             try perfts.append(.{ .depth=depth, .nodes=nodes } );
+            total += nodes;
         }
-        try all.append(.{ .fen=fen, .levels=try perfts.toOwnedSlice() });
+        try all.append(.{ .fen=fen, .levels=try perfts.toOwnedSlice(), .allCount=total });
     }
 
     return all;
 }
 
-fn debugPerft(fish: *Stockfish, fen: [] const u8, depth: u64, arena: *std.heap.ArenaAllocator) !void {
+fn lessThanFn(ctx: void, lhs: Perfts, rhs: Perfts) bool {
+    _ = ctx;
+    return lhs.allCount > rhs.allCount; // flipped cause ascending
+}
+
+fn debugPerft(fish: *Stockfish, fen: [] const u8, depth: u64, arena: *std.heap.ArenaAllocator, lists: *ListPool) !void {
     var board = try Board.fromFEN(fen);
     print("= Starting {s} = \n", .{fen});
     var foundProblem = false;
-    _ = walkPerft(fish, &board, depth, arena) catch |err| {
+    _ = walkPerft(fish, &board, depth, arena, lists) catch |err| {
         if (err != error.FishDisagree) return err;
         foundProblem = true;
     };
@@ -198,7 +178,7 @@ fn debugPerft(fish: *Stockfish, fen: [] const u8, depth: u64, arena: *std.heap.A
 }
 
 
-fn walkPerft(fish: *Stockfish, board: *Board, depth: u64, arena: *std.heap.ArenaAllocator) !u64 {
+fn walkPerft(fish: *Stockfish, board: *Board, depth: u64, arena: *std.heap.ArenaAllocator, lists: *ListPool) !u64 {
     if (depth == 0) return 1;
 
     var alloc = arena.allocator();
@@ -207,13 +187,14 @@ fn walkPerft(fish: *Stockfish, board: *Board, depth: u64, arena: *std.heap.Arena
     // First decide if this is the branch where we disagree about possible moves. 
     // Can do that by using depth 1 because we don't care about the actual numbers yet. 
     const fishMoves = (try runFishPerft(fish, board, 1, alloc)).childCount;
-    const myMoves = try MoveFilter.Any.get().possibleMoves(board, board.nextPlayer, alloc);
+    const myMoves = try MoveFilter.Any.get().possibleMoves(board, board.nextPlayer, lists);
+    defer lists.release(myMoves);
 
     var missingMoves = false;
     var myMovesSet = std.AutoHashMap([5] u8, void).init(alloc);
 
     // Do I have extra illegal moves?
-    for (myMoves) |move| {
+    for (myMoves.items) |move| {
         // Don't need to check that it's legal because comparing to stockfish will catch that mistake. 
         const text = try move.text();
         try myMovesSet.put(text, {});
@@ -236,7 +217,7 @@ fn walkPerft(fish: *Stockfish, board: *Board, depth: u64, arena: *std.heap.Arena
     if (missingMoves) {
         return error.FishDisagree;
     }
-    if (myMoves.len != fishMoves.count())  {
+    if (myMoves.items.len != fishMoves.count())  {
         panic("had same moves but different numbers. makes no sense!", .{});
     }
 
@@ -246,15 +227,15 @@ fn walkPerft(fish: *Stockfish, board: *Board, depth: u64, arena: *std.heap.Arena
     // Recursivly repeat this whole process for each child.
     var myTotal: u64 = 0;
     var littleArena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    for (myMoves) |myMove| {
+    for (myMoves.items) |myMove| {
         const unMove = board.play(myMove);
         defer board.unplay(unMove);
-        const myCount = (try countPossibleGames(board, board.nextPlayer, depth - 1, littleArena.allocator(), false)).games;
+        const myCount = (try countPossibleGames(board, board.nextPlayer, depth - 1, lists, false)).games;
         const fishCount = try runFishPerftCountGames(fish, board, depth - 1, littleArena.allocator());
         if (myCount != fishCount){
             // This branch is the problem. 
             print("Disagree on count at depth {}: me:{} vs fish:{}. {s}\n", .{depth-1, myCount, fishCount, try board.toFEN(littleArena.allocator())});
-            const calcCount = try walkPerft(fish, board, depth - 1, arena);
+            const calcCount = try walkPerft(fish, board, depth - 1, arena, lists);
             if (calcCount != myCount) panic("countPossibleGames didnt match walkPerft: {} vs {}\n", .{ myCount, calcCount});
         }
         myTotal += myCount;

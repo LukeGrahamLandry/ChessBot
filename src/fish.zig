@@ -23,13 +23,14 @@ const Opts = struct {
     // Limiting my time and allowing high depth like real games rewards performance improvements.
     myTimeLimitMS: i128 = 26,
     myMaxDepth: usize = 50, // anything above 10 is basically unlimited other than endgame.
+    myMemoMB: usize = 100,
 };
 
 const config: Opts = .{};
 var shouldPrint = false;
 
 pub fn main() !void {
-    @import("common.zig").setup();
+    @import("common.zig").setup(config.myMemoMB);
     std.debug.print("[info]: {}\n", .{config});
     const fishLevelStr = try std.fmt.allocPrint(general.allocator(), "{}", .{config.fishSkillLevel});
     defer general.allocator().free(fishLevelStr);
@@ -117,7 +118,7 @@ fn logGameOver(err: anyerror, board: *Board, moveHistory: *std.ArrayList([5]u8),
 
     switch (err) {
         error.GameOver => {
-            const result = try board.gameOverReason(general.allocator());
+            const result = try board.gameOverReason(&@import("common.zig").lists);
             const msg = switch (result) {
                 .Continue => "Game over but player can still move? This is a bug!",
                 .Stalemate => "Draw (stalemate).",

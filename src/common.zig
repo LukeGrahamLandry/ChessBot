@@ -8,14 +8,22 @@ pub const assert = std.debug.assert;
 
 pub const debugCheckLegalMoves = false;
 
+const ListPool = @import("movegen.zig").ListPool;
+
+var general_i = std.heap.GeneralPurposeAllocator(.{}) {};
+pub var lists: ListPool = undefined;
+
 // TODO: do memo table here as well // memoTableMB: u64
-pub fn setup() void {
+pub fn setup(memoSizeMB: ?usize) void {
     if (!isTest) print("Zobrist Xoshiro256 seed is {any}.\n", .{Magic.ZOIDBERG_SEED});
     var rand: std.rand.Xoshiro256 = .{ .s = Magic.ZOIDBERG_SEED };
     for (&Magic.ZOIDBERG) |*ptr| {
         ptr.* = rand.next();
     }
-    @import("search.zig").initMemoTable(100) catch @panic("OOM");
+
+    lists = ListPool.init(general_i.allocator()) catch @panic("Failed to init ListPool");
+
+    @import("search.zig").initMemoTable(memoSizeMB orelse 0) catch @panic("OOM");
 }
 
 pub fn nanoTimestamp() i128 {

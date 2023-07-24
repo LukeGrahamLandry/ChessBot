@@ -7,6 +7,7 @@ const assert = @import("common.zig").assert;
 const UCI = @import("uci.zig");
 const ChecksInfo = @import("movegen.zig").ChecksInfo;
 const getChecksInfo = @import("movegen.zig").getChecksInfo;
+const ListPool = @import("movegen.zig").ListPool;
 
 // Numbers matter because js sees them and for fen parsing.
 pub const Kind = enum(u4) {
@@ -184,7 +185,7 @@ comptime {
 }
 
 const FrenchMove = union(enum) { none, file: u4 };
-const slowTrackAllMoves = false;
+// const slowTrackAllMoves = false;
 
 fn getZoidberg(piece: Piece, square: u6) u64 {
     const kindOffset: usize = @intCast(@intFromEnum(piece.kind));
@@ -210,7 +211,7 @@ pub const Board = struct {
     castling: CastlingRights = .{},
     halfMoveDraw: u32 = 0,
     fullMoves: u32 = 1,
-    line: if (slowTrackAllMoves) std.BoundedArray(OldMove, 300) else void = if (slowTrackAllMoves) std.BoundedArray(OldMove, 300).init(0) catch @panic("Overflow line.") else {}, // inefficient but useful for debugging.
+    // line: if (slowTrackAllMoves) std.BoundedArray(OldMove, 300) else void = if (slowTrackAllMoves) std.BoundedArray(OldMove, 300).init(0) catch @panic("Overflow line.") else {}, // inefficient but useful for debugging.
     zoidberg: u64 = 1,
     lastMove: ?Move = null,  
     checks: ChecksInfo = .{}, 
@@ -399,7 +400,7 @@ pub const Board = struct {
         }
 
         self.nextPlayer = self.nextPlayer.other();
-        if (slowTrackAllMoves) self.line.append(thisMove) catch @panic("Overflow line.");
+        // if (slowTrackAllMoves) self.line.append(thisMove) catch @panic("Overflow line.");
         self.lastMove = move;
         // self.pastBoardHashes.append(self.zoidberg) catch {}; // TODO
         return thisMove;
@@ -417,7 +418,7 @@ pub const Board = struct {
         self.checks = move.oldChecks;
         self.lastMove = move.lastMove;
         self.zoidberg ^= Magic.ZOIDBERG[Magic.ZOID_TURN_INDEX];
-        if (slowTrackAllMoves) assert(std.meta.eql(self.line.pop(), move));
+        // if (slowTrackAllMoves) assert(std.meta.eql(self.line.pop(), move));
         const colour = move.original.colour;
         self.castling = move.old_castling;
         self.simpleEval += move.taken.eval();
@@ -541,20 +542,20 @@ pub const Board = struct {
         return (self.checks.targetedSquares & kingFlag) != 0;
     }
 
-    pub fn gameOverReason(game: *Board, alloc: std.mem.Allocator) !GameOver {
+    pub fn gameOverReason(game: *Board, lists: *ListPool) !GameOver {
         if (game.halfMoveDraw >= 100) return .FiftyMoveDraw;
         if (game.hasInsufficientMaterial()) return .MaterialDraw;
-        if (try game.nextPlayerHasLegalMoves(alloc)) return .Continue;
+        if (try game.nextPlayerHasLegalMoves(lists)) return .Continue;
         if (game.nextPlayerInCheck()) return if (game.nextPlayer == .White) .BlackWins else .WhiteWins;
         return .Stalemate;
     }
 
     // This could be faster if it didn't generate every possible move first but it's not used in the search loop so nobody cares. 
-    pub fn nextPlayerHasLegalMoves(game: *Board, alloc: std.mem.Allocator) !bool {
+    pub fn nextPlayerHasLegalMoves(game: *Board, lists: *ListPool) !bool {
         const colour = game.nextPlayer;
-        const moves = try genAllMoves.possibleMoves(game, colour, alloc);
-        defer alloc.free(moves);
-        return moves.len > 0;
+        const moves = try genAllMoves.possibleMoves(game, colour, lists);
+        defer lists.release(moves);
+        return moves.items.len > 0;
     }
 
     // https://www.chess.com/article/view/how-chess-games-can-end-8-ways-explained#insufficient-material
@@ -613,6 +614,10 @@ pub const Move = struct {
     }
 };
 
+comptime {
+    assert(@sizeOf(Move) <= 8);
+}
+
 pub const GameOver = enum { Continue, Stalemate, FiftyMoveDraw, MaterialDraw, WhiteWins, BlackWins };
 
 const isWasm = @import("builtin").target.isWasm();
@@ -620,7 +625,7 @@ const isWasm = @import("builtin").target.isWasm();
 pub const InferMoveErr = error{IllegalMove} || @import("search.zig").MoveErr;
 
 const genAllMoves = @import("movegen.zig").MoveFilter.Any.get();
-pub fn inferPlayMove(board: *Board, fromIndex: u32, toIndex: u32, alloc: std.mem.Allocator) InferMoveErr!OldMove {
+pub fn inferPlayMove(board: *Board, fromIndex: u32, toIndex: u32, lists: *ListPool) InferMoveErr!OldMove {
     const colour = board.nextPlayer;
     if (board.squares[fromIndex].empty()) return error.IllegalMove;
     if (board.squares[fromIndex].colour != colour) return error.IllegalMove;
@@ -631,10 +636,10 @@ pub fn inferPlayMove(board: *Board, fromIndex: u32, toIndex: u32, alloc: std.mem
 
     // Could do a bunch of work to infer the move but instead just find all the moves and see if any match the squares they clicked.
     // This is slower than it could be but it's not in a hot path and allows simple code instead of something super complicated.
-    const allMoves = try genAllMoves.possibleMoves(board, colour, alloc);
-    defer alloc.free(allMoves);
+    const allMoves = try genAllMoves.possibleMoves(board, colour, lists);
+    defer lists.release(allMoves);
     var realMove: Move = undefined;
-    for (allMoves) |m| {
+    for (allMoves.items) |m| {
         if (m.from == @as(u6, @intCast(fromIndex)) and m.to == @as(u6, @intCast(toIndex))) {
             realMove = m;
             break;

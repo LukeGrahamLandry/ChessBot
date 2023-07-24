@@ -14,40 +14,36 @@ const print = @import("common.zig").print;
 const assert = @import("common.zig").assert;
 const setup = @import("common.zig").setup;
 const Timer = @import("bench.zig").Timer;
+const ListPool = @import("movegen.zig").ListPool;
+var theLists = &@import("common.zig").lists;
 
 pub const PerftResult = struct {
     games: u64 = 0,
     checkmates: u64 = 0,
 };
 
+const defaultMemoMB = 100;
+
 // TODO: try using a memo table here as well.
-pub fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, arenaAlloc: std.mem.Allocator, countMates: bool) !PerftResult {
+pub fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, lists: *ListPool, countMates: bool) !PerftResult {
     var results: PerftResult = .{};
     if (countMates) @panic("TODO: reimpl count mates");
-    if (remainingDepth == 0) return .{ .games=1, .checkmates=0}; // @panic("should early exit for depth 0");
+    if (remainingDepth == 0) @panic("should early exit for depth 0");
 
     // @import("movegen.zig").printBitBoard(game.checks.targetedSquares);
 
-    const allMoves = try MoveFilter.Any.get().possibleMoves(game, me, arenaAlloc);
-    if (remainingDepth == 1) return .{ .games=allMoves.len, .checkmates=0};
+    const allMoves = try MoveFilter.Any.get().possibleMoves(game, me, lists);
+    defer lists.release(allMoves);
+    if (remainingDepth == 1) return .{ .games=allMoves.items.len, .checkmates=0};
 
-    // Trying to do depth 7 in one arena started using swap and got super slow. 
-    // TODO: does normal search have the same problem?
-    var arena2 = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    var nextAlloc = if (remainingDepth == 7) arena2.allocator() else arenaAlloc;
-
-    for (allMoves) |move| {
+    for (allMoves.items) |move| {
         const unMove = game.play(move);
         defer game.unplay(unMove);
 
-        const next = try countPossibleGames(game, me.other(), remainingDepth - 1, nextAlloc, countMates);
+        const next = try countPossibleGames(game, me.other(), remainingDepth - 1, lists, countMates);
         results.games += next.games;
         results.checkmates += next.checkmates;
-
-        _ = arena2.reset(.retain_capacity);
     }
-    arena2.deinit();
-
     // Not checking for mate here, we only care about the ones on the bottom level.
     return results;
 }
@@ -56,6 +52,7 @@ pub fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, arena
 // Also exercises the Board.unplay function.
 // Can call this in a loop to test speed of raw movegen.
 test "count possible games" {
+    setup(defaultMemoMB);
     // https://en.wikipedia.org/wiki/Shannon_number
     try (PerftTest{
         .possibleGames = &[_]u64{ 20, 400, 8902, 197281, 4865609 }, // 119060324, 3195901860 is too slow to deal with but passes
@@ -66,6 +63,7 @@ test "count possible games" {
 
 
 test "another perft" {
+    setup(defaultMemoMB);
     // http://www.rocechess.ch/perft.html
     try (PerftTest{
         .possibleGames = &[_]u64{ 48, 2039, 97862, 4085603 },
@@ -89,7 +87,7 @@ pub const PerftTest = struct {
         var game = try Board.fromFEN(self.fen);
         for (self.possibleGames, self.possibleMates, 1..) |expectedGames, expectedMates, i| {
             const start = std.time.nanoTimestamp();
-            const found = try countPossibleGames(&game, .White, i, arena.allocator(), self.countMates);
+            const found = try countPossibleGames(&game, .White, i, theLists, self.countMates);
             const expected: PerftResult = .{ .games = expectedGames, .checkmates = (if (self.countMates) expectedMates else 0) };
             try std.testing.expectEqual(expected.games, found.games);
             if (!@import("builtin").is_test) print("- [{s}] Explored depth {} in {}ms.\n", .{ self.fen, i, @divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms)) });
@@ -102,6 +100,7 @@ pub const PerftTest = struct {
 };
 
 test "perft 3" {
+    setup(defaultMemoMB);
     // https://www.chessprogramming.org/Perft_Results
     try (PerftTest{
         .possibleGames = &[_]u64{ 14, 191, 2812, 43238, 674624 }, // 11030083, 178633661 slow but passes
@@ -112,20 +111,22 @@ test "perft 3" {
 
 // This doesn't really matter unless I bring back the continue searching until no captures thing.
 test "captures only" {
-    const alloc = arena.allocator();
+    setup(defaultMemoMB);
     inline for (bestMoveTests) |position| {
         const fen = position.fen;
         var initial = try Board.fromFEN(fen);
         var game = initial;
-        const allMoves = try MoveFilter.Any.get().possibleMoves(&game, game.nextPlayer, alloc);
-        const captureMoves = try MoveFilter.CapturesOnly.get().possibleMoves(&game, game.nextPlayer, alloc);
+        const allMoves = try MoveFilter.Any.get().possibleMoves(&game, game.nextPlayer, theLists);
+        defer theLists.release(allMoves);
+        const captureMoves = try MoveFilter.CapturesOnly.get().possibleMoves(&game, game.nextPlayer, theLists);
+        defer theLists.release(captureMoves);
 
         // Every capture is a move but not all moves are captures.
-        try std.testing.expect(allMoves.len >= captureMoves.len);
+        try std.testing.expect(allMoves.items.len >= captureMoves.items.len);
 
         // Count material to make sure it really captured something.
         const initialMaterial = game.simpleEval;
-        for (captureMoves) |move| {
+        for (captureMoves.items) |move| {
             const unMove = game.play(move);
             defer game.unplay(unMove);
             try std.testing.expect(initialMaterial != game.simpleEval);
@@ -134,8 +135,8 @@ test "captures only" {
         try initial.expectEqual(&game); // undo move sanity check
 
         // Inverse of the above.
-        for (allMoves) |move| {
-            for (captureMoves) |check| {
+        for (allMoves.items) |move| {
+            for (captureMoves.items) |check| {
                 if (std.meta.eql(move, check)) break;
             } else {
                 const unMove = game.play(move);
@@ -157,7 +158,7 @@ test "write fen" {
 }
 
 test "sane zobrist numbers" {
-    setup();
+    setup(defaultMemoMB);
     try expectNoDuplicates(u64, &@import("common.zig").Magic.ZOIDBERG);
 }
 
@@ -165,7 +166,6 @@ test "dir" {
     try std.testing.expectEqual(Colour.White.dir(), 1);
     try std.testing.expectEqual(Colour.Black.dir(), -1);
 }
-
 
 fn expectNoDuplicates(comptime T: type, items: []T) !void {
     for (items) |val| {
@@ -209,7 +209,7 @@ fn doesStratMakeBestMove(comptime opts: StratOpts) !void {
 }
 
 test "default strat makes best move" {
-    setup();
+    setup(defaultMemoMB);
     try doesStratMakeBestMove(.{});
 }
 
@@ -217,16 +217,16 @@ test "default strat makes best move" {
 // If only one part is wrong, the test with it disabled will still pass.
 
 test "no memo makes best move" {
-    setup();
+    setup(defaultMemoMB);
     try doesStratMakeBestMove(.{ .doMemo = false });
 }
 
 test "no prune makes best move" {
-    setup();
+    setup(defaultMemoMB);
     try doesStratMakeBestMove(.{ .doPruning = false });
 }
 
 test "no iter makes best move" {
-    setup();
+    setup(defaultMemoMB);
     try doesStratMakeBestMove(.{ .doIterative = false });
 }

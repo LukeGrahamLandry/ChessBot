@@ -13,6 +13,7 @@ const print = @import("common.zig").print;
 const panic = @import("common.zig").panic;
 const assert = @import("common.zig").assert;
 const nanoTimestamp = @import("common.zig").nanoTimestamp;
+const ListPool = @import("movegen.zig").ListPool;
 
 // TODO: carefully audit any use of usize because wasm is 32 bit!
 const isWasm = @import("builtin").target.isWasm();
@@ -45,8 +46,8 @@ const LOWEST_EVAL: i32 = -2000000;
 
 // This gets reset after each whole decision is done.
 var upperArena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-// This gets reset after checking each top level move.
-var movesArena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+
+var theLists = &@import("common.zig").lists;
 
 // TODO: should use the std mutex but i'm guessing wasm freestanding wont have one? 
 var stuffInUse = false;
@@ -65,23 +66,24 @@ pub fn bestMove(comptime opts: StratOpts, game: *Board, maxDepth: usize, timeLim
     const startTime = nanoTimestamp();
     const endTime = startTime + (timeLimitMs * std.time.ns_per_ms);
     defer _ = upperArena.reset(.retain_capacity);
-    var topLevelMoves = try movegen.MoveFilter.Any.get().possibleMoves(game, me, upperArena.allocator());
+    var topLevelMoves = try movegen.MoveFilter.Any.get().possibleMoves(game, me, theLists);
+    defer theLists.release(topLevelMoves);
 
-    var evalGuesses = try std.ArrayList(i32).initCapacity(upperArena.allocator(), topLevelMoves.len);
+    var evalGuesses = try std.ArrayList(i32).initCapacity(upperArena.allocator(), topLevelMoves.items.len);
 
     // TODO: remove this. it used to remove illigal moves but now i dont generate them.
     var m: usize = 0;
-    while (m < topLevelMoves.len) {
-        const move = topLevelMoves[m];
+    while (m < topLevelMoves.items.len) {
+        const move = topLevelMoves.items[m];
         const unMove = game.play(move);
         defer game.unplay(unMove);
         try evalGuesses.append(game.simpleEval);
         m += 1;
     }
-    if (topLevelMoves.len == 0) return error.GameOver;
+    if (topLevelMoves.items.len == 0) return error.GameOver;
 
     var thinkTime: i128 = -1;
-    var favourite: Move = topLevelMoves[0];
+    var favourite: Move = topLevelMoves.items[0];
     const startDepth = if (opts.doIterative) 0 else maxDepth;
     for (startDepth..(maxDepth + 1)) |depth| {
         var stats: Stats = .{};
@@ -89,17 +91,16 @@ pub fn bestMove(comptime opts: StratOpts, game: *Board, maxDepth: usize, timeLim
         var beta = -LOWEST_EVAL;
         var bestVal: i32 = LOWEST_EVAL * me.dir();
         // TODO: this is almost the same as walkEval.
-        for (topLevelMoves, 0..) |move, i| {
-            _ = movesArena.reset(.retain_capacity);
+        for (topLevelMoves.items, 0..) |move, i| {
             const unMove = game.play(move);
             defer game.unplay(unMove);
-            const eval = walkEval(opts, game, @intCast(depth), alpha, beta, movesArena.allocator(), &stats, false, endTime) catch |err| {
+            const eval = walkEval(opts, game, @intCast(depth), alpha, beta, theLists, &stats, false, endTime) catch |err| {
                 if (err == error.ForceStop) {
                     // If we ran out of time, just return the best result from the last search.
                     if (nanoTimestamp() >= endTime) {
                         if (thinkTime == -1) {
                             print("Didn't even finish one layer! Playing random move! \n", .{});
-                            favourite = topLevelMoves[0];
+                            favourite = topLevelMoves.items[0];
                         } else {
                             if (isWasm) print("Out of time. Using move from depth {} ({}ms)\n", .{ depth - 1, @divFloor(thinkTime, std.time.ns_per_ms) });
                         }
@@ -123,15 +124,15 @@ pub fn bestMove(comptime opts: StratOpts, game: *Board, maxDepth: usize, timeLim
             }
         }
 
-        std.sort.insertionContext(0, topLevelMoves.len, PairContext{ .moves = topLevelMoves, .evals = evalGuesses.items, .me = me });
+        std.sort.insertionContext(0, topLevelMoves.items.len, PairContext{ .moves = topLevelMoves.items, .evals = evalGuesses.items, .me = me });
         thinkTime = nanoTimestamp() - startTime;
-        favourite = topLevelMoves[0];
+        favourite = topLevelMoves.items[0];
 
         // print("Searched depth {} in {} ms.\n", .{ depth, @divFloor(thinkTime, std.time.ns_per_ms) });
     }
 
     if (isWasm) print("Reached max depth {} in {}ms.\n", .{ maxDepth, @divFloor(thinkTime, std.time.ns_per_ms) });
-    return topLevelMoves[0];
+    return topLevelMoves.items[0];
 }
 
 const PairContext = struct {
@@ -174,7 +175,7 @@ pub fn initMemoTable(memoMapSizeMB: u64) !void {
 // Returns the absolute eval of <game>, positive means white is winning, after game.nextPlayer makes a move.
 // Returns error.GameOver if there were no possible moves or other draws.
 // TODO: redo my captures only thing to be lookForPeace and only simpleEval if no captures on the board
-pub fn walkEval(comptime opts: StratOpts, game: *Board, remaining: i32, alphaIn: i32, betaIn: i32, alloc: std.mem.Allocator, stats: *Stats, comptime capturesOnly: bool, endTime: i128) error{ OutOfMemory, ForceStop, Overflow }!i32 {
+pub fn walkEval(comptime opts: StratOpts, game: *Board, remaining: i32, alphaIn: i32, betaIn: i32, lists: *ListPool, stats: *Stats, comptime capturesOnly: bool, endTime: i128) error{ OutOfMemory, ForceStop, Overflow }!i32 {
     const me = game.nextPlayer;
     if (forceStop) return error.ForceStop;
     if (remaining == 0) {
@@ -208,10 +209,10 @@ pub fn walkEval(comptime opts: StratOpts, game: *Board, remaining: i32, alphaIn:
     var alpha = alphaIn;
     var beta = betaIn;
 
-    var moves = try movegen.MoveFilter.Any.get().possibleMoves(game, me, alloc);
-    defer alloc.free(moves);
+    var moves = try movegen.MoveFilter.Any.get().possibleMoves(game, me, lists);
+    defer lists.release(moves);
 
-    if (moves.len == 0) { // <me> can't make any moves. Either got checkmated or its a draw.
+    if (moves.items.len == 0) { // <me> can't make any moves. Either got checkmated or its a draw.
         if (game.nextPlayerInCheck()) {
             return (IM_MATED_EVAL - remaining) * me.dir();
         } else {
@@ -220,9 +221,9 @@ pub fn walkEval(comptime opts: StratOpts, game: *Board, remaining: i32, alphaIn:
     }
 
     if (cacheHit) |cached| {
-        for (0..moves.len) |i| {
-            if (moves[i].from == cached.move.from and moves[i].to == cached.move.to) {
-                std.mem.swap(Move, &moves[0], &moves[i]);
+        for (0..moves.items.len) |i| {
+            if (moves.items[i].from == cached.move.from and moves.items[i].to == cached.move.to) {
+                std.mem.swap(Move, &moves.items[0], &moves.items[i]);
                 break;
             }
         }
@@ -231,12 +232,12 @@ pub fn walkEval(comptime opts: StratOpts, game: *Board, remaining: i32, alphaIn:
     var bestVal: i32 = LOWEST_EVAL * me.dir();
     var memoKind: MemoKind = .Exact;
     var foundMove: ?Move = null;
-    for (moves) |move| {
+    for (moves.items) |move| {
         const eval = e: {
             if (remaining > 1) {
                 const unMove = game.play(move);
                 defer game.unplay(unMove);
-                break :e try walkEval(opts, game, remaining - 1, alpha, beta, alloc, stats, capturesOnly, endTime);
+                break :e try walkEval(opts, game, remaining - 1, alpha, beta, lists, stats, capturesOnly, endTime);
             } else {
                 // Don't need to do the extra work to prep for legal move generation if this is a leaf node. 
                 // This trick was the justification for switching from pseudo-legal generation. 

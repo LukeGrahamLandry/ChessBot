@@ -20,11 +20,12 @@ pub const MoveFilter = enum {
 
     pub fn get(comptime self: MoveFilter) type {
         return struct {
-            pub fn possibleMoves(board: *Board, me: Colour, alloc: std.mem.Allocator) ![]Move {
+            // Caller must return the list to the list pool. 
+            pub fn possibleMoves(board: *Board, me: Colour, lists: *ListPool) !std.ArrayList(Move) {
                 // assert(board.nextPlayer == me); // sanity. TODO: don't bother passing colour since the board knows?
-                var moves = try std.ArrayList(Move).initCapacity(alloc, 50);
+                var moves = try lists.get();
                 const out: CollectMoves = .{ .moves=&moves, .filter=self };
-                try genPossibleMoves(out, board, me, alloc);
+                try genPossibleMoves(out, board, me);
 
                 if (@import("common.zig").debugCheckLegalMoves) {
                     for (moves.items) |move| {
@@ -40,7 +41,7 @@ pub const MoveFilter = enum {
                     }
                 }
 
-                return try moves.toOwnedSlice();  // TODO: make sure this isn't reallocating
+                return moves;
             }
 
             pub fn collectOnePieceMoves(moves: *std.ArrayList(Move), board: *Board, i: usize, file: usize, rank: usize) !void {
@@ -52,8 +53,7 @@ pub const MoveFilter = enum {
 };
 
 // Caller owns the returned slice.
-pub fn genPossibleMoves(out: anytype, board: *Board, me: Colour, alloc: std.mem.Allocator) !void {
-    _ = alloc;
+pub fn genPossibleMoves(out: anytype, board: *Board, me: Colour) !void {
     const mySquares = board.peicePositions.getFlag(me);
     // TODO: should really be asserting this. problematic becasue the gen target squares uses these methods as part of creating the check info
     // assert(me == board.nextPlayer);
@@ -710,7 +710,7 @@ pub fn getChecksInfo(game: *Board, defendingPlayer: Colour) ChecksInfo {
 
     var out: GetAttackSquares = .{};
     // Can't fail because this consumer doesn't allocate memory 
-    genPossibleMoves(&out, game, defendingPlayer.other(), std.testing.failing_allocator) catch @panic("unreachable alloc");
+    genPossibleMoves(&out, game, defendingPlayer.other()) catch @panic("unreachable alloc");
     result.targetedSquares = out.bb;
 
     if (result.doubleCheck){  // Must move king. 
@@ -1045,3 +1045,35 @@ pub fn printBitBoard(bb: u64) void {
        print("\n", .{});
     }
 }
+
+pub const ListPool = struct {
+    lists: std.ArrayList(std.ArrayList(Move)),
+    alloc: std.mem.Allocator,
+    count: usize = 0,
+
+    pub fn init(alloc: std.mem.Allocator) !ListPool {
+        var self: ListPool = .{ .lists = std.ArrayList(std.ArrayList(Move)).init(alloc), .alloc=alloc };
+        for (0..10) |_| { // pre-allocate enough lists that we'll probably never need to make a new one. should be the expected depth number. 
+            try self.lists.append(try std.ArrayList(Move).initCapacity(self.alloc, 128));
+            self.count += 1;
+        }
+        return self;
+    }
+
+    // Do not deinit the list! Return it to the pool with release
+    pub fn get(self: *ListPool) !std.ArrayList(Move) {
+        // TODO: if i made a more confident upper bound up front I wouldn't need this check. 
+        if (self.lists.popOrNull()) |list| {
+            return list;
+        } else {
+            print("Make new list for pool. {}\n", .{ self.count });
+            self.count += 1;
+            return try std.ArrayList(Move).initCapacity(self.alloc, 128);  // this could be bigger
+        }
+    }
+
+    pub fn release(self: *ListPool, list: std.ArrayList(Move)) void {
+        self.lists.append(list) catch @panic("OOM releasing list.");
+        self.lists.items[self.lists.items.len - 1].clearRetainingCapacity();
+    }
+};
