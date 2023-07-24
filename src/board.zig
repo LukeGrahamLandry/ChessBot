@@ -7,7 +7,8 @@ const assert = @import("common.zig").assert;
 const UCI = @import("uci.zig");
 const ChecksInfo = @import("movegen.zig").ChecksInfo;
 const getChecksInfo = @import("movegen.zig").getChecksInfo;
-const ListPool = @import("movegen.zig").ListPool;
+const movegen = @import("movegen.zig");
+const ListPool = movegen.ListPool;
 
 // Numbers matter because js sees them and for fen parsing.
 pub const Kind = enum(u4) {
@@ -532,10 +533,6 @@ pub const Board = struct {
         print("{s}\n", .{s});
     }
 
-    pub fn slowInCheck(self: *Board, me: Colour) bool {
-        return @import("movegen.zig").reverseFromKingIsInCheck(self, me);
-    }
-
     pub fn nextPlayerInCheck(self: *Board) bool {
         const myKingIndex = if (self.nextPlayer == .White) self.whiteKingIndex else self.blackKingIndex;
         const kingFlag = @as(u64, 1) << @intCast(myKingIndex);
@@ -553,7 +550,7 @@ pub const Board = struct {
     // This could be faster if it didn't generate every possible move first but it's not used in the search loop so nobody cares. 
     pub fn nextPlayerHasLegalMoves(game: *Board, lists: *ListPool) !bool {
         const colour = game.nextPlayer;
-        const moves = try genAllMoves.possibleMoves(game, colour, lists);
+        const moves = try movegen.possibleMoves(game, colour, lists);
         defer lists.release(moves);
         return moves.items.len > 0;
     }
@@ -614,17 +611,12 @@ pub const Move = struct {
     }
 };
 
-comptime {
-    assert(@sizeOf(Move) <= 8);
-}
-
 pub const GameOver = enum { Continue, Stalemate, FiftyMoveDraw, MaterialDraw, WhiteWins, BlackWins };
 
 const isWasm = @import("builtin").target.isWasm();
 
 pub const InferMoveErr = error{IllegalMove} || @import("search.zig").MoveErr;
 
-const genAllMoves = @import("movegen.zig").MoveFilter.Any.get();
 pub fn inferPlayMove(board: *Board, fromIndex: u32, toIndex: u32, lists: *ListPool) InferMoveErr!OldMove {
     const colour = board.nextPlayer;
     if (board.squares[fromIndex].empty()) return error.IllegalMove;
@@ -636,7 +628,7 @@ pub fn inferPlayMove(board: *Board, fromIndex: u32, toIndex: u32, lists: *ListPo
 
     // Could do a bunch of work to infer the move but instead just find all the moves and see if any match the squares they clicked.
     // This is slower than it could be but it's not in a hot path and allows simple code instead of something super complicated.
-    const allMoves = try genAllMoves.possibleMoves(board, colour, lists);
+    const allMoves = try movegen.possibleMoves(board, colour, lists);
     defer lists.release(allMoves);
     var realMove: Move = undefined;
     for (allMoves.items) |m| {

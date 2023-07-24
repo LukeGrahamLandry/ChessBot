@@ -10,6 +10,7 @@ const Move = @import("board.zig").Move;
 const Magic = @import("common.zig").Magic;
 const print = consolePrint;
 const ListPool = @import("movegen.zig").ListPool;
+const movegen = @import("movegen.zig");
 
 var theLists = &@import("common.zig").lists;
 
@@ -72,7 +73,7 @@ export fn destroyBoard(board: *Board) void {
 }
 
 export fn setup() void {
-    @import("common.zig").setup(null);
+    @import("common.zig").setup(100);  // TODO: slider for size
 }
 
 export fn restartGame(board: *Board) void {
@@ -122,16 +123,12 @@ export fn getPossibleMovesBB(board: *Board, from: i32) u64 {
     const file = @mod(from, 8);
     const rank = @divFloor(from, 8);
 
-    var allMoves = theLists.get() catch |err| {
+    // TODO: check if in check and not moving king here because its done in genAllMoves
+    const allMoves = movegen.collectOnePieceMoves(board, @intCast(from), @intCast(file), @intCast(rank), theLists) catch |err| {
         logErr(err, "getPossibleMoves");
         return 0;
     };
     defer theLists.release(allMoves);
-    // TODO: check if in check and not moving king here because its done in genAllMoves
-    search.genAllMoves.collectOnePieceMoves(&allMoves, board, @intCast(from), @intCast(file), @intCast(rank)) catch |err| {
-        logErr(err, "getPossibleMoves");
-        return 0;
-    };
     for (allMoves.items) |move| {
         result |= @as(u64, 1) << @intCast(move.to);
     }

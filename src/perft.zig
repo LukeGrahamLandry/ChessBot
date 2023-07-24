@@ -1,6 +1,6 @@
-//! Uses UCI to run perft on stockfish and compare it to my engine for debugging movegen. 
-//! Take a position, ask stockfish to list all the possible moves at a given depth, make sure we agree. 
-//! Automaticlly follow the tree down to find the exact position with the bug. 
+//! Runs perft on the positions from perft.txt. 
+//! If it fails, ask stockfish to list all the possible moves at a each depth, 
+//! and follow the tree down to find the exact position with the bug. 
 
 const std = @import("std");
 const Board = @import("board.zig").Board;
@@ -15,8 +15,7 @@ const print = @import("common.zig").print;
 const panic = @import("common.zig").panic;
 const UCI = @import("uci.zig");
 const Stockfish = @import("fish.zig").Stockfish;
-const MoveFilter = @import("movegen.zig").MoveFilter;
-const countPossibleGames = @import("tests.zig").countPossibleGames;
+const movegen = @import("movegen.zig");
 const PerftResult = @import("tests.zig").PerftResult;
 const ListPool = @import("movegen.zig").ListPool;
 
@@ -29,6 +28,7 @@ var forever = foreverArena.allocator();
 
 const Shared = std.atomic.Atomic(usize);
 
+// TODO: CLI divide command like the fish
 pub fn main() !void {
     @import("common.zig").setup(0);
     const perfts = (try parsePerfts()).items;
@@ -107,7 +107,7 @@ fn workerFn(self: *Worker) !void {
         const position = self.tasks[nextTask];
         var game = try Board.fromFEN(position.fen);
         for (position.levels) |perft| {
-            const nodes = (try @import("tests.zig").countPossibleGames(&game, game.nextPlayer, perft.depth, &self.lists, false)).games;
+            const nodes = (try countPossibleGames(&game, game.nextPlayer, perft.depth, &self.lists, false)).games;
             self.totalNodes += nodes;
             if (nodes != perft.nodes) {
                 print("[{}/{}] Failed {s} depth {}. Expected {} but found {}.\n", .{ nextTask+1, self.tasks.len, position.fen, perft.depth, perft.nodes, nodes });
@@ -130,6 +130,28 @@ fn workerFn(self: *Worker) !void {
         const ms = @divFloor((self.endTime - startTime), std.time.ns_per_ms);
         print("Thread {} finished {} perfts in {}ms. {} nodes / second.\n", .{self.id, self.passedCount, ms, @divFloor(self.totalNodes * 1000, ms)});
     }
+}
+
+// TODO: try using a memo table here as well. Obviously cheating if i'm just trying to brag about NPS numbers but would make the tests run faster and be an extra check for acidently making collissions more common. 
+pub fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, lists: *ListPool, countMates: bool) !PerftResult {
+    var results: PerftResult = .{};
+    if (countMates) @panic("TODO: reimpl count mates");
+    if (remainingDepth == 0) @panic("should early exit for depth 0");
+
+    const allMoves = try movegen.possibleMoves(game, me, lists);
+    defer lists.release(allMoves);
+    if (remainingDepth == 1) return .{ .games=allMoves.items.len, .checkmates=0};
+
+    for (allMoves.items) |move| {
+        const unMove = game.play(move);
+        defer game.unplay(unMove);
+
+        const next = try countPossibleGames(game, me.other(), remainingDepth - 1, lists, countMates);
+        results.games += next.games;
+        results.checkmates += next.checkmates;
+    }
+    // Not checking for mate here, we only care about the ones on the bottom level.
+    return results;
 }
 
 fn parsePerfts() !std.ArrayList(Perfts) {
@@ -177,7 +199,9 @@ fn debugPerft(fish: *Stockfish, fen: [] const u8, depth: u64, arena: *std.heap.A
     _ = arena.reset(.retain_capacity);
 }
 
-
+// TODO: Make ListPool generic over the element type and then I don't need an allocator here and can get rid of all the arenas. 
+//       Would mean not using the hash maps so should make sure it doesn't make it too slow. 
+//       But the memory usage win for lots of threads is probably worth it.
 fn walkPerft(fish: *Stockfish, board: *Board, depth: u64, arena: *std.heap.ArenaAllocator, lists: *ListPool) !u64 {
     if (depth == 0) return 1;
 
@@ -187,7 +211,7 @@ fn walkPerft(fish: *Stockfish, board: *Board, depth: u64, arena: *std.heap.Arena
     // First decide if this is the branch where we disagree about possible moves. 
     // Can do that by using depth 1 because we don't care about the actual numbers yet. 
     const fishMoves = (try runFishPerft(fish, board, 1, alloc)).childCount;
-    const myMoves = try MoveFilter.Any.get().possibleMoves(board, board.nextPlayer, lists);
+    const myMoves = try movegen.possibleMoves(board, board.nextPlayer, lists);
     defer lists.release(myMoves);
 
     var missingMoves = false;

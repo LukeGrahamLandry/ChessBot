@@ -6,7 +6,6 @@ const Kind = @import("board.zig").Kind;
 const StratOpts = @import("search.zig").StratOpts;
 const bestMove = @import("search.zig").bestMove;
 const resetMemoTable = @import("search.zig").resetMemoTable;
-const MoveFilter = @import("movegen.zig").MoveFilter;
 const Move = @import("board.zig").Move;
 const Stats = @import("search.zig").Stats;
 const writeAlgebraic = @import("uci.zig").writeAlgebraic;
@@ -16,6 +15,7 @@ const setup = @import("common.zig").setup;
 const Timer = @import("bench.zig").Timer;
 const ListPool = @import("movegen.zig").ListPool;
 var theLists = &@import("common.zig").lists;
+const countPossibleGames = @import("perft.zig").countPossibleGames;
 
 pub const PerftResult = struct {
     games: u64 = 0,
@@ -24,33 +24,10 @@ pub const PerftResult = struct {
 
 const defaultMemoMB = 100;
 
-// TODO: try using a memo table here as well.
-pub fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, lists: *ListPool, countMates: bool) !PerftResult {
-    var results: PerftResult = .{};
-    if (countMates) @panic("TODO: reimpl count mates");
-    if (remainingDepth == 0) @panic("should early exit for depth 0");
-
-    // @import("movegen.zig").printBitBoard(game.checks.targetedSquares);
-
-    const allMoves = try MoveFilter.Any.get().possibleMoves(game, me, lists);
-    defer lists.release(allMoves);
-    if (remainingDepth == 1) return .{ .games=allMoves.items.len, .checkmates=0};
-
-    for (allMoves.items) |move| {
-        const unMove = game.play(move);
-        defer game.unplay(unMove);
-
-        const next = try countPossibleGames(game, me.other(), remainingDepth - 1, lists, countMates);
-        results.games += next.games;
-        results.checkmates += next.checkmates;
-    }
-    // Not checking for mate here, we only care about the ones on the bottom level.
-    return results;
-}
-
 // Tests that the move generation gets the right number of nodes at each depth.
 // Also exercises the Board.unplay function.
 // Can call this in a loop to test speed of raw movegen.
+// TODO: parse from string like big perft does
 test "count possible games" {
     setup(defaultMemoMB);
     // https://en.wikipedia.org/wiki/Shannon_number
@@ -107,48 +84,6 @@ test "perft 3" {
         .possibleMates = &[_]u64{ 0, 0, 0, 17, 0 }, // 2733, 87
         .fen = "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w",
     }).run();
-}
-
-// This doesn't really matter unless I bring back the continue searching until no captures thing.
-test "captures only" {
-    setup(defaultMemoMB);
-    inline for (bestMoveTests) |position| {
-        const fen = position.fen;
-        var initial = try Board.fromFEN(fen);
-        var game = initial;
-        const allMoves = try MoveFilter.Any.get().possibleMoves(&game, game.nextPlayer, theLists);
-        defer theLists.release(allMoves);
-        const captureMoves = try MoveFilter.CapturesOnly.get().possibleMoves(&game, game.nextPlayer, theLists);
-        defer theLists.release(captureMoves);
-
-        // Every capture is a move but not all moves are captures.
-        try std.testing.expect(allMoves.items.len >= captureMoves.items.len);
-
-        // Count material to make sure it really captured something.
-        const initialMaterial = game.simpleEval;
-        for (captureMoves.items) |move| {
-            const unMove = game.play(move);
-            defer game.unplay(unMove);
-            try std.testing.expect(initialMaterial != game.simpleEval);
-            try std.testing.expect(move.isCapture);
-        }
-        try initial.expectEqual(&game); // undo move sanity check
-
-        // Inverse of the above.
-        for (allMoves.items) |move| {
-            for (captureMoves.items) |check| {
-                if (std.meta.eql(move, check)) break;
-            } else {
-                const unMove = game.play(move);
-                defer game.unplay(unMove);
-                try std.testing.expect(initialMaterial == game.simpleEval);
-                try std.testing.expect(!move.isCapture);
-            }
-        }
-        try initial.expectEqual(&game); // undo move sanity check
-
-        _ = arena.reset(.retain_capacity);
-    }
 }
 
 test "write fen" {

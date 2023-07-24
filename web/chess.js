@@ -25,6 +25,7 @@ const enableBot = true;
 // TODO: save game in local storage 
 // TODO: slider for memo table size
 // TODO: a board pointer and a canvas target could be a class instead of scattered global variables. 
+// TODO: could save the fen of the current board in the url fragment. should have checkbox to not fill up history. 
 
 let ticker = null;
 let boardFenHistory = [];

@@ -12,48 +12,23 @@ const Kind = @import("board.zig").Kind;
 const StratOpts = @import("search.zig").StratOpts;
 const Move = @import("board.zig").Move;
 
-pub const MoveFilter = enum {
-    Any,
-    CapturesOnly,
-    KingCapturesOnly, // TODO: write a test with this against reverseFromKingIsInCheck
-    CurrentlyCalcChecks,
+pub fn possibleMoves(board: *const Board, me: Colour, lists: *ListPool) !ListPool.List {
+    // assert(board.nextPlayer == me); // sanity. TODO: don't bother passing colour since the board knows?
+    var moves = try lists.get();
+    const out: CollectMoves = .{ .moves=&moves, .filter=.Any };
+    try genPossibleMoves(out, board, me);
+    return moves;
+}
 
-    pub fn get(comptime self: MoveFilter) type {
-        return struct {
-            // Caller must return the list to the list pool. 
-            pub fn possibleMoves(board: *Board, me: Colour, lists: *ListPool) !std.ArrayList(Move) {
-                // assert(board.nextPlayer == me); // sanity. TODO: don't bother passing colour since the board knows?
-                var moves = try lists.get();
-                const out: CollectMoves = .{ .moves=&moves, .filter=self };
-                try genPossibleMoves(out, board, me);
-
-                if (@import("common.zig").debugCheckLegalMoves) {
-                    for (moves.items) |move| {
-                        const unMove = board.play(move);
-                        if (board.slowInCheck(me)) {
-                            board.unplay(unMove);
-                            print("original position:\n", .{});
-                            board.debugPrint();
-                            panic("movegen gave illegal move {s}.", .{try move.text()});
-                        } else {
-                            board.unplay(unMove);
-                        }
-                    }
-                }
-
-                return moves;
-            }
-
-            pub fn collectOnePieceMoves(moves: *std.ArrayList(Move), board: *Board, i: usize, file: usize, rank: usize) !void {
-                const out: CollectMoves = .{ .moves=moves, .filter=self };
-                try genOnePieceMoves(out, board, i, file, rank);
-            }
-        };
-    }
-};
+pub fn collectOnePieceMoves(board: *const Board, i: usize, file: usize, rank: usize, lists: *ListPool) !ListPool.List {
+    var moves = try lists.get();
+    const out: CollectMoves = .{ .moves=&moves, .filter=.Any };
+    try genOnePieceMoves(out, board, i, file, rank);
+    return moves;
+}
 
 // Caller owns the returned slice.
-pub fn genPossibleMoves(out: anytype, board: *Board, me: Colour) !void {
+pub fn genPossibleMoves(out: anytype, board: *const Board, me: Colour) !void {
     const mySquares = board.peicePositions.getFlag(me);
     // TODO: should really be asserting this. problematic becasue the gen target squares uses these methods as part of creating the check info
     // assert(me == board.nextPlayer);
@@ -80,7 +55,12 @@ pub fn genPossibleMoves(out: anytype, board: *Board, me: Colour) !void {
     }
 }
 
-pub fn genOnePieceMoves(out: anytype, board: *Board, i: usize, file: usize, rank: usize) !void {
+const MoveFilter = enum {
+    Any,
+    CurrentlyCalcChecks,
+};
+
+pub fn genOnePieceMoves(out: anytype, board: *const Board, i: usize, file: usize, rank: usize) !void {
     const piece = board.squares[i];
     switch (piece.kind) {
         .Pawn => try pawnMove(out, board, i, file, rank, piece),
@@ -247,14 +227,14 @@ fn bishopSlide(out: anytype, board: *const Board, i: usize, file: usize, rank: u
     }
 }
 
-fn trySlideKing(out: anytype, board: *Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
+fn trySlideKing(out: anytype, board: *const Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
     const endFlag = @as(u64, 1) << @intCast(rank*8 + file);
     if (out.filter != .CurrentlyCalcChecks and (board.checks.targetedSquares & endFlag) != 0) return;
     _ = try out.trySlide(board, i, file, rank, piece);
 }
 
 // TODO: This is suck!
-fn kingMove(out: anytype, board: *Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
+fn kingMove(out: anytype, board: *const Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
     // forward
     if (file < 7) {
         try trySlideKing(out, board, i, file + 1, rank, piece);
@@ -271,54 +251,47 @@ fn kingMove(out: anytype, board: *Board, i: usize, file: usize, rank: usize, pie
     if (rank < 7) try trySlideKing(out, board, i, file, rank + 1, piece);
     if (rank > 0) try trySlideKing(out, board, i, file, rank - 1, piece);
 
-    try tryCastle(out, board, i, file, rank, piece.colour, true);
-    try tryCastle(out, board, i, file, rank, piece.colour, false);
+    try tryCastle(out, board, piece.colour, true);
+    try tryCastle(out, board, piece.colour, false);
 }
 
-// TODO: move this into tryCastle and use the same mask for checking empty squares
-fn castlingIsLegal(out: anytype, board: *Board, i: usize, colour: Colour, comptime goingLeft: bool) !bool {
-    _ = colour;
-    if (out.filter == .CurrentlyCalcChecks) return false;
-    // Note this test doesn't go all the way to the rook on the left, its allowed to go through check!
-    // TODO: THIS SHOULD NOT HAVE JUMPS. just build the mask, we know where the king is if it can castle!
-    const path = if (goingLeft) [_]u64{ i, i - 1, i - 2 } else [_]u64{ i, i + 1, i + 2 };
-    var flag: u64 = 0;
-    for (path) |sq| {
-        flag |= @as(u64, 1) << @intCast(sq);
-    }
-    return (board.checks.targetedSquares & flag) == 0;
+pub fn ff(i: anytype) u64 {
+    return @as(u64, 1) << @as(u6, i);
 }
 
-// TODO: do all the offsets on i instead of on (x, y) since we know rooks/king are in start pos so can't wrap around board.
-pub fn tryCastle(out: anytype, board: *Board, i: usize, file: usize, rank: usize, colour: Colour, comptime goingLeft: bool) !void {
+// This wouldn't work for fisher random but that's not the universe we live in right now. 
+pub fn tryCastle(out: anytype, board: *const Board, colour: Colour, comptime goingLeft: bool) !void {
     if (out.filter == .CurrentlyCalcChecks) return;
-    const cI: usize = if (colour == .White) 0 else 1;
-    if (i != 4 + (cI * 8 * 7)) return; // TODO: redundant
-    if (board.castling.get(colour, goingLeft)) {
-        // TODO: can be a hard coded mask
-        const pathClear = if (goingLeft)
-            (board.emptyAtI(i - 1) and board.emptyAtI(i - 2) and board.emptyAtI(i - 3))
-        else
-            (board.emptyAtI(i + 1) and board.emptyAtI(i + 2));
+    if (!board.castling.get(colour, goingLeft)) return;
 
-        if (pathClear) {
-            if (!try castlingIsLegal(out, board, i, colour, goingLeft)) return;
+    // Are there any pieces blocking us from castling?
+    const shift: u6 = if (colour == .Black) 7*8 else 0;
+    const leftNoChecks = comptime (ff(2) | ff(3) | ff(4));
+    const rightNoChecks = comptime (ff(6) | ff(5) | ff(4));
+    var pathFlag = (if (goingLeft) leftNoChecks else rightNoChecks) << shift;
+    const leftNoPieces = comptime (ff(1) | ff(2) | ff(3));
+    const rightNoPieces = comptime (ff(5) | ff(6));
+    var emptyFlag = (if (goingLeft) leftNoPieces else rightNoPieces) << shift;
+    const pieces = board.peicePositions.white | board.peicePositions.black;
+    const bad = (pieces & emptyFlag) | (board.checks.targetedSquares & pathFlag);
+    if (bad != 0) return;
 
-            const kingFrom: u6 = @intCast(rank * 8 + file);
-            const kingTo: u6 = if (goingLeft) @intCast(rank * 8 + (file - 2)) else @intCast(rank * 8 + (file + 2));
-            const rookFrom: u6 = if (goingLeft) @intCast(rank * 8) else @intCast((rank + 1) * 8 - 1);
-            const rookTo: u6 = if (goingLeft) @intCast(rank * 8 + (file - 1)) else @intCast(rank * 8 + (file + 1));
-            assert(board.squares[kingFrom].is(colour, .King));
-            assert(board.squares[kingTo].empty());
-            assert(board.squares[rookFrom].is(colour, .Rook));
-            assert(board.squares[rookTo].empty());
-            const move: Move = .{ .from = kingFrom, .to = kingTo, .action = .{ .castle = .{
-                .rookFrom = rookFrom,
-                .rookTo = rookTo,
-            } }, .isCapture = false };
-            try out.append(move);
-        }
-    }
+    // Where would we be going?
+    const kingFrom = shift + 4;
+    const kingTo: u6 = shift + if (goingLeft) 2 else 6;
+    const rookFrom: u6 = shift + if (goingLeft) 0 else 7;
+    const rookTo: u6 = shift + if (goingLeft) 3 else 5;
+    assert(board.squares[kingFrom].is(colour, .King));
+    assert(board.squares[kingTo].empty());
+    assert(board.squares[rookFrom].is(colour, .Rook));
+    assert(board.squares[rookTo].empty());
+
+    // Make the move. 
+    const move: Move = .{ .from = kingFrom, .to = kingTo, .action = .{ .castle = .{
+        .rookFrom = rookFrom,
+        .rookTo = rookTo,
+    } }, .isCapture = false };
+    try out.append(move);   
 }
 
 fn knightMove(out: anytype, board: *const Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
@@ -358,17 +331,11 @@ const directions = [8] [2] isize {
 const knightOffsets = [4] isize { 1, -1, 2, -2 };
 
 const CollectMoves = struct {
-    moves: *std.ArrayList(Move),
-    filter: MoveFilter = .Any,
+    moves: *ListPool.List,
+    comptime filter: MoveFilter = .Any,
 
     fn tryHop(self: CollectMoves, board: *const Board, i: usize, checkFile: usize, checkRank: usize, piece: Piece) !void {
         const check = board.get(checkFile, checkRank);
-        switch (self.filter) {
-            .Any, .CurrentlyCalcChecks => {},
-            .CapturesOnly => if (check.empty()) return,
-            .KingCapturesOnly => if (check.kind != .King) return,
-        }
-
         const toFlag = @as(u64, 1) << @intCast(checkRank*8 + checkFile);
         if (self.filter != .CurrentlyCalcChecks and (board.checks.blockSingleCheck & toFlag) == 0) return;
 
@@ -383,12 +350,6 @@ const CollectMoves = struct {
     }
 
     fn trySlide2(self: CollectMoves, board: *const Board, fromIndex: u6, toIndexx: u6, piece: Piece) !bool {
-        switch (self.filter) {
-            .Any, .CurrentlyCalcChecks => {},
-            .CapturesOnly => if (board.squares[toIndexx].empty() or board.squares[toIndexx].colour == piece.colour) return !board.squares[toIndexx].empty(),
-            .KingCapturesOnly => if (board.squares[toIndexx].kind != .King) return !board.squares[toIndexx].empty(),
-        }
-
         const anyPieces = board.peicePositions.white | board.peicePositions.black;
         const toFlag = @as(u64, 1) << toIndexx;
         // TODO: king should call other method so no branch
@@ -478,12 +439,6 @@ const CollectMoves = struct {
 
         // TODO: including promotions on fast path should be seperate option
         const check = board.get(toFile, toRank);
-
-        switch (self.filter) {
-            .Any, .CurrentlyCalcChecks => {},
-            .CapturesOnly => if (check.kind == .Empty or check.colour == colour) return,
-            .KingCapturesOnly => if (check.kind != .King or check.colour == colour) return,
-        }
 
         if ((colour == .Black and toRank == 0) or (colour == .White and toRank == 7)) {
             var move: Move = .{ .from = @intCast(fromIndex), .to = @intCast(toRank * 8 + toFile), .action = .{ .promote = .Queen }, .isCapture = !check.empty() and check.colour != colour, .bonus = Magic.PUSH_PAWN };
@@ -707,7 +662,6 @@ pub fn getChecksInfo(game: *Board, defendingPlayer: Colour) ChecksInfo {
 
     // Can never be in check from the other king. Don't need to consider it. 
 
-
     var out: GetAttackSquares = .{};
     // Can't fail because this consumer doesn't allocate memory 
     genPossibleMoves(&out, game, defendingPlayer.other()) catch @panic("unreachable alloc");
@@ -722,8 +676,16 @@ pub fn getChecksInfo(game: *Board, defendingPlayer: Colour) ChecksInfo {
                 // No french available so don't care. 
             },
             .file => |file| {
-                // TODO: another easy check to avoid work is see if the enemy is targeting its french pawn
-                getFrenchPins(game, defendingPlayer, file, &result);
+                // It feels like you could also avoid this by checking if enemy is targeting thier own pawn but since a pawn from both sides moves it doesn't work. 
+                // TODO: could check bit map two out on either side and need to do more work if any of those hit. 
+                
+                // If we don't have a pawn in position to take, there's no need to do more work to check if its pinned. 
+                const capturedPawnRank = if (defendingPlayer == .White) @as(usize, 4) else @as(usize, 3);
+                const hasLeft = file > 0 and (game.get(file - 1, capturedPawnRank).is(defendingPlayer, .Pawn));
+                const hasRight = file < 7 and (game.get(file + 1, capturedPawnRank).is(defendingPlayer, .Pawn));
+                if (hasLeft or hasRight) {
+                    getFrenchPins(game, defendingPlayer, file, &result);
+                }
             }
         }
 
@@ -812,210 +774,6 @@ pub fn getFrenchPins(game: *Board, defendingPlayer: Colour, frenchFile: u4, resu
     }
 }
 
-// TODO: this is bascilly a copy paste from the other one. could have all the move functions be generic over a function to call when you get each move.
-pub fn reverseFromKingIsInCheck(game: *Board, me: Colour) bool {
-    const i = if (me == .Black) (game.blackKingIndex) else (game.whiteKingIndex);
-    const file = i % 8;
-    const rank = i / 8;
-
-    const isInCheck = check: {
-        // Move like a rook
-        if (file < 7) {
-            for ((file + 1)..8) |checkFile| {
-                if (!game.emptyAt(checkFile, rank)) {
-                    const p = game.get(checkFile, rank);
-                    if (p.colour == me) break;
-                    if (p.kind == .Queen or p.kind == .Rook) {
-                        break :check true;
-                    } else break;
-                }
-            }
-        }
-
-        if (file > 0) {
-            for (1..(file + 1)) |checkFile| {
-                if (!game.emptyAt(file - checkFile, rank)) {
-                    const p = game.get(file - checkFile, rank);
-                    if (p.colour == me) break;
-                    if (p.kind == .Queen or p.kind == .Rook) {
-                        break :check true;
-                    } else break;
-                }
-            }
-        }
-
-        if (rank < 7) {
-            for ((rank + 1)..8) |checkRank| {
-                if (!game.emptyAt(file, checkRank)) {
-                    const p = game.get(file, checkRank);
-                    if (p.colour == me) break;
-                    if (p.kind == .Queen or p.kind == .Rook) {
-                        break :check true;
-                    } else break;
-                }
-            }
-        }
-
-        if (rank > 0) {
-            for (1..(rank + 1)) |checkRank| {
-                if (!game.emptyAt(file, rank - checkRank)) {
-                    const p = game.get(file, rank - checkRank);
-                    if (p.colour == me) break;
-                    if (p.kind == .Queen or p.kind == .Rook) {
-                        break :check true;
-                    } else break;
-                }
-            }
-        }
-
-        // Move like a bishop
-        {
-            var checkFile = file;
-            var checkRank = rank;
-            while (checkFile < 7 and checkRank < 7) {
-                checkFile += 1;
-                checkRank += 1;
-                if (!game.emptyAt(checkFile, checkRank)) {
-                    const p = game.get(checkFile, checkRank);
-                    if (p.colour == me) break;
-                    if (p.kind == .Queen or p.kind == .Bishop) {
-                        break :check true;
-                    } else break;
-                }
-            }
-        }
-
-        {
-            var checkFile = file;
-            var checkRank = rank;
-            while (checkFile > 0 and checkRank < 7) {
-                checkFile -= 1;
-                checkRank += 1;
-                if (!game.emptyAt(checkFile, checkRank)) {
-                    const p = game.get(checkFile, checkRank);
-                    if (p.colour == me) break;
-                    if (p.kind == .Queen or p.kind == .Bishop) {
-                        break :check true;
-                    } else break;
-                }
-            }
-        }
-
-        {
-            var checkFile = file;
-            var checkRank = rank;
-            while (checkFile < 7 and checkRank > 0) {
-                checkFile += 1;
-                checkRank -= 1;
-                if (!game.emptyAt(checkFile, checkRank)) {
-                    const p = game.get(checkFile, checkRank);
-                    if (p.colour == me) break;
-                    if (p.kind == .Queen or p.kind == .Bishop) {
-                        break :check true;
-                    } else break;
-                }
-            }
-        }
-
-        {
-            var checkFile = file;
-            var checkRank = rank;
-            while (checkFile > 0 and checkRank > 0) {
-                checkFile -= 1;
-                checkRank -= 1;
-                if (!game.emptyAt(checkFile, checkRank)) {
-                    const p = game.get(checkFile, checkRank);
-                    if (p.colour == me) break; // my piece is safe and blocks
-                    if (p.kind == .Queen or p.kind == .Bishop) { // your slider can attack me
-                        break :check true;
-                    } else break; // your non-slider keeps me safe from other sliders
-                }
-            }
-        }
-
-        // The other king
-        const iOther = if (me == .Black) (game.whiteKingIndex) else (game.blackKingIndex);
-        const fileOther = iOther % 8;
-        const rankOther = iOther / 8;
-        const fileDiff = @as(i32, @intCast(file)) - @as(i32, @intCast(fileOther));
-        const rankDiff = @as(i32, @intCast(rank)) - @as(i32, @intCast(rankOther));
-        if (fileDiff * fileDiff <= 1 and rankDiff * rankDiff <= 1) break :check true;
-
-        // Pawns
-        // Dont care about forward moves becasue they can't take.
-        const onEdge = if (me == .White) rank == 7 else rank == 0;
-        if (!onEdge) {
-            const targetRank = switch (me) {
-                .White => w: {
-                    break :w rank + 1;
-                },
-                .Black => b: {
-                    break :b rank - 1;
-                },
-            };
-
-            if (file < 7 and game.get(file + 1, targetRank).kind == .Pawn and game.get(file + 1, targetRank).colour != me) { // right
-                break :check true;
-            }
-            if (file > 0 and game.get(file - 1, targetRank).kind == .Pawn and game.get(file - 1, targetRank).colour != me) {
-                break :check true;
-            }
-        }
-
-        // Knights!
-
-        if (rank < 6) {
-            if (file < 7) {
-                const p = game.get(file + 1, rank + 2);
-                if (p.kind == .Knight and p.colour != me) break :check true;
-            }
-
-            if (file > 0) {
-                const p = game.get(file - 1, rank + 2);
-                if (p.kind == .Knight and p.colour != me) break :check true;
-            }
-        }
-        if (rank > 1) {
-            if (file < 7) {
-                const p = game.get(file + 1, rank - 2);
-                if (p.kind == .Knight and p.colour != me) break :check true;
-            }
-
-            if (file > 0) {
-                const p = game.get(file - 1, rank - 2);
-                if (p.kind == .Knight and p.colour != me) break :check true;
-            }
-        }
-
-        if (file < 6) {
-            if (rank < 7) {
-                const p = game.get(file + 2, rank + 1);
-                if (p.kind == .Knight and p.colour != me) break :check true;
-            }
-
-            if (rank > 0) {
-                const p = game.get(file + 2, rank - 1);
-                if (p.kind == .Knight and p.colour != me) break :check true;
-            }
-        }
-        if (file > 1) {
-            if (rank < 7) {
-                const p = game.get(file - 2, rank + 1);
-                if (p.kind == .Knight and p.colour != me) break :check true;
-            }
-
-            if (rank > 0) {
-                const p = game.get(file - 2, rank - 1);
-                if (p.kind == .Knight and p.colour != me) break :check true;
-            }
-        }
-
-        break :check false;
-    };
-    return isInCheck;
-}
-
-// TODO: method that factors out bounds check from try methods then calls this? make sure not to do twice in slide loops.
 pub fn irf(fromIndex: usize, toFile: usize, toRank: usize, isCapture: bool) Move {
     // std.debug.assert(fromIndex < 64 and toFile < 8 and toRank < 8);
     return .{ .from = @intCast(fromIndex), .to = @intCast(toRank * 8 + toFile), .action = .none, .isCapture = isCapture };
@@ -1046,34 +804,41 @@ pub fn printBitBoard(bb: u64) void {
     }
 }
 
-pub const ListPool = struct {
-    lists: std.ArrayList(std.ArrayList(Move)),
-    alloc: std.mem.Allocator,
-    count: usize = 0,
+pub const ListPool = AnyListPool(Move);
 
-    pub fn init(alloc: std.mem.Allocator) !ListPool {
-        var self: ListPool = .{ .lists = std.ArrayList(std.ArrayList(Move)).init(alloc), .alloc=alloc };
-        for (0..10) |_| { // pre-allocate enough lists that we'll probably never need to make a new one. should be the expected depth number. 
-            try self.lists.append(try std.ArrayList(Move).initCapacity(self.alloc, 128));
-            self.count += 1;
+pub fn AnyListPool(comptime element: type) type {
+    return struct {
+        lists: std.ArrayList(List),
+        alloc: std.mem.Allocator,
+        count: usize = 0,
+
+        pub const List = std.ArrayList(element);
+
+        pub fn init(alloc: std.mem.Allocator) !ListPool {
+            var self: ListPool = .{ .lists = std.ArrayList(List).init(alloc), .alloc=alloc };
+            for (0..10) |_| { // pre-allocate enough lists that we'll probably never need to make a new one. should be the expected depth number. 
+                try self.lists.append(try List.initCapacity(self.alloc, 128));
+                self.count += 1;
+            }
+            return self;
         }
-        return self;
-    }
 
-    // Do not deinit the list! Return it to the pool with release
-    pub fn get(self: *ListPool) !std.ArrayList(Move) {
-        // TODO: if i made a more confident upper bound up front I wouldn't need this check. 
-        if (self.lists.popOrNull()) |list| {
-            return list;
-        } else {
-            print("Make new list for pool. {}\n", .{ self.count });
-            self.count += 1;
-            return try std.ArrayList(Move).initCapacity(self.alloc, 128);  // this could be bigger
+        /// Do not deinit the list! Return it to the pool with release
+        pub fn get(self: *ListPool) !List {
+            // TODO: if i made a more confident upper bound up front I wouldn't need this check. 
+            if (self.lists.popOrNull()) |list| {
+                return list;
+            } else {
+                print("Make new list for pool. {}\n", .{ self.count });
+                self.count += 1;
+                return try List.initCapacity(self.alloc, 128);  // this could be bigger
+            }
         }
-    }
 
-    pub fn release(self: *ListPool, list: std.ArrayList(Move)) void {
-        self.lists.append(list) catch @panic("OOM releasing list.");
-        self.lists.items[self.lists.items.len - 1].clearRetainingCapacity();
-    }
-};
+        // TODO: do i need to errdefer this in functions that return one or is it already too messed up to recover if an allocation fails. 
+        pub fn release(self: *ListPool, list: List) void {
+            self.lists.append(list) catch @panic("OOM releasing list.");  // If this fails you made like way too many lists. 
+            self.lists.items[self.lists.items.len - 1].clearRetainingCapacity();
+        }
+    };
+}

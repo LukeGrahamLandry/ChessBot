@@ -18,12 +18,7 @@ const ListPool = @import("movegen.zig").ListPool;
 // TODO: carefully audit any use of usize because wasm is 32 bit!
 const isWasm = @import("builtin").target.isWasm();
 
-var notTheRng = std.rand.DefaultPrng.init(0);
-var rng = notTheRng.random();
-
 const movegen = @import("movegen.zig");
-pub const genCapturesOnly = movegen.MoveFilter.CapturesOnly.get();
-pub const genAllMoves = movegen.MoveFilter.Any.get();
 
 pub const StratOpts = struct {
     doPruning: bool = true,
@@ -66,7 +61,7 @@ pub fn bestMove(comptime opts: StratOpts, game: *Board, maxDepth: usize, timeLim
     const startTime = nanoTimestamp();
     const endTime = startTime + (timeLimitMs * std.time.ns_per_ms);
     defer _ = upperArena.reset(.retain_capacity);
-    var topLevelMoves = try movegen.MoveFilter.Any.get().possibleMoves(game, me, theLists);
+    var topLevelMoves = try movegen.possibleMoves(game, me, theLists);
     defer theLists.release(topLevelMoves);
 
     var evalGuesses = try std.ArrayList(i32).initCapacity(upperArena.allocator(), topLevelMoves.items.len);
@@ -209,7 +204,7 @@ pub fn walkEval(comptime opts: StratOpts, game: *Board, remaining: i32, alphaIn:
     var alpha = alphaIn;
     var beta = betaIn;
 
-    var moves = try movegen.MoveFilter.Any.get().possibleMoves(game, me, lists);
+    var moves = try movegen.possibleMoves(game, me, lists);
     defer lists.release(moves);
 
     if (moves.items.len == 0) { // <me> can't make any moves. Either got checkmated or its a draw.

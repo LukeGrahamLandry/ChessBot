@@ -6,15 +6,15 @@ pub const print = if (isWasm) @import("web.zig").consolePrint else std.debug.pri
 pub const panic = if (isWasm) @import("web.zig").alertPrint else std.debug.panic;
 pub const assert = std.debug.assert;
 
-pub const debugCheckLegalMoves = false;
-
 const ListPool = @import("movegen.zig").ListPool;
 
+// TODO: Having the magic global variable is awkward. Could pass around a magic search context struct that includes the memo map as well. 
+//       I can't decide if I like the simplicity of global variables when there's only one instance anyway or if explicitly passing it to people is more clear. 
+//       Return it from setup so you can't forget to call. 
 var general_i = std.heap.GeneralPurposeAllocator(.{}) {};
 pub var lists: ListPool = undefined;
 
-// TODO: do memo table here as well // memoTableMB: u64
-pub fn setup(memoSizeMB: ?usize) void {
+pub fn setup(memoSizeMB: usize) void {
     if (!isTest) print("Zobrist Xoshiro256 seed is {any}.\n", .{Magic.ZOIDBERG_SEED});
     var rand: std.rand.Xoshiro256 = .{ .s = Magic.ZOIDBERG_SEED };
     for (&Magic.ZOIDBERG) |*ptr| {
@@ -23,7 +23,7 @@ pub fn setup(memoSizeMB: ?usize) void {
 
     lists = ListPool.init(general_i.allocator()) catch @panic("Failed to init ListPool");
 
-    @import("search.zig").initMemoTable(memoSizeMB orelse 0) catch @panic("OOM");
+    @import("search.zig").initMemoTable(memoSizeMB) catch @panic("OOM");
 }
 
 pub fn nanoTimestamp() i128 {

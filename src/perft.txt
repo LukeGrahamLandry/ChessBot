@@ -1,3 +1,4 @@
+/////
 // http://www.rocechess.ch/perft.html
 
 rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1 ;D1 20 ;D2 400 ;D3 8902 ;D4 197281 ;D5 4865609 ;D6 119060324
@@ -126,3 +127,73 @@ n1n5/PPPk4/8/8/8/8/4Kppp/5N1N w - - 0 1 ;D1 24 ;D2 496 ;D3 9483 ;D4 182838 ;D5 3
 n1n5/1Pk5/8/8/8/8/5Kp1/5N1N b - - 0 1 ;D1 24 ;D2 421 ;D3 7421 ;D4 124608 ;D5 2193768 ;D6 37665329
 8/PPPk4/8/8/8/8/4Kppp/8 b - - 0 1 ;D1 18 ;D2 270 ;D3 4699 ;D4 79355 ;D5 1533145 ;D6 28859283
 n1n5/PPPk4/8/8/8/8/4Kppp/5N1N b - - 0 1 ;D1 24 ;D2 496 ;D3 9483 ;D4 182838 ;D5 3605103 ;D6 71179139
+
+/////
+// https://www.chessprogramming.org/Perft_Results
+
+8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1 ;D1 14 ;D2 191 ;D3 2812 ;D4 43238 ;D5 674624 ;D6 11030083 ;D7 178633661
+r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1 ;D1 6 ;D2 264 ;D3 9467 ;D4 422333 ;D5 15833292 ;D6 706045033
+r2q1rk1/pP1p2pp/Q4n2/bbp1p3/Np6/1B3NBn/pPPP1PPP/R3K2R b KQ - 0 1 ;D1 6 ;D2 264 ;D3 9467 ;D4 422333 ;D5 15833292 ;D6 706045033
+rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8 ;D1 44 ;D2 1486 ;D3 62379 ;D4 2103487 ;D5 89941194
+r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10 ;D1 46 ;D2 2079 ;D3 89890 ;D4 3894594 ;D5 164075551
+
+/////
+// https://www.talkchess.com/forum3/viewtopic.php?t=47318
+
+// avoid illegal en passant capture
+8/5bk1/8/2Pp4/8/1K6/8/8 w - d6 0 1 ;D6 824064
+8/8/1k6/8/2pP4/8/5BK1/8 b - d3 0 1 ;D6 824064
+// en passant capture checks opponent
+8/8/1k6/2b5/2pP4/8/5K2/8 b - d3 0 1 ;D6 1440467
+8/5k2/8/2Pp4/2B5/1K6/8/8 w - d6 0 1 ;D6 1440467
+// short castling gives check
+5k2/8/8/8/8/8/8/4K2R w K - 0 1 ;D6 661072
+4k2r/8/8/8/8/8/8/5K2 b k - 0 1 ;D6 661072
+// long castling gives check
+3k4/8/8/8/8/8/8/R3K3 w Q - 0 1 ;D6 803711
+r3k3/8/8/8/8/8/8/3K4 b q - 0 1 ;D6 803711
+// castling (including losing cr due to rook capture)
+r3k2r/1b4bq/8/8/8/8/7B/R3K2R w KQkq - 0 1 ;D4 1274206
+r3k2r/7b/8/8/8/8/1B4BQ/R3K2R b KQkq - 0 1 ;D4 1274206
+// castling prevented
+r3k2r/8/3Q4/8/8/5q2/8/R3K2R b KQkq - 0 1 ;D4 1720476
+r3k2r/8/5Q2/8/8/3q4/8/R3K2R w KQkq - 0 1 ;D4 1720476
+// promote out of check
+2K2r2/4P3/8/8/8/8/8/3k4 w - - 0 1 ;D6 3821001
+3K4/8/8/8/8/8/4p3/2k2R2 b - - 0 1 ;D6 3821001
+// discovered check
+8/8/1P2K3/8/2n5/1q6/8/5k2 b - - 0 1 ;D5 1004658
+5K2/8/1Q6/2N5/8/1p2k3/8/8 w - - 0 1 ;D5 1004658
+// promote to give check
+4k3/1P6/8/8/8/8/K7/8 w - - 0 1 ;D6 217342
+8/k7/8/8/8/8/1p6/4K3 b - - 0 1 ;D6 217342
+// underpromote to check
+8/P1k5/K7/8/8/8/8/8 w - - 0 1 ;D6 92683
+8/8/8/8/8/k7/p1K5/8 b - - 0 1 ;D6 92683
+// self stalemate
+K1k5/8/P7/8/8/8/8/8 w - - 0 1 ;D6 2217
+8/8/8/8/8/p7/8/k1K5 b - - 0 1 ;D6 2217
+// stalemate/checkmate
+8/k1P5/8/1K6/8/8/8/8 w - - 0 1 ;D7 567584
+8/8/8/8/1k6/8/K1p5/8 b - - 0 1 ;D7 567584
+// double check
+8/8/2k5/5q2/5n2/8/5K2/8 b - - 0 1 ;D4 23527
+8/5k2/8/5N2/5Q2/2K5/8/8 w - - 0 1 ;D4 23527
+
+/////
+// found
+
+// french capture the pawn attacking your king 
+8/8/8/1Ppp3r/1K3p1k/8/4P1P1/1R6 w - c6 0 3 ;D5 398903
+// french pin but you end up still blocking so its fine 
+5K2/8/8/4Pp2/8/8/8/k4r2 w - f6 0 29 ;D5 65218
+// french pin by rook but theres another friendly pawn between so its fine
+8/8/8/KPpP3r/1R3p1k/8/6P1/8 w - c6 0 3 ;D5 577002
+/// from fish game 
+r1bqkb1r/1pp2p1p/p1n5/4pP2/4p3/1P6/P1PPKPPP/R1B2BNR w kq - 0 1 ;D5 16062976
+r1bqk2r/1pp2ppp/p1nbpn2/8/P7/1P1PpP1N/1BP1P1PP/RN2KB1R w KQkq - 0 9 ;D5 23091349
+5k2/6pp/8/3B1p2/P2PrR2/2PK4/7P/RN6 w - - 1 45 ;D5 4668313
+// french while in check
+2krq2r/1pp3Qp/p7/bb2Pp1K/8/P1Pn1PPB/3P3P/RN4NR w - f6 0 29 ;D5 3060677
+// french move capturing but my pawn is pinned
+r1b5/4q1pk/2pr1p1p/3p3P/1P2pP2/p1PBP3/P2N2P1/3RK1NR b - f3 0 33 ;D5 31664599
