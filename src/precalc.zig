@@ -10,6 +10,7 @@ pub fn initTables(alloc: std.mem.Allocator) !void {
     tables = .{
         .rooks = try makeSliderAttackTable(alloc, possibleRookTargets),
         .bishops = try makeSliderAttackTable(alloc, possibleBishopTargets),
+        .kings = makeKingAttackTable(), 
     };
 }
 
@@ -19,6 +20,7 @@ const Tables = struct {
     knights: [64] u64 = makeKnightAttackTable(), 
     bishopMasks: [64] u64 = makeSliderUnblockedAttackMasks(possibleBishopTargets),  // TODO: do this with bit ops instead of a lookup? 
     bishops: AttackTable,
+    kings: [64] u64
 };
 
 // The tables are built at setup and will never need to reallocate later. 
@@ -38,7 +40,7 @@ fn makeSliderAttackTable(alloc: std.mem.Allocator, comptime possibleTargets: fn 
         }
         totalSize += result[i].capacity() * @sizeOf(OneTable.KV) / 1024;
     }
-    if (isWasm) print("Rook attack table size: {} KB.\n", .{ totalSize });
+    if (isWasm) print("Slider attack table size: {} KB.\n", .{ totalSize });
     return result;
 }
 
@@ -59,6 +61,45 @@ fn makeSliderUnblockedAttackMasks(comptime possibleTargets: fn (u64, u64, compti
     }
     return result;
 }
+
+fn makeKingAttackTable() [64] u64 {
+    @setEvalBranchQuota(10000);
+    var result: [64] u64 = undefined;
+    for (0..64) |i| {
+        result[i] = possibleKingTargets(i);
+    }
+    return result;
+}
+
+pub fn ff(r: usize, f: usize) u64 {
+    return @as(u64, 1) << (@as(u6, @intCast(r * 8)) + @as(u6, @intCast(f)));
+}
+
+// TODO: can i do this with bit ops?
+fn possibleKingTargets(i: usize) u64 {
+    var result: u64 = 0;
+    const rank = i / 8;
+    const file = i % 8;
+
+    // forward
+    if (file < 7) {
+        result |= ff(rank, file + 1);
+        if (rank < 7) result |= ff(rank + 1, file + 1);
+        if (rank > 0) result |= ff(rank - 1, file + 1);
+    }
+    // back
+    if (file > 0) {
+        result |= ff(rank, file - 1);
+        if (rank < 7) result |= ff(rank + 1, file - 1);
+        if (rank > 0 ) result |= ff(rank - 1, file - 1);
+    }
+    // horizontal
+    if (rank < 7) result |= ff(rank + 1, file);
+    if (rank > 0) result |= ff(rank - 1, file);
+
+    return result;
+}
+
 
 // TODO: make sure it doesn't help to mark all the next functions as inline. 
 // TODO: use the same sort of generators for my move gen instead of collecting all moves in a list. 
@@ -102,7 +143,6 @@ const VisitEachSetBit = struct {
 // }
 const VisitBitPermutations = struct {
     // This needs to live in the caller's stack space. 
-    // If I try to include it in the struct
     others: [65] Inner = undefined,
     ready: bool = false,
     expected: u64,
