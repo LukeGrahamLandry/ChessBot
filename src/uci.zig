@@ -388,7 +388,7 @@ const Engine = struct {
     resultQueue: std.ArrayList(UciResult), // TODO: super slow! should be VecDeque!
 
     pub fn init(alloc: std.mem.Allocator) !Engine {
-        return .{ .board = Board.initial(), .resultQueue = std.ArrayList(UciResult).init(alloc) };
+        return .{ .board = try Board.initial(), .resultQueue = std.ArrayList(UciResult).init(alloc) };
     }
 
     pub fn deinit(self: *Engine) !void {
@@ -401,7 +401,7 @@ const Engine = struct {
             .Init => .InitOk,
             .AreYouReady => .ReadyOk,
             .NewGame | .SetPositionInitial => {
-                self.board = Board.initial();
+                self.board = try Board.initial();
                 return;
             },
             .Go => {

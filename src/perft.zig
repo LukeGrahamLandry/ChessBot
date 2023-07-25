@@ -36,7 +36,7 @@ pub fn main() !void {
     // For best parallelism, don't put the longest tasks at the end. You don't want time at the end where only one therad is working. 
     std.sort.insertion(Perfts, perfts, {}, lessThanFn);
 
-    const cores = 4;
+    const cores = 1;
     var taskIndex = Shared.init(0);
     var workers = try forever.alloc(Worker, cores);
     for (0..cores) |i| {

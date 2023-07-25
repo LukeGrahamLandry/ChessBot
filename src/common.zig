@@ -3,7 +3,7 @@ pub const isWasm = @import("builtin").target.isWasm();
 pub const isTest = @import("builtin").is_test;
 
 pub const print = if (isWasm) @import("web.zig").consolePrint else std.debug.print;
-pub const panic = if (isWasm) @import("web.zig").alertPrint else std.debug.panic;
+pub const panic = if (isWasm) @import("web.zig").webPanic else std.debug.panic;
 pub const assert = std.debug.assert;
 
 const ListPool = @import("movegen.zig").ListPool;
@@ -21,9 +21,9 @@ pub fn setup(memoSizeMB: usize) void {
         ptr.* = rand.next();
     }
 
-    lists = ListPool.init(general_i.allocator()) catch @panic("Failed to init ListPool");
-
-    @import("search.zig").initMemoTable(memoSizeMB) catch @panic("OOM");
+    lists = ListPool.init(general_i.allocator()) catch panic("OOM list pool", .{});
+    @import("search.zig").initMemoTable(memoSizeMB) catch panic("OOM memo", .{});
+    @import("precalc.zig").initTables(general_i.allocator()) catch panic("OOM attack tables", .{});
 }
 
 pub fn nanoTimestamp() i128 {

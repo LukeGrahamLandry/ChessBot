@@ -2,6 +2,7 @@ const std = @import("std");
 const Board = @import("board.zig").Board;
 const printBitBoard = @import("movegen.zig").printBitBoard;
 const print = @import("common.zig").print;
+const hashmap = std.hash_map;
 
 pub fn main() !void {
     const t = @import("common.zig").Timer.start();
@@ -10,19 +11,33 @@ pub fn main() !void {
     print("Finished in {}ms\n", .{ t.get() });
 }
 
-const OneTable = std.hash_map.AutoHashMap(u64, u64);
+
+pub var tables: Tables = undefined;
+
+pub fn initTables(alloc: std.mem.Allocator) !void {
+    tables = .{
+        .rookAttacks = try makeRookAttackTable(alloc),
+    };
+}
+
+const Tables = struct {
+    rookAttacks: AttackTable,
+};
+
+// The tables are built at setup and will never need to reallocate later. 
+const OneTable = std.hash_map.HashMapUnmanaged(u64, u64, std.hash_map.AutoContext(u64), 10);
 pub const AttackTable = [64] OneTable;
 
 pub fn makeRookAttackTable(alloc: std.mem.Allocator) !AttackTable {
     var result: AttackTable = undefined;
     var totalSize: usize = 0;
     for (0..64) |i| {
-        result[i] = OneTable.init(alloc);
+        result[i] = .{};
         const baseRookTargets = possibleRookTargets(i, 0, true);
         var blockerConfigurations = VisitBitPermutations.of(baseRookTargets);
         while (blockerConfigurations.next()) |flag| {
             const targets = possibleRookTargets(i, flag, false);
-            try result[i].put(flag, targets);
+            try result[i].put(alloc, flag, targets);
         }
         const size = result[i].capacity() * @sizeOf(OneTable.KV) / 1024;
         print("{}. Capacity={}. Assumed Size={} KB\n", .{ i, result[i].capacity(), size });
@@ -33,7 +48,7 @@ pub fn makeRookAttackTable(alloc: std.mem.Allocator) !AttackTable {
 }
 
 
-// TODO: dont do this at comptime? min bin size goal
+// TODO: do this with bit ops? 
 pub const ROOK_MASKS = makeRookUnblockedAttackMasks();
 
 pub fn makeRookUnblockedAttackMasks() [64] u64 {

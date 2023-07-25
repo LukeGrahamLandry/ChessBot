@@ -87,7 +87,7 @@ test "perft 3" {
 }
 
 test "write fen" {
-    var b = Board.initial();
+    var b = try Board.initial();
     const fen = try b.toFEN(arena.allocator());
     try std.testing.expect(std.mem.eql(u8, fen, @import("board.zig").INIT_FEN));
 }

@@ -241,10 +241,9 @@ pub const Board = struct {
         return self.squares[rank * 8 + file];
     }
 
-    pub fn initial() Board {
-        @setEvalBranchQuota(5000);
-        // This is kinda cool. It's a compile error if this fails to parse, so the function doesn't return an error union.
-        return comptime try fromFEN(INIT_FEN);
+    // TODO: returning an error because can't be comptime because needs move lookup table. 
+    pub fn initial() !Board {
+        return try fromFEN(INIT_FEN);
     }
 
     pub fn emptyAt(self: *const Board, file: usize, rank: usize) bool {

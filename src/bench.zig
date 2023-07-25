@@ -35,7 +35,7 @@ fn replayGame(comptime opts: search.StratOpts) !std.ArrayList(board.Move) {
     search.resetMemoTable();
     var moves = std.mem.splitScalar(u8, gameStr, ' ');
     const t = Timer.start();
-    var game = board.Board.initial();
+    var game = try board.Board.initial();
     var bestMoves = std.ArrayList(board.Move).init(alloc);
     var undoStack = std.ArrayList(board.OldMove).init(alloc);
     var m: usize = 0;

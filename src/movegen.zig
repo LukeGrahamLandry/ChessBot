@@ -32,7 +32,7 @@ pub fn collectOnePieceMoves(board: *const Board, i: usize, file: usize, rank: us
 
 // Caller owns the returned slice.
 pub fn genPossibleMoves(out: anytype, board: *const Board, me: Colour) !void {
-    const mySquares = board.peicePositions.getFlag(me);
+    var mySquares = board.peicePositions.getFlag(me);
     // TODO: should really be asserting this. problematic becasue the gen target squares uses these methods as part of creating the check info
     // assert(me == board.nextPlayer);
 
@@ -42,19 +42,14 @@ pub fn genPossibleMoves(out: anytype, board: *const Board, me: Colour) !void {
         return;
     }
 
-    var flag: u64 = 1;
-    for (0..64) |i| {
-        defer flag <<= 1; // shift the bit over at the end of each iteration.
-        if ((mySquares & flag) == 0) {
-            assert(board.squares[i].empty() or board.squares[i].colour != me);
-            continue;
-        }
-        assert(!board.squares[i].empty());
-        assert(board.squares[i].colour == me);
+    while (mySquares != 0) {
+        const offset = @ctz(mySquares);
+        var flag = @as(u64, 1) << @intCast(offset);
+        mySquares = mySquares ^ flag;
 
-        const file = i % 8;
-        const rank = i / 8;
-        try genOnePieceMoves(out, board, i, file, rank);
+        const file = offset % 8;
+        const rank = offset / 8;
+        try genOnePieceMoves(out, board, offset, file, rank);
     }
 }
 
@@ -69,81 +64,53 @@ pub fn genOnePieceMoves(out: anytype, board: *const Board, i: usize, file: usize
         .Pawn => try pawnMove(out, board, i, file, rank, piece),
         .Bishop => try bishopSlide(out, board, i, file, rank, piece),
         .Knight => try knightMove(out, board, i, file, rank, piece),
-        .Rook => try rookSlide(out, board, i, file, rank, piece),
+        .Rook => try rookSlide(out, board, i, piece),
         .King => try kingMove(out, board, i, file, rank, piece),
         .Queen => {
-            try rookSlide(out, board, i, file, rank, piece);
+            try rookSlide(out, board, i, piece);
             try bishopSlide(out, board, i, file, rank, piece);
         },
         .Empty => unreachable,
     }
 }
 
-fn rookSlideOld(out: anytype, board: *const Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
-    // If pinned by a bishop, you can't move straight. 
-    const startFlag = @as(u64, 1) << @intCast(i);
-    if (out.filter != .CurrentlyCalcChecks) {
-        if ((board.checks.pinsByBishop & startFlag) != 0) return;
+const tables = &@import("precalc.zig").tables;
+fn rookSlide(out: anytype, board: *const Board, i: usize, piece: Piece) !void {
+    // When calculating danger squares the king can't move to,
+    // - defended pieces count as targetable
+    // - the king doesn't count as a blocker
+    // - you don't care about pins 
+    // This being simpler is a win from using the lookup to generate all targets at once. 
+    // TODO: this should be a seperate function.
+    if (comptime (out.filter == .CurrentlyCalcChecks)) {
+        var pieces = board.peicePositions.black | board.peicePositions.white;
+        const kingFlag = @as(u64, 1) << @intCast(if (piece.colour == .Black) board.whiteKingIndex else board.blackKingIndex);
+        pieces &= ~kingFlag;
+        const mask = pieces & precalc.ROOK_MASKS[i];
+        const targets = tables.rookAttacks[i].get(mask).?;
+        out.bb |= targets;
+        return;
     }
 
-    const startPinned = (board.checks.pinsByRook & startFlag) != 0;
-    inline for (directions[0..4]) |offset| {
-        var checkFile = @as(isize, @intCast(file));
-        var checkRank = @as(isize, @intCast(rank));
-        while (true) {
-            checkFile += offset[0];
-            checkRank += offset[1];
-            if (checkFile > 7 or checkRank > 7 or checkFile < 0 or checkRank < 0) break;
-            // TODO: can i check this once by direction?
-            // If pinned by a rook, you need to stay on the pin lines
-            if (out.filter != .CurrentlyCalcChecks) {
-                const toFlag = @as(u64, 1) << @intCast(checkRank*8 + checkFile);
-                const endPinned = (board.checks.pinsByRook & toFlag) != 0;
-                if (startPinned and !endPinned) break;
-                if ((board.checks.blockSingleCheck & toFlag) == 0) {
-                    if (board.emptyAt(@intCast(checkFile), @intCast(checkRank))) {
-                        continue;
-                    } else {
-                        break;
-                    }
-                }
-            }
-            // For calculating where the king isn't allowed to move, you need to keep going after hitting the king. 
-            const skip = out.filter == .CurrentlyCalcChecks and board.get(@intCast(checkFile), @intCast(checkRank)).is(piece.colour.other(), .King);
-            if (try out.trySlide(board, i, @intCast(checkFile), @intCast(checkRank), piece) and !skip) break;
-        }
-    }
-}
-
-
-pub fn rookAttackLookup(table: *const precalc.AttackTable, board: *const Board, rookIndex: u64) u64 {
-    const pieces = board.peicePositions.black | board.peicePositions.white;
-    const mask = pieces & precalc.ROOK_MASKS[rookIndex];
-    const rawMoves = table[rookIndex].get(mask).?;
-    const myPieces = board.peicePositions.getFlag(board.squares[rookIndex].colour);
-    return rawMoves & (~myPieces);
-}
-
-fn rookSlide(out: anytype, board: *const Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
-    if (out.filter == .CurrentlyCalcChecks) return rookSlideOld(out, board, i, file, rank, piece);
-    
     // If pinned by a bishop, you can't move straight. 
     const startFlag = @as(u64, 1) << @intCast(i);
     if ((board.checks.pinsByBishop & startFlag) != 0) return;
+    
+    var pieces = board.peicePositions.black | board.peicePositions.white;
 
-    if (rookAttackTable == null) rookAttackTable = try precalc.makeRookAttackTable(std.heap.c_allocator);
-    var targets = rookAttackLookup(&rookAttackTable.?, board, @intCast(i));
-    targets &= board.checks.blockSingleCheck;
+    const mask = pieces & precalc.ROOK_MASKS[i];
+    const myPieces = board.peicePositions.getFlag(board.squares[i].colour);
+    var targets = tables.rookAttacks[i].get(mask).? & (~myPieces) & board.checks.blockSingleCheck;
+    
     if ((board.checks.pinsByRook & startFlag) != 0) {
         targets &= board.checks.pinsByRook;
-    }
+    }   
 
     while (targets != 0) {
         const offset = @ctz(targets);
         var flag = @as(u64, 1) << @intCast(offset);
         targets = targets ^ flag;
-
-        _ = try out.trySlide(board, i, @intCast(offset % 8), @intCast(offset / 8), piece);
+        _ = try out.slideNew(board, @intCast(i), @intCast(offset), flag, piece.colour);
     }
 }
 
@@ -152,7 +119,6 @@ fn pawnMove(out: anytype, board: *const Board, i: usize, file: usize, rank: usiz
     const rookPinned = (board.checks.pinsByRook & startFlag) != 0 and out.filter != .CurrentlyCalcChecks;
     const bishopPinned = (board.checks.pinsByBishop & startFlag) != 0 and out.filter != .CurrentlyCalcChecks;
 
-    // TODO: rook pin
     const targetRank = switch (piece.colour) {
         // Asserts can't have a pawn at the end in real games because it would have promoted.
         .White => w: {
@@ -171,14 +137,12 @@ fn pawnMove(out: anytype, board: *const Board, i: usize, file: usize, rank: usiz
         },
     };
 
-    // TODO: rook pin
     if (out.filter == .Any and board.emptyAt(file, targetRank)) { // forward
         try out.maybePromote(board, i, file, targetRank, piece.colour);
     }
 
     if (rookPinned) return;
     
-    // TODO: bishop pin
     if (file < 7) { // right
         try out.pawnAttack(board, i, file + 1, targetRank, piece.colour);
         // TODO: are these right?
@@ -264,7 +228,9 @@ fn bishopSlide(out: anytype, board: *const Board, i: usize, file: usize, rank: u
 
 fn trySlideKing(out: anytype, board: *const Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
     const endFlag = @as(u64, 1) << @intCast(rank*8 + file);
-    if (out.filter != .CurrentlyCalcChecks and (board.checks.targetedSquares & endFlag) != 0) return;
+    if (out.filter != .CurrentlyCalcChecks) {
+        if ((board.checks.targetedSquares & endFlag) != 0) return;
+    }
     _ = try out.trySlide(board, i, file, rank, piece);
 }
 
@@ -384,17 +350,15 @@ const CollectMoves = struct {
         return trySlide2(self, board, @intCast(i), @intCast(checkRank*8 + checkFile), piece);
     }
 
+    // TODO: get rid of this when I switch bishops to lookup. 
     fn trySlide2(self: CollectMoves, board: *const Board, fromIndex: u6, toIndexx: u6, piece: Piece) !bool {
         const anyPieces = board.peicePositions.white | board.peicePositions.black;
         const toFlag = @as(u64, 1) << toIndexx;
         // TODO: king should call other method so no branch
-        if (self.filter != .CurrentlyCalcChecks) {
-            if (piece.kind != .King and (board.checks.blockSingleCheck & toFlag) == 0) {
-                return (anyPieces & toFlag) != 0;
-            }
-            if (piece.kind == .King and (board.checks.targetedSquares & toFlag) != 0) return (anyPieces & toFlag) != 0;
+        if (piece.kind != .King and (board.checks.blockSingleCheck & toFlag) == 0) {
+            return (anyPieces & toFlag) != 0;
         }
-       
+    
         var mine: u64 = undefined;
         var other: u64 = undefined;
         switch (piece.colour) {
@@ -434,6 +398,34 @@ const CollectMoves = struct {
         // moving to empty square
         try self.moves.append(ii(fromIndex, toIndexx, false));
         return false;
+    }
+
+    // The new lookup move gen doesn't need to be told when to stop sliders so this method can be simpler. 
+    // This does not do any validation. The piece moving must not be a king and the target square must be legal. 
+    // All this does is make the move and do the ordering trick of prefering captures. 
+    fn slideNew(self: CollectMoves, board: *const Board, fromIndex: u6, toIndexx: u6, toFlag: u64, colour: Colour) !void {
+        const enemyPieces = if (colour == .White) board.peicePositions.black else board.peicePositions.white;
+
+        if ((toFlag & enemyPieces) == 0) { // moving to empty square
+            try self.moves.append(ii(fromIndex, toIndexx, false));
+        } else { // taking an enemy piece. do move ordering for better prune. 
+            var toPush = ii(fromIndex, toIndexx, true);
+
+            // Have this be a comptime param that gets passed down so I can easily benchmark.
+            // This is a capture, we like that, put it first. Capturing more valuable pieces is also good.
+            for (self.moves.items, 0..) |move, index| {
+                const holding = board.squares[toPush.to].kind.material();
+                const lookingAt = board.squares[move.to].kind.material();
+                if (holding == 0) break;
+                if (holding > lookingAt) {
+                    self.moves.items[index] = toPush;
+                    toPush = move;
+                }
+            }
+
+            try self.moves.append(toPush);
+            return;
+        }
     }
 
     pub fn pawnForwardTwo(self: CollectMoves, board: *const Board, fromIndex: usize, toFile: usize, toRank: usize) !void {

@@ -76,7 +76,7 @@ pub fn playOneGame(fish: *Stockfish, gameIndex: usize, gamesTotal: u32) !GameOve
     var alloc = general.allocator();
     var moveHistory = std.ArrayList([5]u8).init(alloc);
     var gt = Timer.start();
-    var board = Board.initial();
+    var board = try Board.initial();
     if (shouldPrint) board.debugPrint();
 
     for (0..config.maxMoves) |i| {

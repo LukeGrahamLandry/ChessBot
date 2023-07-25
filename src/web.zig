@@ -45,6 +45,11 @@ pub fn alertPrint(comptime fmt: []const u8, args: anytype) void {
     jsAlert(str.ptr, str.len);
 }
 
+pub fn webPanic(comptime fmt: []const u8, args: anytype) noreturn {
+    alertPrint(fmt, args);
+    std.debug.panic(fmt, args);
+}
+
 export fn alloc(len: u32) ?[*]u8 {
     const mem = walloc.alloc(u8, len) catch |err| {
         logErr(err, "alloc");
@@ -64,7 +69,7 @@ export fn createBoard() ?*Board {
         logErr(err, "createBoard");
         return null;
     };
-    board.* = Board.initial();
+    board.* = Board.initial() catch webPanic("createBoard parse init fen failed", .{});
     return board;
 }
 
@@ -77,7 +82,7 @@ export fn setup() void {
 }
 
 export fn restartGame(board: *Board) void {
-    board.* = Board.initial();
+    board.* = Board.initial() catch webPanic("createBoard parse init fen failed", .{});
 }
 
 comptime { assert(@sizeOf(Piece) == @sizeOf(u8)); }
