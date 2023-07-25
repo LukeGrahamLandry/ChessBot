@@ -10,6 +10,14 @@ sample <pid> -f zig-out/temp_profile_info.sample
 filtercalltree zig-out/temp_profile_info.sample
 ```
 
+or  
+
+```
+zig build-exe src/bench.zig -O ReleaseFast -lprofiler -L/opt/homebrew/Cellar/gperftools/2.10/lib
+CPUPROFILE=$PWD/prof.out DYLD_LIBRARY_PATH=/opt/homebrew/Cellar/gperftools/2.10/lib ./bench
+pprof bench prof.out
+```
+
 ## Ideas
 
 - Know about check, mate, castling, en-passant, and draws!

@@ -12,6 +12,9 @@ const Kind = @import("board.zig").Kind;
 const StratOpts = @import("search.zig").StratOpts;
 const Move = @import("board.zig").Move;
 
+const precalc = @import("precalc.zig");
+var rookAttackTable: ?precalc.AttackTable = null;
+
 pub fn possibleMoves(board: *const Board, me: Colour, lists: *ListPool) !ListPool.List {
     // assert(board.nextPlayer == me); // sanity. TODO: don't bother passing colour since the board knows?
     var moves = try lists.get();
@@ -76,7 +79,7 @@ pub fn genOnePieceMoves(out: anytype, board: *const Board, i: usize, file: usize
     }
 }
 
-fn rookSlide(out: anytype, board: *const Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
+fn rookSlideOld(out: anytype, board: *const Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
     // If pinned by a bishop, you can't move straight. 
     const startFlag = @as(u64, 1) << @intCast(i);
     if (out.filter != .CurrentlyCalcChecks) {
@@ -109,6 +112,38 @@ fn rookSlide(out: anytype, board: *const Board, i: usize, file: usize, rank: usi
             const skip = out.filter == .CurrentlyCalcChecks and board.get(@intCast(checkFile), @intCast(checkRank)).is(piece.colour.other(), .King);
             if (try out.trySlide(board, i, @intCast(checkFile), @intCast(checkRank), piece) and !skip) break;
         }
+    }
+}
+
+
+pub fn rookAttackLookup(table: *const precalc.AttackTable, board: *const Board, rookIndex: u64) u64 {
+    const pieces = board.peicePositions.black | board.peicePositions.white;
+    const mask = pieces & precalc.ROOK_MASKS[rookIndex];
+    const rawMoves = table[rookIndex].get(mask).?;
+    const myPieces = board.peicePositions.getFlag(board.squares[rookIndex].colour);
+    return rawMoves & (~myPieces);
+}
+
+fn rookSlide(out: anytype, board: *const Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
+    if (out.filter == .CurrentlyCalcChecks) return rookSlideOld(out, board, i, file, rank, piece);
+    
+    // If pinned by a bishop, you can't move straight. 
+    const startFlag = @as(u64, 1) << @intCast(i);
+    if ((board.checks.pinsByBishop & startFlag) != 0) return;
+
+    if (rookAttackTable == null) rookAttackTable = try precalc.makeRookAttackTable(std.heap.c_allocator);
+    var targets = rookAttackLookup(&rookAttackTable.?, board, @intCast(i));
+    targets &= board.checks.blockSingleCheck;
+    if ((board.checks.pinsByRook & startFlag) != 0) {
+        targets &= board.checks.pinsByRook;
+    }
+
+    while (targets != 0) {
+        const offset = @ctz(targets);
+        var flag = @as(u64, 1) << @intCast(offset);
+        targets = targets ^ flag;
+
+        _ = try out.trySlide(board, i, @intCast(offset % 8), @intCast(offset / 8), piece);
     }
 }
 

@@ -165,3 +165,7 @@ test "no iter makes best move" {
     setup(defaultMemoMB);
     try doesStratMakeBestMove(.{ .doIterative = false });
 }
+
+test "precalc" {
+    _ = @import("precalc.zig");
+}
