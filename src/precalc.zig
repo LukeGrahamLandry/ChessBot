@@ -10,19 +10,20 @@ pub fn initTables(alloc: std.mem.Allocator) !void {
     tables = .{
         .rooks = try makeSliderAttackTable(alloc, possibleRookTargets),
         .bishops = try makeSliderAttackTable(alloc, possibleBishopTargets),
-        .kings = makeKingAttackTable(), 
     };
 }
 
 const Tables = struct {
     rooks: AttackTable,
-    rookMasks: [64] u64 = makeSliderUnblockedAttackMasks(possibleRookTargets),  // TODO: do this with bit ops instead of a lookup? 
-    knights: [64] u64 = makeKnightAttackTable(), 
-    bishopMasks: [64] u64 = makeSliderUnblockedAttackMasks(possibleBishopTargets),  // TODO: do this with bit ops instead of a lookup? 
     bishops: AttackTable,
-    kings: [64] u64
+    // These are done at comptime because they dont need to allocate and the data is smaller than the code to generate it. 
+    rookMasks: [64] u64 = makeSliderUnblockedAttackMasks(possibleRookTargets),
+    knights: [64] u64 = makeKnightAttackTable(), 
+    bishopMasks: [64] u64 = makeSliderUnblockedAttackMasks(possibleBishopTargets),
+    kings: [64] u64 = makeKingAttackTable(), 
 };
 
+// TODO: can i pick a good java prime to multiply by that gives me a super cheap hash function?
 // The tables are built at setup and will never need to reallocate later. 
 const OneTable = std.hash_map.HashMapUnmanaged(u64, u64, std.hash_map.AutoContext(u64), 10);
 pub const AttackTable = [64] OneTable;
@@ -39,6 +40,7 @@ fn makeSliderAttackTable(alloc: std.mem.Allocator, comptime possibleTargets: fn 
             try result[i].put(alloc, flag, targets);
         }
         totalSize += result[i].capacity() * @sizeOf(OneTable.KV) / 1024;
+        // print("{}. {}/{} full.\n", .{ i, result[i].count(), result[i].capacity()});
     }
     if (isWasm) print("Slider attack table size: {} KB.\n", .{ totalSize });
     return result;

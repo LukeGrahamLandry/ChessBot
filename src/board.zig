@@ -141,6 +141,7 @@ pub const OldMove = struct {
     oldHalfMoveDraw: u32 = 0,
     debugZoidberg: u64,
     oldChecks: ChecksInfo, 
+    pastStartIndex: usize,
 };
 
 const CastlingRights = packed struct(u8) {
@@ -217,8 +218,12 @@ pub const Board = struct {
     lastMove: ?Move = null,  
     checks: ChecksInfo = .{}, 
 
-    // TODO: For draw by repetition. 
-    // pastBoardHashes: std.BoundedArray(u64, 300) = std.BoundedArray(u64, 300).init(0) catch @panic("OOM?"),
+    // For draw by repetition. 
+    // If I were reusing the list it would only need to be 50 long (becuase draw anyway if no captures or pawn moves),
+    // but to allow undo, I'm just keeping the whole history and moving the start index forward. 
+    pastBoardHashes: [512] u64 = undefined,
+    pastStartIndex: usize = 0,
+    pastEndIndex: usize = 1,
 
     pub fn blank() Board {
         return .{};
@@ -271,7 +276,7 @@ pub const Board = struct {
     /// This assumes that <move> is legal.
     pub fn playNoUpdateChecks(self: *Board, move: Move) OldMove {
         assert(move.from != move.to);
-        const thisMove: OldMove = .{ .move = move, .taken = self.squares[move.to], .original = self.squares[move.from], .old_castling = self.castling, .debugPeicePositions = self.peicePositions, .debugSimpleEval = self.simpleEval, .frenchMove = self.frenchMove, .oldHalfMoveDraw = self.halfMoveDraw, .debugZoidberg = self.zoidberg, .lastMove=self.lastMove, .oldChecks=self.checks };
+        const thisMove: OldMove = .{ .move = move, .taken = self.squares[move.to], .original = self.squares[move.from], .old_castling = self.castling, .debugPeicePositions = self.peicePositions, .debugSimpleEval = self.simpleEval, .frenchMove = self.frenchMove, .oldHalfMoveDraw = self.halfMoveDraw, .debugZoidberg = self.zoidberg, .lastMove=self.lastMove, .oldChecks=self.checks, .pastStartIndex=self.pastStartIndex };
         assert(thisMove.original.colour == self.nextPlayer);
         const colour = thisMove.original.colour;
         self.simpleEval -= thisMove.taken.eval();
@@ -284,7 +289,11 @@ pub const Board = struct {
 
         if (colour == .Black) self.fullMoves += 1;
         self.halfMoveDraw += 1;
-        if (move.isCapture) self.halfMoveDraw = 0;
+        if (move.isCapture) {
+            self.halfMoveDraw = 0;
+            // captures irreversibly change board state
+            self.pastStartIndex = self.pastEndIndex;
+        }
         switch (thisMove.original.kind) {
             .King => {
                 switch (colour) {
@@ -294,6 +303,8 @@ pub const Board = struct {
             },
             .Pawn => {
                 self.halfMoveDraw = 0;
+                // pawns can't go backwards so irreversibly change board state
+                self.pastStartIndex = self.pastEndIndex;
             },
             else => {},
         }
@@ -402,7 +413,10 @@ pub const Board = struct {
         self.nextPlayer = self.nextPlayer.other();
         // if (slowTrackAllMoves) self.line.append(thisMove) catch @panic("Overflow line.");
         self.lastMove = move;
-        // self.pastBoardHashes.append(self.zoidberg) catch {}; // TODO
+        
+        // Unsafe! This assumes capacity. 
+        self.pastBoardHashes[self.pastEndIndex] = self.zoidberg;
+        self.pastEndIndex += 1;
         return thisMove;
     }
 
@@ -425,6 +439,8 @@ pub const Board = struct {
         self.halfMoveDraw = move.oldHalfMoveDraw;
         self.simpleEval -= move.move.bonus * colour.dir();
         self.frenchMove = move.frenchMove;
+        self.pastStartIndex = move.pastStartIndex;
+        self.pastEndIndex -= 1;
 
         self.zoidberg ^= getZoidberg(move.original, move.move.from);
         self.zoidberg ^= getZoidberg(move.original, move.move.to);
@@ -492,6 +508,7 @@ pub const Board = struct {
     pub fn fromFEN(fen: []const u8) error{InvalidFen}!Board {
         var b = try UCI.parseFen(fen);
         b.checks = getChecksInfo(&b, b.nextPlayer);
+        b.pastBoardHashes[0] = b.zoidberg;
         return b;
     }
 
@@ -541,6 +558,7 @@ pub const Board = struct {
     pub fn gameOverReason(game: *Board, lists: *ListPool) !GameOver {
         if (game.halfMoveDraw >= 100) return .FiftyMoveDraw;
         if (game.hasInsufficientMaterial()) return .MaterialDraw;
+        if (game.lastMoveWasRepetition()) return .RepetitionDraw;
         if (try game.nextPlayerHasLegalMoves(lists)) return .Continue;
         if (game.nextPlayerInCheck()) return if (game.nextPlayer == .White) .BlackWins else .WhiteWins;
         return .Stalemate;
@@ -552,6 +570,15 @@ pub const Board = struct {
         const moves = try movegen.possibleMoves(game, colour, lists);
         defer lists.release(moves);
         return moves.items.len > 0;
+    }
+
+    pub fn lastMoveWasRepetition(self: *Board) bool {
+        if (self.pastEndIndex - self.pastStartIndex < 3) return false;
+        var repetitions: usize = 1;
+        for (self.pastStartIndex..(self.pastEndIndex - 1)) |past| {
+            if (self.zoidberg == self.pastBoardHashes[past]) repetitions += 1;
+        }
+        return repetitions >= 3;
     }
 
     // https://www.chess.com/article/view/how-chess-games-can-end-8-ways-explained#insufficient-material
@@ -610,7 +637,7 @@ pub const Move = struct {
     }
 };
 
-pub const GameOver = enum { Continue, Stalemate, FiftyMoveDraw, MaterialDraw, WhiteWins, BlackWins };
+pub const GameOver = enum { Continue, Stalemate, FiftyMoveDraw, MaterialDraw, RepetitionDraw, WhiteWins, BlackWins };
 
 const isWasm = @import("builtin").target.isWasm();
 

@@ -22,15 +22,12 @@ Needs `brew install gperftools` and `brew install graphviz`.
 
 ## Ideas
 
-- Know about check, mate, castling, en-passant, and draws!
-- Support extra fen string info. 
 - Be able to run tests in parrallel. Write custom test runner that just uses seperate processes? 
 - Have the UI show lines for debugging
 - Give yourself extra depth only looking at captures because it thinks hanging pieces on move n+1 is fine. 
 - Opening book. Maybe order by board hash and binary search because normal hashmap wastes space to avoid collissions. Only bother with lookup in first x moves. 
 - Endgame book. ^
 - Partial heap sort for move ordering. Then I can have a more complex eval function? 
-- Use n-1 depth for move ordering of n search. Then you can cancel at anytime and use previous results. 
 - Run engine on another thread so it doesn't hang the UI and can be canceled when it goes to long. Put a flag somewhere that it checks to break out of the recursion. 
 
 ## Learning Zig 
@@ -46,6 +43,16 @@ Needs `brew install gperftools` and `brew install graphviz`.
 - Don't fully understand pointer alignment stuff. What's the incantation to allocate a []u32 -> cast to (4x longer) []u8 -> free it? 
 - Should try to get used to the auto-format. 
 - Is there an IDE that can actually report errors? VS code with Zig Language seems to get very confused. Completions for enums and struct initialization seem to just give things from all your types? 
+
+## Unsafe lists
+
+## Lookup tables of moves
+
+Instead of the many for loops, make a hashmap of which squares a rook (or bishop) can move to given its starting position and which squares have pieces blocking it. At first I disregared this idea because there'd be 2^64 aranegments of blocking pieces which would be way too much memory but you only care about the squares you can actually move to so you can mask out all but 14 for each starting position. You also don't care about the things on the very edge because they can't block you from anything. Got single threaded perft from 74 MNPS to 122 MNPS. And the thing I really like is that now 5% of the time is in wyhash.hash which seems like a more approachable problem than "hmmm, movegen slow because its making decisions". 
+
+Another thing I noticed while reworking over all the movegen, is I forgot to put captures at the front of the list for knights and kings so fixing that helped pruning and now replay game bench is 1.5x as fast as well. Makes perft a little slower but that's not what I care about. 
+
+I also wasn't using the popCount trick for iterating over your pieces on the board. 
 
 ## Running perft on a bunch of threads 
 

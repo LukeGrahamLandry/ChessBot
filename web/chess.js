@@ -12,7 +12,7 @@ const textDecoder = new TextDecoder();
 let mainCanvas = document.getElementById("board").getContext("2d");
 
 // TODO: show the right player turn instead of always white. 
-const enableBot = true;
+const enableBot = false;
 // const minMoveTimeMs = 500;  // When computer vs computer, if the engine is faster than this, it will wait before playing again. 
 
 // TODO: select which colour is human or computer. button to switch mid game for testing. ai vs ai mode. 
@@ -127,20 +127,24 @@ function handleCanvasClick(e) {
         const toIndex = frToIndex(file, rank);
 
         // TODO: make sure trying to move while the engine is thinking doesn't let you use the wrong colour. 
-        const result = Engine.playHumanMove(mainGame, fromIndex, toIndex);
-        switch (result) {
-            case ENGINE_OK:
-                clicked = null;
-                boardFenHistory.push(getFenFromEngine(mainGame, fenPtr, STR_BUFFER_SIZE));
-                renderBoard(mainGame, mainCanvas);
-                // TODO: only do this if other player is engine. 
-                setTimeout(tickGame, 25);  // Give it a chance to render.
-                break;
-            case ENGINE_ILLEGAL_MOVE:
-                console.log("Player tried illigal move.");
-                clicked = [file, rank];
-                renderBoard(mainGame, mainCanvas);;
-                break;
+        const result = Engine.playHumanMove(mainGame, fromIndex, toIndex, msgPtr, STR_BUFFER_SIZE);
+        if (result == ENGINE_OK) { 
+            clicked = null;
+            boardFenHistory.push(getFenFromEngine(mainGame, fenPtr, STR_BUFFER_SIZE));
+            renderBoard(mainGame, mainCanvas);
+            // TODO: only do this if other player is engine. 
+            setTimeout(tickGame, 25);  // Give it a chance to render.
+        } else if (result == ENGINE_ILLEGAL_MOVE) {
+            console.log("Player tried illigal move.");
+            clicked = [file, rank];
+            renderBoard(mainGame, mainCanvas);
+        } else if (result > 0) {  // Game over
+            gameOverMsg = getWasmString(msgPtr, result);
+            console.log(gameOverMsg);
+            boardFenHistory.push(getFenFromEngine(mainGame, fenPtr, STR_BUFFER_SIZE));
+            renderBoard(mainGame, mainCanvas);;
+        } else {
+            handleEngineError();
         }
     }
 }
@@ -325,7 +329,7 @@ let fenPtr;
 let msgPtr;
 function startChess() {
     document.getElementById("loading").style.display = "none";
-    if (Engine.protocolVersion() != 2) {
+    if (Engine.protocolVersion() != 3) {
         const msg = "Unrecognised engine protocol version (" + Engine.protocolVersion()  + "). Try force reloading the page and hope cloudflare doesn't cache everything!";
         alert(msg);
         document.getElementById("controls").innerText = msg;

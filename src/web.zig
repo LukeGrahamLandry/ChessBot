@@ -23,7 +23,7 @@ pub extern fn jsPerformaceNow() f64;
 
 // This lets js detect if something got cached and its using a version of the wasm blob with an API it won't understand.
 export fn protocolVersion() i32 {
-    return 2;
+    return 3;
 }
 
 const JsResult = enum(i32) {
@@ -90,7 +90,7 @@ export fn getBoardData(board: *Board) [*]u8 {
     return @ptrCast(&board.squares);
 }
 
-/// Returns 0 for continue or game over string length
+/// Returns result code or game over string length
 export fn playBotMove(board: *Board, msgPtr: [*] u8, maxLen: u32) i32 {
     const move = search.bestMove(.{}, board, maxDepth, maxTimeMs) catch |err| {
         switch (err) {
@@ -125,11 +125,8 @@ export fn getPossibleMovesBB(board: *Board, from: i32) u64 {
     const piece = board.squares[@intCast(from)];
     if (piece.empty()) return 0;
     var result: u64 = 0;
-    const file = @mod(from, 8);
-    const rank = @divFloor(from, 8);
-
     // TODO: check if in check and not moving king here because its done in genAllMoves
-    const allMoves = movegen.collectOnePieceMoves(board, @intCast(from), @intCast(file), @intCast(rank), theLists) catch |err| {
+    const allMoves = movegen.collectOnePieceMoves(board, @intCast(from), theLists) catch |err| {
         logErr(err, "getPossibleMoves");
         return 0;
     };
@@ -164,18 +161,20 @@ export fn getMaterialEval(board: *Board) i32 {
     return board.simpleEval;
 }
 
-/// Returns 0->continue, 1->error, 4->invalid move.
-export fn playHumanMove(board: *Board, fromIndex: u32, toIndex: u32) JsResult {
-    if (fromIndex >= 64 or toIndex >= 64) return .Error;
+/// Returns result code or game over string length
+export fn playHumanMove(board: *Board, fromIndex: u32, toIndex: u32, msgPtr: [*] u8, maxLen: u32) i32 {
+    if (fromIndex >= 64 or toIndex >= 64) return @intFromEnum(JsResult.Error);
 
     _ = @import("board.zig").inferPlayMove(board, fromIndex, toIndex, theLists) catch |err| {
         switch (err) {
-            error.IllegalMove => return .IllegalMove,
+            error.IllegalMove => return @intFromEnum(JsResult.IllegalMove),
             else => logErr(err, "playHumanMove"),
         }
-        return .Error;
+        return @intFromEnum(JsResult.Error);
     };
-    return .Ok;
+
+    const len = checkGameOver(board, msgPtr, maxLen);
+    return if (len > 0) len else @intFromEnum(JsResult.Ok);
 }
 
 fn logErr(err: anyerror, func: []const u8) void {

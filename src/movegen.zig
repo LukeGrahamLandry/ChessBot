@@ -14,17 +14,16 @@ const Move = @import("board.zig").Move;
 const tables = &@import("precalc.zig").tables;
 
 pub fn possibleMoves(board: *const Board, me: Colour, lists: *ListPool) !ListPool.List {
-    // assert(board.nextPlayer == me); // sanity. TODO: don't bother passing colour since the board knows?
     var moves = try lists.get();
     const out: CollectMoves = .{ .moves=&moves, .filter=.Any };
     try genPossibleMoves(out, board, me);
     return moves;
 }
 
-pub fn collectOnePieceMoves(board: *const Board, i: usize, file: usize, rank: usize, lists: *ListPool) !ListPool.List {
+pub fn collectOnePieceMoves(board: *const Board, i: usize, lists: *ListPool) !ListPool.List {
     var moves = try lists.get();
     const out: CollectMoves = .{ .moves=&moves, .filter=.Any };
-    try genOnePieceMoves(out, board, i, file, rank);
+    try genOnePieceMoves(out, board, i);
     return moves;
 }
 
@@ -45,6 +44,39 @@ pub fn genPossibleMoves(out: anytype, board: *const Board, me: Colour) !void {
         try genOnePieceMoves(out, board, offset);
     }
 }
+
+// Using something like this is temping because I spend a lot of time putting things in lists and often only look at the first.
+// But that's only cause pruning is working which relies partly on having all the moves and putting the best at the front. 
+pub const MoveIter = struct {
+    targets: u64,
+    board: *const Board,
+    lists: *ListPool,
+
+    pub fn of(board: *const Board, me: Colour, lists: *ListPool) @This() {
+        assert(me == board.nextPlayer);
+        if (!board.checks.doubleCheck) { 
+            return .{ .board=board, .targets=board.peicePositions.getFlag(me), .lists=lists};     
+        } else { // must move king. 
+            const kingIndex = if (me == .White) board.whiteKingIndex else board.blackKingIndex;
+            return .{ .board=board, .targets=@as(u64, 1) << @intCast(kingIndex), .lists=lists};
+        }
+    }
+
+    pub fn next(self: *@This()) !?ListPool.List {
+        if (self.targets != 0) {
+            const offset = @ctz(self.targets);
+            var flag = @as(u64, 1) << @intCast(offset);
+            self.targets = self.targets ^ flag;
+
+            var moves = try self.lists.get();
+            const out: CollectMoves = .{ .moves=&moves, .filter=.Any };
+            try genOnePieceMoves(out, self.board, offset);
+            return moves;
+        } else {
+            return null;
+        }
+    }
+};
 
 const MoveFilter = enum {
     Any,
@@ -651,6 +683,8 @@ pub fn getFrenchPins(game: *Board, defendingPlayer: Colour, frenchFile: u4, resu
     }
 }
 
+// TODO: barely used. just write the code.
+
 pub fn irf(fromIndex: usize, toFile: usize, toRank: usize, isCapture: bool) Move {
     // std.debug.assert(fromIndex < 64 and toFile < 8 and toRank < 8);
     return .{ .from = @intCast(fromIndex), .to = @intCast(toRank * 8 + toFile), .action = .none, .isCapture = isCapture };
@@ -682,33 +716,39 @@ pub fn printBitBoard(bb: u64) void {
 }
 
 pub const ListPool = AnyListPool(Move);
+const BE_EVIL = true;
+const ListType = if (BE_EVIL) UnsafeList else std.ArrayList;
 
 pub fn AnyListPool(comptime element: type) type {
     return struct {
-        lists: std.ArrayList(List),
+        lists: ListType(List),
         alloc: std.mem.Allocator,
-        count: usize = 0,
 
-        pub const List = std.ArrayList(element);
+        pub const List = ListType(element);
 
         pub fn init(alloc: std.mem.Allocator) !ListPool {
-            var self: ListPool = .{ .lists = std.ArrayList(List).init(alloc), .alloc=alloc };
-            for (0..10) |_| { // pre-allocate enough lists that we'll probably never need to make a new one. should be the expected depth number. 
-                try self.lists.append(try List.initCapacity(self.alloc, 128));
-                self.count += 1;
+            var self: ListPool = .{ .lists = try ListType(List).initCapacity(alloc, 128), .alloc=alloc };
+            for (0..128) |_| { // pre-allocate enough lists that we'll probably never need to make a new one. should be the expected depth number. 
+                // If all 16 of your pieces were somehow a queen in the middle of the board with no other pieces blocking
+                // (maybe they're magic 4th dimensional queens, idk), that's still only 448 moves. So 512 will never overflow. 
+                // I'm sure there's a smaller upper bound than that but also nobody cares. 
+                try self.lists.append(try List.initCapacity(self.alloc, if (BE_EVIL) 512 else 128));
             }
             return self;
         }
 
         /// Do not deinit the list! Return it to the pool with release
         pub fn get(self: *ListPool) !List {
-            // TODO: if i made a more confident upper bound up front I wouldn't need this check. 
-            if (self.lists.popOrNull()) |list| {
-                return list;
+            if (BE_EVIL) {
+                const hushdebugmode = self.lists.items[self.lists.items.len - 1];
+                self.lists.items.len -= 1;
+                return hushdebugmode;
             } else {
-                print("Make new list for pool. {}\n", .{ self.count });
-                self.count += 1;
-                return try List.initCapacity(self.alloc, 128);  // this could be bigger
+                if (self.lists.popOrNull()) |list| {
+                    return list;
+                } else {
+                    return try List.initCapacity(self.alloc, 128); 
+                }
             }
         }
 
@@ -716,6 +756,31 @@ pub fn AnyListPool(comptime element: type) type {
         pub fn release(self: *ListPool, list: List) void {
             self.lists.append(list) catch @panic("OOM releasing list.");  // If this fails you made like way too many lists. 
             self.lists.items[self.lists.items.len - 1].clearRetainingCapacity();
+        }
+    };
+}
+
+// This is a terrible idea but its also like 15% faster and probably fine. 
+// Very disappointing. Clearly a sign that I shouldn't be putting so many things in lists 
+// but not sure how to do that and still get move ordering. 
+fn UnsafeList(comptime element: type) type {
+    return struct { 
+        items: []element,
+
+        pub fn initCapacity(alloc: std.mem.Allocator, num: usize) !@This() {
+            var self: @This() =  .{ .items = try alloc.alloc(element, num) };
+            self.clearRetainingCapacity();
+            return self;
+        }
+
+        pub fn append(self: *@This(), e: element) !void {
+            self.items.len += 1;
+            self.items[self.items.len - 1] = e;
+            
+        }
+
+        pub fn clearRetainingCapacity(self: *@This()) void {
+            self.items.len = 0;
         }
     };
 }

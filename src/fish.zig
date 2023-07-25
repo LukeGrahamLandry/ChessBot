@@ -41,16 +41,23 @@ pub fn main() !void {
 
     var gt = Timer.start();
     var failed: u32 = 0;
+    var fishTimeOut: u32 = 0;
     // TODO: its morally wrong for this to not be an array
     var results = std.AutoHashMap(GameOver, u32).init(general.allocator());
     for (1..config.gameCount + 1) |g| {
         if (g != 0) {
-            std.debug.print("[info]: Win {}. Lose {}. Draw {}. Error {}.\n", .{ results.get(.WhiteWins) orelse 0, results.get(.BlackWins) orelse 0, (results.get(.Stalemate) orelse 0) + (results.get(.FiftyMoveDraw) orelse 0) + (results.get(.MaterialDraw) orelse 0), failed });
+            std.debug.print("[info]: Win {}. Lose {}. Draw {}. FishTimeOut {}. Error {}.\n", .{ results.get(.WhiteWins) orelse 0, results.get(.BlackWins) orelse 0, (results.get(.Stalemate) orelse 0) + (results.get(.FiftyMoveDraw) orelse 0) + (results.get(.MaterialDraw) orelse 0), fishTimeOut, failed });
         }
         std.debug.print("[info]: Game {}/{}.\n", .{ g, config.gameCount });
+        // const result = try playOneGame(&fish, g, config.gameCount);
         const result = playOneGame(&fish, g, config.gameCount) catch |err| {
-            failed += 1;
-            std.debug.print("[info]: Game failed! {}\n", .{err});
+            if (err == error.FishTooSlow) {
+                fishTimeOut += 1;
+            } else {
+                failed += 1;
+                std.debug.print("[info]: Game failed! {}\n", .{err});
+            }
+            
             search.resetMemoTable();
             continue;
         };
@@ -61,7 +68,7 @@ pub fn main() !void {
 
     const time = gt.get();
     std.debug.print("[info]: Done! Played {} games in {}ms.\n", .{ config.gameCount, time });
-    std.debug.print("[info]: Win {}. Lose {}. Draw {}. Error {}.\n", .{ results.get(.WhiteWins) orelse 0, results.get(.BlackWins) orelse 0, (results.get(.Stalemate) orelse 0) + (results.get(.FiftyMoveDraw) orelse 0) + (results.get(.MaterialDraw) orelse 0), failed });
+    std.debug.print("[info]: Win {}. Lose {}. Draw {}. FishTimeOut {}. Error {}.\n", .{ results.get(.WhiteWins) orelse 0, results.get(.BlackWins) orelse 0, (results.get(.Stalemate) orelse 0) + (results.get(.FiftyMoveDraw) orelse 0) + (results.get(.MaterialDraw) orelse 0), fishTimeOut, failed });
     std.debug.print("[info] {}\n", .{config});
     try fish.deinit();
 }
@@ -111,19 +118,20 @@ pub fn log(comptime fmt: []const u8, args: anytype) void {
 var general = (std.heap.GeneralPurposeAllocator(.{}){});
 
 fn logGameOver(err: anyerror, board: *Board, moveHistory: *std.ArrayList([5]u8), gt: Timer) !GameOver {
-    for (moveHistory.items) |m| {
-        log("{s} ", .{m});
-    }
-    log("\n", .{});
+    // for (moveHistory.items) |m| {
+    //     std.debug.print("{s} ", .{m});
+    // }
+    // std.debug.print("\n", .{});
 
     switch (err) {
         error.GameOver => {
             const result = try board.gameOverReason(&@import("common.zig").lists);
             const msg = switch (result) {
-                .Continue => "Game over but player can still move? This is a bug!",
+                .Continue => return err,
                 .Stalemate => "Draw (stalemate).",
                 .FiftyMoveDraw => "Draw (50 move rule).",
                 .MaterialDraw => "Draw (insufficient material).",
+                .RepetitionDraw => "Draw (3 repetition).",
                 .WhiteWins => "White (luke) wins.",
                 .BlackWins => "Black (fish) wins.",
             };
@@ -168,7 +176,9 @@ fn playUciMove(fish: *Stockfish, board: *Board, moveHistory: *std.ArrayList([5]u
                 .BestMove => |bestmove| {
                     if (bestmove) |move| {
                         if (bestMove == null) {
-                            return error.GameOver;
+                            std.debug.print("[info]: The fish didn't move in time.\n", .{});
+                            board.debugPrint();
+                            return error.FishTooSlow;
                         } else {
                             log("[info]: The fish played {s} in {}ms.\n", .{ move, moveTime });
                             break :m move;

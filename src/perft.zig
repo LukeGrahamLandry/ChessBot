@@ -196,7 +196,6 @@ fn debugPerft(fish: *Stockfish, fen: [] const u8, depth: u64, arena: *std.heap.A
     };
     if (!foundProblem) panic("Fish didn't find the problem {s}. Perft failed but fish agrees on counts for all leaf nodes. \nThat means when I make a move I'm getting a different fen than it would have. \nLast time it was a castling rights mistake.\n", .{fen});
     print("= Finished {s} = \n", .{fen});
-    _ = arena.reset(.retain_capacity);
 }
 
 // TODO: Make ListPool generic over the element type and then I don't need an allocator here and can get rid of all the arenas. 
@@ -245,26 +244,22 @@ fn walkPerft(fish: *Stockfish, board: *Board, depth: u64, arena: *std.heap.Arena
         panic("had same moves but different numbers. makes no sense!", .{});
     }
 
-
     // We agree on which moves are possible from here but disagree on the total size of the tree. 
     // Now need to decide which branch we disagree on by running both counts on a higher depth. 
     // Recursivly repeat this whole process for each child.
     var myTotal: u64 = 0;
-    var littleArena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     for (myMoves.items) |myMove| {
         const unMove = board.play(myMove);
         defer board.unplay(unMove);
         const myCount = (try countPossibleGames(board, board.nextPlayer, depth - 1, lists, false)).games;
-        const fishCount = try runFishPerftCountGames(fish, board, depth - 1, littleArena.allocator());
+        const fishCount = try runFishPerftCountGames(fish, board, depth - 1, alloc);
         if (myCount != fishCount){
             // This branch is the problem. 
-            print("Disagree on count at depth {}: me:{} vs fish:{}. {s}\n", .{depth-1, myCount, fishCount, try board.toFEN(littleArena.allocator())});
+            print("Disagree on count at depth {}: me:{} vs fish:{}. {s}\n", .{depth-1, myCount, fishCount, try board.toFEN(alloc)});
             const calcCount = try walkPerft(fish, board, depth - 1, arena, lists);
             if (calcCount != myCount) panic("countPossibleGames didnt match walkPerft: {} vs {}\n", .{ myCount, calcCount});
         }
         myTotal += myCount;
-
-        _ = littleArena.reset(.retain_capacity);
     }   
 
     return myTotal;

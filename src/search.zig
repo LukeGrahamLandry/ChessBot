@@ -39,15 +39,13 @@ pub const Stats = struct {
 const IM_MATED_EVAL: i32 = -1000000; // Add distance to prefer sooner mates
 const LOWEST_EVAL: i32 = -2000000;
 
-// This gets reset after each whole decision is done.
-var upperArena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-
 var theLists = &@import("common.zig").lists;
+var general_i = std.heap.GeneralPurposeAllocator(.{}) {};
+var evalGuesses = std.ArrayList(i32).init(general_i.allocator());
 
 // TODO: should use the std mutex but i'm guessing wasm freestanding wont have one? 
 var stuffInUse = false;
 
-// This uses the global arenas above so individual dudes don't need to be dropped. 
 pub fn bestMove(comptime opts: StratOpts, game: *Board, maxDepth: usize, timeLimitMs: i128) !Move {
     // Because RAII stands for "the code runs when the code damn well pleases" and we don't like that in this household apparently. 
     if (stuffInUse) return error.ThisIsntThreadSafe;
@@ -55,16 +53,16 @@ pub fn bestMove(comptime opts: StratOpts, game: *Board, maxDepth: usize, timeLim
     defer stuffInUse = false;
     assert(memoMap != null);
 
-    if (game.halfMoveDraw >= 100 or game.hasInsufficientMaterial()) return error.GameOver; // Draw
+    if (game.halfMoveDraw >= 100 or game.hasInsufficientMaterial() or game.lastMoveWasRepetition()) return error.GameOver; // Draw
     const me = game.nextPlayer;
 
     const startTime = nanoTimestamp();
     const endTime = startTime + (timeLimitMs * std.time.ns_per_ms);
-    defer _ = upperArena.reset(.retain_capacity);
     var topLevelMoves = try movegen.possibleMoves(game, me, theLists);
     defer theLists.release(topLevelMoves);
 
-    var evalGuesses = try std.ArrayList(i32).initCapacity(upperArena.allocator(), topLevelMoves.items.len);
+    try evalGuesses.ensureTotalCapacity(topLevelMoves.items.len);
+    defer evalGuesses.clearRetainingCapacity();
 
     // TODO: remove this. it used to remove illigal moves but now i dont generate them.
     var m: usize = 0;
@@ -79,8 +77,8 @@ pub fn bestMove(comptime opts: StratOpts, game: *Board, maxDepth: usize, timeLim
 
     var thinkTime: i128 = -1;
     var favourite: Move = topLevelMoves.items[0];
-    const startDepth = if (opts.doIterative) 0 else maxDepth;
-    for (startDepth..(maxDepth + 1)) |depth| {
+    const startDepth = if (opts.doIterative) 0 else @min(maxDepth, 100);
+    for (startDepth..(@min(maxDepth, 100) + 1)) |depth| {  // @min is sanity check for list pool capacity
         var stats: Stats = .{};
         var alpha = LOWEST_EVAL;
         var beta = -LOWEST_EVAL;
@@ -177,7 +175,7 @@ pub fn walkEval(comptime opts: StratOpts, game: *Board, remaining: i32, alphaIn:
         if (comptime stats.use) stats.leafBoardsSeen += 1;
         return game.simpleEval;
     }
-    if (game.halfMoveDraw >= 100 or game.hasInsufficientMaterial()) return Magic.DRAW_EVAL;
+    if (game.halfMoveDraw >= 100 or game.hasInsufficientMaterial() or game.lastMoveWasRepetition()) return Magic.DRAW_EVAL;
     // Getting the time at every leaf node slows it down. But don't want to wait to get all the way back to the top if we're out of time.
     // Note: since I'm not checking at top level, it just doen't limit time if maxDepth=2 but only matters if you give it <5 ms so don't care.
     // TODO: should probably do this even less often 
