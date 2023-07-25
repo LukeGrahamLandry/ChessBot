@@ -18,6 +18,8 @@ CPUPROFILE=$PWD/prof.out DYLD_LIBRARY_PATH=/opt/homebrew/Cellar/gperftools/2.10/
 pprof bench prof.out
 ```
 
+Needs `brew install gperftools` and `brew install graphviz`.
+
 ## Ideas
 
 - Know about check, mate, castling, en-passant, and draws!

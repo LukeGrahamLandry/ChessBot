@@ -60,19 +60,33 @@ pub fn genOnePieceMoves(out: anytype, board: *const Board, i: usize, file: usize
     const piece = board.squares[i];
     switch (piece.kind) {
         .Pawn => try pawnMove(out, board, i, file, rank, piece),
-        .Bishop => try bishopSlide(out, board, i, file, rank, piece),
+        .Bishop => try bishopSlide(out, board, i, piece.colour),
         .Knight => try knightMove(out, board, i, piece.colour),
         .Rook => try rookSlide(out, board, i, piece.colour),
         .King => try kingMove(out, board, i, file, rank, piece),
         .Queen => {
             try rookSlide(out, board, i, piece.colour);
-            try bishopSlide(out, board, i, file, rank, piece);
+            try bishopSlide(out, board, i, piece.colour);
         },
         .Empty => unreachable,
     }
 }
 
 fn rookSlide(out: anytype, board: *const Board, i: usize, colour: Colour) !void {
+    try sliderMoves(out, board, i, colour, true);
+}
+
+fn bishopSlide(out: anytype, board: *const Board, i: usize, colour: Colour) !void {
+    try sliderMoves(out, board, i, colour, false);
+}
+
+fn sliderMoves(out: anytype, board: *const Board, i: usize, colour: Colour, comptime isRook: bool) !void {
+    // These aren't really branches. The function is generic over that param. 
+    const masksTable = if (isRook) &tables.rookMasks else &tables.bishopMasks;
+    const targetsTable = if (isRook) &tables.rooks else &tables.bishops;
+    const myPinKind = if (isRook) board.checks.pinsByRook else board.checks.pinsByBishop;
+    const otherPinKind = if (isRook) board.checks.pinsByBishop else  board.checks.pinsByRook;
+
     // When calculating danger squares the king can't move to,
     // - defended pieces count as targetable
     // - the king doesn't count as a blocker
@@ -83,25 +97,24 @@ fn rookSlide(out: anytype, board: *const Board, i: usize, colour: Colour) !void 
         var pieces = board.peicePositions.black | board.peicePositions.white;
         const kingFlag = @as(u64, 1) << @intCast(if (colour == .Black) board.whiteKingIndex else board.blackKingIndex);
         pieces &= ~kingFlag;
-        const mask = pieces & tables.rookMasks[i];
-        const targets = tables.rooks[i].get(mask).?;
+        const mask = pieces & masksTable[i];
+        const targets = targetsTable[i].get(mask).?;
         out.bb |= targets;
         return;
     }
 
-    // If pinned by a bishop, you can't move straight. 
+    // If pinned by the other type of piece, you can't move at all. 
     const startFlag = @as(u64, 1) << @intCast(i);
-    if ((board.checks.pinsByBishop & startFlag) != 0) return;
+    if ((otherPinKind & startFlag) != 0) return;
     
     var pieces = board.peicePositions.black | board.peicePositions.white;
 
-    const mask = pieces & tables.rookMasks[i];
+    const mask = pieces & masksTable[i];
     const myPieces = board.peicePositions.getFlag(board.squares[i].colour);
-    var targets = tables.rooks[i].get(mask).? & (~myPieces) & board.checks.blockSingleCheck;
+    var targets = targetsTable[i].get(mask).? & (~myPieces) & board.checks.blockSingleCheck;
     
-    if ((board.checks.pinsByRook & startFlag) != 0) {
-        targets &= board.checks.pinsByRook;
-    }   
+    // If pinned by the same type of piece, you need to stay on the pin lines
+    if ((myPinKind & startFlag) != 0) targets &= myPinKind;
 
     try emitMoves(out, board, i, targets, colour);
 }
@@ -179,42 +192,6 @@ fn frenchMove(out: anytype, board: *const Board, i: usize, targetFile: usize, ta
             // assert(board.squares[captureIndex].is(colour.other(), .Pawn));
             try out.appendPawn(.{ .from = @intCast(i), .to = @intCast(endIndex), .action = .{ .useFrenchMove = @intCast(captureIndex) }, .isCapture = true });
         },
-    }
-}
-
-fn bishopSlide(out: anytype, board: *const Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
-    // If pinned by a rook, you can't move diagnally. 
-    const startFlag = @as(u64, 1) << @intCast(i);
-    if (out.filter != .CurrentlyCalcChecks) {
-        if ((board.checks.pinsByRook & startFlag) != 0) return;
-    }
-
-    const startPinned = (board.checks.pinsByBishop & startFlag) != 0;
-    inline for (directions[4..8]) |offset| {
-        var checkFile = @as(isize, @intCast(file));
-        var checkRank = @as(isize, @intCast(rank));
-        while (true) {
-            checkFile += offset[0];
-            checkRank += offset[1];
-            if (checkFile > 7 or checkRank > 7 or checkFile < 0 or checkRank < 0) break;
-            // TODO: can i check this once by direction?
-            // If pinned by a pishop, you need to stay on the pin lines
-            if (out.filter != .CurrentlyCalcChecks) {
-                const toFlag = @as(u64, 1) << @intCast(checkRank*8 + checkFile);
-                const endPinned = (board.checks.pinsByBishop & toFlag) != 0;
-                if (startPinned and !endPinned) break;
-                if ((board.checks.blockSingleCheck & toFlag) == 0) {
-                    if (board.emptyAt(@intCast(checkFile), @intCast(checkRank))) {
-                        continue;
-                    } else {
-                        break;
-                    }
-                }
-            }
-            // For calculating where the king isn't allowed to move, you need to keep going after hitting the king. 
-            const skip = out.filter == .CurrentlyCalcChecks and board.get(@intCast(checkFile), @intCast(checkRank)).is(piece.colour.other(), .King);
-            if (try out.trySlide(board, i, @intCast(checkFile), @intCast(checkRank), piece) and !skip) break;
-        }
     }
 }
 
@@ -323,6 +300,8 @@ const directions = [8] [2] isize {
     [2] isize { -1, 1 },
     [2] isize { -1, -1 },
 };
+
+// TODO: goal of the movegen adventure is get rid of this complicated struct because the functions know that one is just rying to colelct the bit map and they can deal with that more efficiently
 
 const CollectMoves = struct {
     moves: *ListPool.List,

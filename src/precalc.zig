@@ -8,29 +8,32 @@ pub var tables: Tables = undefined;
 
 pub fn initTables(alloc: std.mem.Allocator) !void {
     tables = .{
-        .rooks = try makeRookAttackTable(alloc),
+        .rooks = try makeSliderAttackTable(alloc, possibleRookTargets),
+        .bishops = try makeSliderAttackTable(alloc, possibleBishopTargets),
     };
 }
 
 const Tables = struct {
     rooks: AttackTable,
-    rookMasks: [64] u64 = makeRookUnblockedAttackMasks(),  // TODO: do this with bit ops instead of a lookup? 
+    rookMasks: [64] u64 = makeSliderUnblockedAttackMasks(possibleRookTargets),  // TODO: do this with bit ops instead of a lookup? 
     knights: [64] u64 = makeKnightAttackTable(), 
+    bishopMasks: [64] u64 = makeSliderUnblockedAttackMasks(possibleBishopTargets),  // TODO: do this with bit ops instead of a lookup? 
+    bishops: AttackTable,
 };
 
 // The tables are built at setup and will never need to reallocate later. 
 const OneTable = std.hash_map.HashMapUnmanaged(u64, u64, std.hash_map.AutoContext(u64), 10);
 pub const AttackTable = [64] OneTable;
 
-fn makeRookAttackTable(alloc: std.mem.Allocator) !AttackTable {
+fn makeSliderAttackTable(alloc: std.mem.Allocator, comptime possibleTargets: fn (u64, u64, comptime bool) u64) !AttackTable {
     var result: AttackTable = undefined;
     var totalSize: usize = 0;
     for (0..64) |i| {
         result[i] = .{};
-        const baseRookTargets = possibleRookTargets(i, 0, true);
+        const baseRookTargets = possibleTargets(i, 0, true);
         var blockerConfigurations = VisitBitPermutations.of(baseRookTargets);
         while (blockerConfigurations.next()) |flag| {
-            const targets = possibleRookTargets(i, flag, false);
+            const targets = possibleTargets(i, flag, false);
             try result[i].put(alloc, flag, targets);
         }
         totalSize += result[i].capacity() * @sizeOf(OneTable.KV) / 1024;
@@ -48,11 +51,11 @@ fn makeKnightAttackTable() [64] u64 {
     return result;
 }
 
-fn makeRookUnblockedAttackMasks() [64] u64 {
+fn makeSliderUnblockedAttackMasks(comptime possibleTargets: fn (u64, u64, comptime bool) u64) [64] u64 {
     @setEvalBranchQuota(10000);
     var result: [64] u64 = undefined;
     for (0..64) |i| {
-        result[i] = possibleRookTargets(i, 0, true);
+        result[i] = possibleTargets(i, 0, true);
     }
     return result;
 }
@@ -222,11 +225,13 @@ test "permutations generate unique numbers" {
     }
 }
 
-
 fn possibleRookTargets(rookIndex: u64, blockerFlag: u64, comptime skipEdgeSquares: bool) u64 {
     // TODO: if (blockerFlag == 0) use bit ops to build the plus sign
     return possibleSlideTargets(rookIndex, blockerFlag, skipEdgeSquares, allDirections[0..4]);
+}
 
+fn possibleBishopTargets(rookIndex: u64, blockerFlag: u64, comptime skipEdgeSquares: bool) u64 {
+    return possibleSlideTargets(rookIndex, blockerFlag, skipEdgeSquares, allDirections[4..8]);
 }
 
 // The edge squares dont matter for the pieces mask because there's nothing more to block. 
