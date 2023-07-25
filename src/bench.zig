@@ -18,9 +18,9 @@ pub fn main() !void {
     @import("common.zig").setup(100);
     print("maxDepth={}. maxTime={}ms. \nGame: {s} \n", .{maxDepth, maxTime, gameStr});
     _ = try replayGame(.{});
-    // _ = try replayGame(.{ .doIterative = false });
-    // _ = try replayGame(.{ .doMemo = false });
-    // _ = try replayGame(.{ .doMemo = false, .doIterative = false });
+    _ = try replayGame(.{ .doIterative = false });
+    _ = try replayGame(.{ .doMemo = false });
+    _ = try replayGame(.{ .doMemo = false, .doIterative = false });
     // // _ = try replayGame(.{ .doPruning = false });  // Takes sooooo long
 
     // // For working on move gen. 

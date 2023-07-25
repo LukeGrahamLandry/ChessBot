@@ -11,9 +11,7 @@ const Piece = @import("board.zig").Piece;
 const Kind = @import("board.zig").Kind;
 const StratOpts = @import("search.zig").StratOpts;
 const Move = @import("board.zig").Move;
-
-const precalc = @import("precalc.zig");
-var rookAttackTable: ?precalc.AttackTable = null;
+const tables = &@import("precalc.zig").tables;
 
 pub fn possibleMoves(board: *const Board, me: Colour, lists: *ListPool) !ListPool.List {
     // assert(board.nextPlayer == me); // sanity. TODO: don't bother passing colour since the board knows?
@@ -63,19 +61,18 @@ pub fn genOnePieceMoves(out: anytype, board: *const Board, i: usize, file: usize
     switch (piece.kind) {
         .Pawn => try pawnMove(out, board, i, file, rank, piece),
         .Bishop => try bishopSlide(out, board, i, file, rank, piece),
-        .Knight => try knightMove(out, board, i, file, rank, piece),
-        .Rook => try rookSlide(out, board, i, piece),
+        .Knight => try knightMove(out, board, i, piece.colour),
+        .Rook => try rookSlide(out, board, i, piece.colour),
         .King => try kingMove(out, board, i, file, rank, piece),
         .Queen => {
-            try rookSlide(out, board, i, piece);
+            try rookSlide(out, board, i, piece.colour);
             try bishopSlide(out, board, i, file, rank, piece);
         },
         .Empty => unreachable,
     }
 }
 
-const tables = &@import("precalc.zig").tables;
-fn rookSlide(out: anytype, board: *const Board, i: usize, piece: Piece) !void {
+fn rookSlide(out: anytype, board: *const Board, i: usize, colour: Colour) !void {
     // When calculating danger squares the king can't move to,
     // - defended pieces count as targetable
     // - the king doesn't count as a blocker
@@ -84,10 +81,10 @@ fn rookSlide(out: anytype, board: *const Board, i: usize, piece: Piece) !void {
     // TODO: this should be a seperate function.
     if (comptime (out.filter == .CurrentlyCalcChecks)) {
         var pieces = board.peicePositions.black | board.peicePositions.white;
-        const kingFlag = @as(u64, 1) << @intCast(if (piece.colour == .Black) board.whiteKingIndex else board.blackKingIndex);
+        const kingFlag = @as(u64, 1) << @intCast(if (colour == .Black) board.whiteKingIndex else board.blackKingIndex);
         pieces &= ~kingFlag;
-        const mask = pieces & precalc.ROOK_MASKS[i];
-        const targets = tables.rookAttacks[i].get(mask).?;
+        const mask = pieces & tables.rookMasks[i];
+        const targets = tables.rooks[i].get(mask).?;
         out.bb |= targets;
         return;
     }
@@ -98,20 +95,15 @@ fn rookSlide(out: anytype, board: *const Board, i: usize, piece: Piece) !void {
     
     var pieces = board.peicePositions.black | board.peicePositions.white;
 
-    const mask = pieces & precalc.ROOK_MASKS[i];
+    const mask = pieces & tables.rookMasks[i];
     const myPieces = board.peicePositions.getFlag(board.squares[i].colour);
-    var targets = tables.rookAttacks[i].get(mask).? & (~myPieces) & board.checks.blockSingleCheck;
+    var targets = tables.rooks[i].get(mask).? & (~myPieces) & board.checks.blockSingleCheck;
     
     if ((board.checks.pinsByRook & startFlag) != 0) {
         targets &= board.checks.pinsByRook;
     }   
 
-    while (targets != 0) {
-        const offset = @ctz(targets);
-        var flag = @as(u64, 1) << @intCast(offset);
-        targets = targets ^ flag;
-        _ = try out.slideNew(board, @intCast(i), @intCast(offset), flag, piece.colour);
-    }
+    try emitMoves(out, board, i, targets, colour);
 }
 
 fn pawnMove(out: anytype, board: *const Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
@@ -295,26 +287,29 @@ pub fn tryCastle(out: anytype, board: *const Board, colour: Colour, comptime goi
     try out.append(move);   
 }
 
-fn knightMove(out: anytype, board: *const Board, i: usize, file: usize, rank: usize, piece: Piece) !void {
-    // Pinned knights can never move. 
-    if (out.filter != .CurrentlyCalcChecks) {  // TODO: get rid of this check everywhere by setting the checks info to 0/1 so it gets ignored 
-        const flag = @as(u64, 1) << @intCast(i);
-        if (((board.checks.pinsByBishop | board.checks.pinsByRook) & flag) != 0) return;
+fn knightMove(out: anytype, board: *const Board, i: usize, colour: Colour) !void {
+    if (out.filter == .CurrentlyCalcChecks) {
+        out.bb |= tables.knights[i];
+        return;
     }
 
-    inline for (knightOffsets) |x| {
-        inline for (knightOffsets) |y| {
-            if (x != y and x != -y) {
-                var checkFile = @as(isize, @intCast(file)) + x;
-                var checkRank = @as(isize, @intCast(rank)) + y;
-                const invalid = checkFile > 7 or checkRank > 7 or checkFile < 0 or checkRank < 0;
-                if (!invalid) {
-                    const toFlag = @as(u64, 1) << @intCast(checkRank*8 + checkFile);
-                    const skip = out.filter != .CurrentlyCalcChecks and (board.checks.blockSingleCheck & toFlag) == 0;
-                    if (!skip) try out.tryHop(board, i, @intCast(checkFile), @intCast(checkRank), piece);
-                }
-            }
-        }
+    // Pinned knights can never move. 
+    const startFlag = @as(u64, 1) << @intCast(i);
+    if (((board.checks.pinsByBishop | board.checks.pinsByRook) & startFlag) != 0) return;
+
+    const myPieces = board.peicePositions.getFlag(board.squares[i].colour);
+    const targets = tables.knights[i] & (~myPieces) & board.checks.blockSingleCheck;
+
+    try emitMoves(out, board, i, targets, colour);
+}
+
+fn emitMoves(out: anytype, board: *const Board, i: usize, _targets: u64, colour: Colour) !void {
+    var targets = _targets;
+    while (targets != 0) {
+        const offset = @ctz(targets);
+        var flag = @as(u64, 1) << @intCast(offset);
+        targets = targets ^ flag;
+        try out.slideNew(board, @intCast(i), @intCast(offset), flag, colour);
     }
 }
 
@@ -329,21 +324,9 @@ const directions = [8] [2] isize {
     [2] isize { -1, -1 },
 };
 
-const knightOffsets = [4] isize { 1, -1, 2, -2 };
-
 const CollectMoves = struct {
     moves: *ListPool.List,
     comptime filter: MoveFilter = .Any,
-
-    fn tryHop(self: CollectMoves, board: *const Board, i: usize, checkFile: usize, checkRank: usize, piece: Piece) !void {
-        const check = board.get(checkFile, checkRank);
-        const toFlag = @as(u64, 1) << @intCast(checkRank*8 + checkFile);
-        if (self.filter != .CurrentlyCalcChecks and (board.checks.blockSingleCheck & toFlag) == 0) return;
-
-        if (check.empty() or check.colour != piece.colour) {
-            try self.moves.append(irf(i, checkFile, checkRank, !check.empty()));
-        }
-    }
 
     // Returns true if this move was a capture or blocked by self so loop should break.
     fn trySlide(self: CollectMoves, board: *const Board, i: usize, checkFile: usize, checkRank: usize, piece: Piece) !bool {
@@ -500,13 +483,6 @@ pub const GetAttackSquares = struct {
     bb: u64 = 0,
     comptime filter: MoveFilter = .CurrentlyCalcChecks,
 
-    fn tryHop(self: *GetAttackSquares, board: *const Board, i: usize, checkFile: usize, checkRank: usize, piece: Piece) !void {
-        _ = piece;
-        _ = i;
-        _ = board;
-        self.bb |= toMask(checkFile, checkRank);
-    }
-
     // Returns true if this move was a capture or blocked by self so loop should break.
     fn trySlide(self: *GetAttackSquares, board: *const Board, i: usize, checkFile: usize, checkRank: usize, piece: Piece) !bool {
         _ = piece;
@@ -631,24 +607,21 @@ pub fn getChecksInfo(game: *Board, defendingPlayer: Colour) ChecksInfo {
     }
     
     // Knights. Can't be blocked, they just take up one square in the flag and must be captured. 
-    inline for (knightOffsets) |x| {
-        inline for (knightOffsets) |y| {
-            if (comptime (x != y and x != -y)) {
-                var checkFile = @as(isize, @intCast(@mod(myKingIndex, 8))) + x;
-                var checkRank = @as(isize, @intCast(@divFloor(myKingIndex, 8))) + y;
-                const invalid = checkFile > 7 or checkRank > 7 or checkFile < 0 or checkRank < 0;
-                if (!invalid){
-                    const checkIndex = checkRank*8 + checkFile;
-                    const p = game.squares[@intCast(checkIndex)];
-                    if (p.colour == defendingPlayer.other() and p.kind == .Knight) {
-                        if (result.blockSingleCheck == 0) {
-                            result.blockSingleCheck |= @as(u64, 1) << @as(u6, @intCast(checkIndex));
-                        } else {
-                            result.doubleCheck = true;
-                            // Want to break here but compiler seg faults. Not allowed in inline loops i guess? 
-                        }
-                    }
-                }
+    var knightTargets = tables.knights[myKingIndex] & otherSquares;
+    while (knightTargets != 0) {
+        const offset = @ctz(knightTargets);
+        var flag = @as(u64, 1) << @intCast(offset);
+        knightTargets = knightTargets ^ flag;
+        
+        // TODO: It would be very convient if I had a bitboard for each piece type. 
+        //       Then I could do this whole loop as blockSingleCheck |= knightTargets; if (@popCount(blockSingleCheck) > 1) doubleCheck = true;
+        const p = game.squares[@intCast(offset)];
+        if (p.kind == .Knight) {
+            if (result.blockSingleCheck == 0) {
+                result.blockSingleCheck |= flag;
+            } else {
+                result.doubleCheck = true;
+                break;  // TODO: is it better to just not branch here? 
             }
         }
     }

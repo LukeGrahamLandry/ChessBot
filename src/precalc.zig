@@ -2,33 +2,27 @@ const std = @import("std");
 const Board = @import("board.zig").Board;
 const printBitBoard = @import("movegen.zig").printBitBoard;
 const print = @import("common.zig").print;
-const hashmap = std.hash_map;
-
-pub fn main() !void {
-    const t = @import("common.zig").Timer.start();
-    var general = std.heap.GeneralPurposeAllocator(.{}) {};
-    _ = try makeRookAttackTable(general.allocator());
-    print("Finished in {}ms\n", .{ t.get() });
-}
-
+const isWasm = @import("builtin").target.isWasm();
 
 pub var tables: Tables = undefined;
 
 pub fn initTables(alloc: std.mem.Allocator) !void {
     tables = .{
-        .rookAttacks = try makeRookAttackTable(alloc),
+        .rooks = try makeRookAttackTable(alloc),
     };
 }
 
 const Tables = struct {
-    rookAttacks: AttackTable,
+    rooks: AttackTable,
+    rookMasks: [64] u64 = makeRookUnblockedAttackMasks(),  // TODO: do this with bit ops instead of a lookup? 
+    knights: [64] u64 = makeKnightAttackTable(), 
 };
 
 // The tables are built at setup and will never need to reallocate later. 
 const OneTable = std.hash_map.HashMapUnmanaged(u64, u64, std.hash_map.AutoContext(u64), 10);
 pub const AttackTable = [64] OneTable;
 
-pub fn makeRookAttackTable(alloc: std.mem.Allocator) !AttackTable {
+fn makeRookAttackTable(alloc: std.mem.Allocator) !AttackTable {
     var result: AttackTable = undefined;
     var totalSize: usize = 0;
     for (0..64) |i| {
@@ -39,19 +33,22 @@ pub fn makeRookAttackTable(alloc: std.mem.Allocator) !AttackTable {
             const targets = possibleRookTargets(i, flag, false);
             try result[i].put(alloc, flag, targets);
         }
-        const size = result[i].capacity() * @sizeOf(OneTable.KV) / 1024;
-        print("{}. Capacity={}. Assumed Size={} KB\n", .{ i, result[i].capacity(), size });
-        totalSize += size;
+        totalSize += result[i].capacity() * @sizeOf(OneTable.KV) / 1024;
     }
-    print("Total assumed size: {} KB.\n", .{ totalSize });
+    if (isWasm) print("Rook attack table size: {} KB.\n", .{ totalSize });
     return result;
 }
 
+fn makeKnightAttackTable() [64] u64 {
+    @setEvalBranchQuota(10000);
+    var result: [64] u64 = undefined;
+    for (0..64) |i| {
+        result[i] = possibleKnightTargets(i);
+    }
+    return result;
+}
 
-// TODO: do this with bit ops? 
-pub const ROOK_MASKS = makeRookUnblockedAttackMasks();
-
-pub fn makeRookUnblockedAttackMasks() [64] u64 {
+fn makeRookUnblockedAttackMasks() [64] u64 {
     @setEvalBranchQuota(10000);
     var result: [64] u64 = undefined;
     for (0..64) |i| {
@@ -225,14 +222,19 @@ test "permutations generate unique numbers" {
     }
 }
 
-// The edge squares dont matter for the pieces mask because there's nothing more to block. 
+
 fn possibleRookTargets(rookIndex: u64, blockerFlag: u64, comptime skipEdgeSquares: bool) u64 {
     // TODO: if (blockerFlag == 0) use bit ops to build the plus sign
+    return possibleSlideTargets(rookIndex, blockerFlag, skipEdgeSquares, allDirections[0..4]);
 
+}
+
+// The edge squares dont matter for the pieces mask because there's nothing more to block. 
+fn possibleSlideTargets(startIndex: u64, blockerFlag: u64, comptime skipEdgeSquares: bool, comptime directions: [] const [2] isize) u64 {
     var result: u64 = 0;
-    inline for (directions[0..4], 0..) |offset, dir| {
-        var checkFile = @as(isize, @intCast(rookIndex % 8));
-        var checkRank = @as(isize, @intCast(rookIndex / 8));
+    inline for (directions, 0..) |offset, dir| {
+        var checkFile = @as(isize, @intCast(startIndex % 8));
+        var checkRank = @as(isize, @intCast(startIndex / 8));
         while (true) {
             checkFile += offset[0];
             checkRank += offset[1];
@@ -269,7 +271,7 @@ test "unblocked rooks can move 14 squares" {
     }
 }
 
-const directions = [8] [2] isize {
+const allDirections = [8] [2] isize {
     [2] isize { 1, 0 },
     [2] isize { -1, 0 },
     [2] isize { 0, 1 },
@@ -279,3 +281,28 @@ const directions = [8] [2] isize {
     [2] isize { -1, 1 },
     [2] isize { -1, -1 },
 };
+
+fn possibleKnightTargets(i: u64) u64 {
+    const knightOffsets = [4] isize { 1, -1, 2, -2 };
+
+    var result: u64 = 0;
+    inline for (knightOffsets) |x| {
+        inline for (knightOffsets) |y| {
+            if (x != y and x != -y) {
+                var checkFile = @as(isize, @intCast(i % 8)) + x;
+                var checkRank = @as(isize, @intCast(i / 8)) + y;
+                const invalid = checkFile > 7 or checkRank > 7 or checkFile < 0 or checkRank < 0;
+                if (!invalid) result |= @as(u64, 1) << @intCast(checkRank*8 + checkFile);
+            }
+        }
+    }
+
+    return result;
+}
+
+test "have less than 9 moves" {
+    for (0..64) |i| {
+        const b = possibleKnightTargets(i);
+        try std.testing.expect(@popCount(b) <= 8);
+    }
+}
