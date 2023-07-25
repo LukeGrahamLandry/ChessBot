@@ -15,6 +15,7 @@ var general_i = std.heap.GeneralPurposeAllocator(.{}) {};
 pub var lists: ListPool = undefined;
 
 pub fn setup(memoSizeMB: usize) void {
+    // var t = Timer.start();
     if (!isTest) print("Zobrist Xoshiro256 seed is {any}.\n", .{Magic.ZOIDBERG_SEED});
     var rand: std.rand.Xoshiro256 = .{ .s = Magic.ZOIDBERG_SEED };
     for (&Magic.ZOIDBERG) |*ptr| {
@@ -24,6 +25,7 @@ pub fn setup(memoSizeMB: usize) void {
     lists = ListPool.init(general_i.allocator()) catch panic("OOM list pool", .{});
     @import("search.zig").initMemoTable(memoSizeMB) catch panic("OOM memo", .{});
     @import("precalc.zig").initTables(general_i.allocator()) catch panic("OOM attack tables", .{});
+    // print("Setup finished in {} ms.\n", .{t.get()});
 }
 
 pub fn nanoTimestamp() i128 {

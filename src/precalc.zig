@@ -23,26 +23,34 @@ const Tables = struct {
     kings: [64] u64 = makeKingAttackTable(), 
 };
 
-// TODO: can i pick a good java prime to multiply by that gives me a super cheap hash function?
-// The tables are built at setup and will never need to reallocate later. 
-const OneTable = std.hash_map.HashMapUnmanaged(u64, u64, std.hash_map.AutoContext(u64), 10);
-pub const AttackTable = [64] OneTable;
-
 fn makeSliderAttackTable(alloc: std.mem.Allocator, comptime possibleTargets: fn (u64, u64, comptime bool) u64) !AttackTable {
     var result: AttackTable = undefined;
     var totalSize: usize = 0;
     for (0..64) |i| {
-        result[i] = .{};
-        const baseRookTargets = possibleTargets(i, 0, true);
-        var blockerConfigurations = VisitBitPermutations.of(baseRookTargets);
-        while (blockerConfigurations.next()) |flag| {
-            const targets = possibleTargets(i, flag, false);
-            try result[i].put(alloc, flag, targets);
+        var bits: u7 = 8;
+        outer: while (true) {
+            if (bits > 20) @panic("bits too big");
+            // print("Trying {} bits. \n", .{ bits });
+            result[i] = try OneTable.init(alloc, bits);
+            const baseRookTargets = possibleTargets(i, 0, true);
+            var blockerConfigurations = VisitBitPermutations.of(baseRookTargets);
+            var count: usize = 0;
+            while (blockerConfigurations.next()) |flag| {
+                count += 1;
+                const targets = possibleTargets(i, flag, false);
+                const success = result[i].set(flag, targets);
+                if (!success) {
+                    alloc.free(result[i].buffer);
+                    bits += 1;
+                    continue :outer;
+                }
+            }
+            // print("{}. {} bits. {}/{} full.\n", .{ i, bits, count, result[i].buffer.len});
+            break;
         }
-        totalSize += result[i].capacity() * @sizeOf(OneTable.KV) / 1024;
-        // print("{}. {}/{} full.\n", .{ i, result[i].count(), result[i].capacity()});
+        totalSize += result[i].buffer.len * @sizeOf(u64) / 1024;
     }
-    if (isWasm) print("Slider attack table size: {} KB.\n", .{ totalSize });
+    print("Slider attack table size: {} KB.\n", .{ totalSize });
     return result;
 }
 
@@ -353,3 +361,46 @@ test "have less than 9 moves" {
         try std.testing.expect(@popCount(b) <= 8);
     }
 }
+
+pub const AttackTable = [64] OneTable;
+
+pub const OneTable = struct {
+    buffer: []u64,
+    bitsInv: u7,
+    const EMPTY: u64 = ~@as(u64, 0);
+
+    pub fn init(alloc: std.mem.Allocator, bits: u7) !@This() {
+        return .{ .bitsInv=64-bits, .buffer = try allocOnes(alloc, bits) };
+    }
+
+    fn allocOnes(alloc: std.mem.Allocator, bits: u7) ![]u64 {
+        var buffer = try alloc.alloc(u64, try std.math.powi(usize, 2, bits));
+        for (buffer) |*e| {
+            e.* = EMPTY;
+        }
+        return buffer;
+    }
+
+    // Returns false on collission. 
+    fn set(self: *@This(), key: u64, value: u64) bool {
+        const prevVal = self.get(key);
+        if (prevVal != EMPTY and prevVal != value) return false;
+        self.buffer[self.indexOf(key)] = value;
+        return true;
+    }
+
+    fn indexOf(self: *const @This(), key: u64) usize {
+        // https://probablydance.com/2018/06/16/fibonacci-hashing-the-optimization-that-the-world-forgot-or-a-better-alternative-to-integer-modulo/
+        var hash: u128 = key;
+        hash ^= hash >> self.bitsInv;
+        const magic = 11400714819323198485; 
+        const all: u64 = @truncate(magic * hash);
+        const index = all >> @intCast(self.bitsInv);
+        // print("{b} -> {b} -> {b}\n", .{key, all, index});
+        return @intCast(index);
+    }
+    
+    pub fn get(self: *const @This(), key: u64) u64 {
+        return self.buffer[self.indexOf(key)];
+    }
+};

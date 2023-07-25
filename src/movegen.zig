@@ -125,7 +125,7 @@ fn sliderMoves(out: anytype, board: *const Board, i: usize, colour: Colour, comp
         const kingFlag = @as(u64, 1) << @intCast(if (colour == .Black) board.whiteKingIndex else board.blackKingIndex);
         pieces &= ~kingFlag;
         const mask = pieces & masksTable[i];
-        const targets = targetsTable[i].get(mask).?;
+        const targets = targetsTable[i].get(mask);
         out.bb |= targets;
         return;
     }
@@ -138,7 +138,7 @@ fn sliderMoves(out: anytype, board: *const Board, i: usize, colour: Colour, comp
 
     const mask = pieces & masksTable[i];
     const myPieces = board.peicePositions.getFlag(colour);
-    var targets = targetsTable[i].get(mask).? & (~myPieces) & board.checks.blockSingleCheck;
+    var targets = targetsTable[i].get(mask) & (~myPieces) & board.checks.blockSingleCheck;
     
     // If pinned by the same type of piece, you need to stay on the pin lines
     if ((myPinKind & startFlag) != 0) targets &= myPinKind;
