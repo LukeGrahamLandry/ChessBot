@@ -39,41 +39,42 @@ pub const Stats = struct {
 const IM_MATED_EVAL: i32 = -1000000; // Add distance to prefer sooner mates
 const LOWEST_EVAL: i32 = -2000000;
 
-var theLists = &@import("common.zig").lists;
-var general_i = std.heap.GeneralPurposeAllocator(.{}) {};
-var evalGuesses = std.ArrayList(i32).init(general_i.allocator());
+pub const SearchGlobals = struct {
+    lists: ListPool,
+    evalGuesses: std.ArrayList(i32),
+    memoMap: MemoTable,
 
-// TODO: should use the std mutex but i'm guessing wasm freestanding wont have one? 
-var stuffInUse = false;
+    pub fn init(memoMapSizeMB: u64, alloc: std.mem.Allocator) !@This() {
+        return .{
+            .memoMap = try MemoTable.initWithCapacity(memoMapSizeMB, alloc),
+            .evalGuesses = try std.ArrayList(i32).initCapacity(alloc, 50),
+            .lists = try ListPool.init(alloc)
+        };
+    }
 
-pub fn bestMove(comptime opts: StratOpts, game: *Board, maxDepth: usize, timeLimitMs: i128) !Move {
-    // Because RAII stands for "the code runs when the code damn well pleases" and we don't like that in this household apparently. 
-    if (stuffInUse) return error.ThisIsntThreadSafe;
-    stuffInUse = true;
-    defer stuffInUse = false;
-    assert(memoMap != null);
+    pub fn resetMemoTable(self: *@This()) void {
+        for (0..self.memoMap.buffer.len) |i| {
+            self.memoMap.buffer[i].hash = 0;
+        }
+    }
+};
 
+pub fn bestMove(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, maxDepth: usize, timeLimitMs: i128) !Move {
     if (game.halfMoveDraw >= 100 or game.hasInsufficientMaterial() or game.lastMoveWasRepetition()) return error.GameOver; // Draw
     const me = game.nextPlayer;
 
     const startTime = nanoTimestamp();
     const endTime = startTime + (timeLimitMs * std.time.ns_per_ms);
-    var topLevelMoves = try movegen.possibleMoves(game, me, theLists);
-    defer theLists.release(topLevelMoves);
-
-    try evalGuesses.ensureTotalCapacity(topLevelMoves.items.len);
-    defer evalGuesses.clearRetainingCapacity();
-
-    // TODO: remove this. it used to remove illigal moves but now i dont generate them.
-    var m: usize = 0;
-    while (m < topLevelMoves.items.len) {
-        const move = topLevelMoves.items[m];
-        const unMove = game.play(move);
-        defer game.unplay(unMove);
-        try evalGuesses.append(game.simpleEval);
-        m += 1;
-    }
+    var topLevelMoves = try movegen.possibleMoves(game, me, &ctx.lists);
+    defer ctx.lists.release(topLevelMoves);
     if (topLevelMoves.items.len == 0) return error.GameOver;
+
+    try ctx.evalGuesses.ensureTotalCapacity(topLevelMoves.items.len);
+    defer ctx.evalGuesses.clearRetainingCapacity();
+
+    for (topLevelMoves.items) |_| {
+        try ctx.evalGuesses.append(0);
+    }
 
     var thinkTime: i128 = -1;
     var favourite: Move = topLevelMoves.items[0];
@@ -87,7 +88,7 @@ pub fn bestMove(comptime opts: StratOpts, game: *Board, maxDepth: usize, timeLim
         for (topLevelMoves.items, 0..) |move, i| {
             const unMove = game.play(move);
             defer game.unplay(unMove);
-            const eval = walkEval(opts, game, @intCast(depth), alpha, beta, theLists, &stats, false, endTime) catch |err| {
+            const eval = walkEval(opts, ctx, game, @intCast(depth), alpha, beta, &stats, false, endTime) catch |err| {
                 if (err == error.ForceStop) {
                     // If we ran out of time, just return the best result from the last search.
                     if (nanoTimestamp() >= endTime) {
@@ -102,7 +103,7 @@ pub fn bestMove(comptime opts: StratOpts, game: *Board, maxDepth: usize, timeLim
                 }
                 return err;
             };
-            evalGuesses.items[i] = eval;
+            ctx.evalGuesses.items[i] = eval;
 
             // Update a/b to pass better ones to walkEval but it would never be able to prune here because the we're always the same player.
             switch (me) {
@@ -117,7 +118,7 @@ pub fn bestMove(comptime opts: StratOpts, game: *Board, maxDepth: usize, timeLim
             }
         }
 
-        std.sort.insertionContext(0, topLevelMoves.items.len, PairContext{ .moves = topLevelMoves.items, .evals = evalGuesses.items, .me = me });
+        std.sort.insertionContext(0, topLevelMoves.items.len, PairContext{ .moves = topLevelMoves.items, .evals = ctx.evalGuesses.items, .me = me });
         thinkTime = nanoTimestamp() - startTime;
         favourite = topLevelMoves.items[0];
 
@@ -147,28 +148,14 @@ const PairContext = struct {
     }
 };
 
-var memoMap: ?MemoTable = null;
 pub var forceStop = false;
-
-pub fn resetMemoTable() void {
-   for (0..memoMap.?.buffer.len) |i| {
-        memoMap.?.buffer[i].hash = 0;
-    }
-}
-
-pub fn initMemoTable(memoMapSizeMB: u64) !void {
-    if (memoMap) |*memo| {
-        memo.deinit(std.heap.page_allocator);
-    }
-    memoMap = try MemoTable.initWithCapacity(memoMapSizeMB, std.heap.page_allocator);
-}
 
 // https://en.wikipedia.org/wiki/Alpha%E2%80%93beta_pruning
 // The alpha-beta values effect lower layers, not higher layers, so passed by value.
 // Returns the absolute eval of <game>, positive means white is winning, after game.nextPlayer makes a move.
 // Returns error.GameOver if there were no possible moves or other draws.
 // TODO: redo my captures only thing to be lookForPeace and only simpleEval if no captures on the board
-pub fn walkEval(comptime opts: StratOpts, game: *Board, remaining: i32, alphaIn: i32, betaIn: i32, lists: *ListPool, stats: *Stats, comptime capturesOnly: bool, endTime: i128) error{ OutOfMemory, ForceStop, Overflow }!i32 {
+pub fn walkEval(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, remaining: i32, alphaIn: i32, betaIn: i32, stats: *Stats, comptime capturesOnly: bool, endTime: i128) error{ OutOfMemory, ForceStop, Overflow }!i32 {
     const me = game.nextPlayer;
     if (forceStop) return error.ForceStop;
     if (remaining == 0) {
@@ -183,7 +170,7 @@ pub fn walkEval(comptime opts: StratOpts, game: *Board, remaining: i32, alphaIn:
 
     var cacheHit: ?MemoValue = null;
     if (opts.doMemo) {
-        if (memoMap.?.get(game)) |cached| {
+        if (ctx.memoMap.get(game)) |cached| {
             if (cached.remaining >= remaining) {
                 if (comptime stats.use) stats.memoHits += 1;
                 if (!opts.doPruning) assert(cached.kind == .Exact);
@@ -202,8 +189,8 @@ pub fn walkEval(comptime opts: StratOpts, game: *Board, remaining: i32, alphaIn:
     var alpha = alphaIn;
     var beta = betaIn;
 
-    var moves = try movegen.possibleMoves(game, me, lists);
-    defer lists.release(moves);
+    var moves = try movegen.possibleMoves(game, me, &ctx.lists);
+    defer ctx.lists.release(moves);
 
     if (moves.items.len == 0) { // <me> can't make any moves. Either got checkmated or its a draw.
         if (game.nextPlayerInCheck()) {
@@ -230,7 +217,7 @@ pub fn walkEval(comptime opts: StratOpts, game: *Board, remaining: i32, alphaIn:
             if (remaining > 1) {
                 const unMove = game.play(move);
                 defer game.unplay(unMove);
-                break :e try walkEval(opts, game, remaining - 1, alpha, beta, lists, stats, capturesOnly, endTime);
+                break :e try walkEval(opts, ctx, game, remaining - 1, alpha, beta, stats, capturesOnly, endTime);
             } else {
                 // Don't need to do the extra work to prep for legal move generation if this is a leaf node. 
                 // This trick was the justification for switching from pseudo-legal generation. 
@@ -263,7 +250,7 @@ pub fn walkEval(comptime opts: StratOpts, game: *Board, remaining: i32, alphaIn:
     }
 
     if (opts.doMemo) { // Can never get here if forceStop=true.
-        memoMap.?.setAndOverwriteBucket(game, .{ .eval = bestVal, .remaining = @intCast(remaining), .move = foundMove.?, .kind = memoKind });
+        ctx.memoMap.setAndOverwriteBucket(game, .{ .eval = bestVal, .remaining = @intCast(remaining), .move = foundMove.?, .kind = memoKind });
     }
 
     return bestVal;

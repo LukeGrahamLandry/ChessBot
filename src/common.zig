@@ -8,25 +8,22 @@ pub const assert = std.debug.assert;
 
 const ListPool = @import("movegen.zig").ListPool;
 const Learned = @import("learned.zig");
+const SearchGlobals = @import("search.zig").SearchGlobals;
 
-// TODO: Having the magic global variable is awkward. Could pass around a magic search context struct that includes the memo map as well. 
-//       I can't decide if I like the simplicity of global variables when there's only one instance anyway or if explicitly passing it to people is more clear. 
-//       Return it from setup so you can't forget to call. 
 var general_i = std.heap.GeneralPurposeAllocator(.{}) {};
-pub var lists: ListPool = undefined;
 
-pub fn setup(memoSizeMB: usize) void {
-    // var t = Timer.start();
-    if (!isTest) print("Zobrist Xoshiro256 seed is {any}.\n", .{Learned.ZOIDBERG_SEED});
+// TODO: I like the idea of all memory allocation happening here and nobody else ever having an allocator. 
+pub fn setup(memoSizeMB: usize) SearchGlobals {
+    initZoidberg();
+    @import("precalc.zig").initTables(general_i.allocator()) catch panic("OOM attack tables", .{});
+    return SearchGlobals.init(memoSizeMB, general_i.allocator()) catch panic("OOM memo", .{});
+}
+
+pub fn initZoidberg() void {
     var rand: std.rand.Xoshiro256 = .{ .s = Learned.ZOIDBERG_SEED };
     for (&Learned.ZOIDBERG) |*ptr| {
         ptr.* = rand.next();
     }
-
-    lists = ListPool.init(general_i.allocator()) catch panic("OOM list pool", .{});
-    @import("search.zig").initMemoTable(memoSizeMB) catch panic("OOM memo", .{});
-    @import("precalc.zig").initTables(general_i.allocator()) catch panic("OOM attack tables", .{});
-    // print("Setup finished in {} ms.\n", .{t.get()});
 }
 
 pub fn nanoTimestamp() i128 {
@@ -41,10 +38,10 @@ pub const Timer = struct {
     t: i128,
 
     pub fn start() Timer {
-        return .{ .t = std.time.nanoTimestamp() };
+        return .{ .t = nanoTimestamp() };
     }
 
     pub fn get(self: Timer) i128 {
-        return @divFloor((std.time.nanoTimestamp() - self.t), @as(i128, std.time.ns_per_ms));
+        return @divFloor((nanoTimestamp() - self.t), @as(i128, std.time.ns_per_ms));
     }
 };

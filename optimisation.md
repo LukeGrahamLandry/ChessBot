@@ -44,11 +44,34 @@ Needs `brew install gperftools` and `brew install graphviz`.
 - Should try to get used to the auto-format. 
 - Is there an IDE that can actually report errors? VS code with Zig Language seems to get very confused. Completions for enums and struct initialization seem to just give things from all your types? 
 
+## Better hashing for movegen lookup 
+
+Looking at profiler, 5% of time is in wyhash (default std autohash). 
+
+Read this: https://probablydance.com/2018/06/16/fibonacci-hashing-the-optimization-that-the-world-forgot-or-a-better-alternative-to-integer-modulo/
+
+Writing my own hash table that does that and iteritivly finds the size that allows no collissions is much faster but uses R=58176 KB, B=15230 KB. ~140 MNPS to ~160 MNPS which strangely is more than the 5% from profiler. Maybe that wasn't counting some inlined stuff or maybe similar to the unsafe lists, it helps to have something that can't fail so less conditions even if its super predicatable, idk. Probably even 10% usage doesn't guarentee no collissions so it was occasonally doing a branchy path. 
+
+Since the attack table for each square has different sizes and different mask bits of the keys they care about (the unblocked targets), it seems like maybe they would have different best numbers for the hash function avoiding collissions. If it finds any improvements, it logs them so I can update the hardcoded ones going forward. Always just trying it on the one with the max size because that would be the one with the most to gain since size is exponential with number of bits. 
+
+~60000 runs got it to R=7936KB, B=3710KB. 10000000 runs got it to R=7488KB, B=1662KB. Deminishing returns go brrr. A bunch are still the golden ratio which is cool. But actually just the top number got stuck so it was just ignoring the lower ones. Doing another 1M runs picking a random index to try each time got R=2960KB, B=432KB. Another 9M to R=2496KB, B=387KB. Pleasingly that's around 10% of the default std one where I was asking to aim for 90% empty space. So it's approching perfectly packed (other than the power of 2 thing)? 
+
+Wondered if some of those numbers were just intrinsically better so tried each at each index. Only two rook ones were best at multiple indexes. Got it to R=2464 KB, B=387 KB. Might as well just try every new number at every index. 
+
+Now raw movegen is twice as fast as when I started doing perft stuff. Maybe its time to admit this doesn't make me any better at chess and start trying to improve the evaluation function. Finding numbers that use less memory is pleasing but doesn't matter, tables are calculated at runtime anyway. 
+
 ## Unsafe lists
 
-## Lookup tables of moves
+## Lookup tables for movegen
 
-Instead of the many for loops, make a hashmap of which squares a rook (or bishop) can move to given its starting position and which squares have pieces blocking it. At first I disregared this idea because there'd be 2^64 aranegments of blocking pieces which would be way too much memory but you only care about the squares you can actually move to so you can mask out all but 14 for each starting position. You also don't care about the things on the very edge because they can't block you from anything. Got single threaded perft from 74 MNPS to 122 MNPS. And the thing I really like is that now 5% of the time is in wyhash.hash which seems like a more approachable problem than "hmmm, movegen slow because its making decisions". 
+Instead of the many for loops, make a hashmap of which squares a rook (or bishop) can move to given its starting position and which squares have pieces blocking it. At first I disregared this idea because there'd be 2^64 aranegments of blocking pieces which would be way too much memory but you only care about the squares you can actually move to so you can mask out all but 14 for each starting position. You also don't care about the things on the very edge because they can't block you from anything. 
+
+| Load % |  R KB | B KB | MNPS |
+| ------ | ----- | -----| ---- |
+|   80   | 3200  | 572  | 120  |
+|   10   | 25600 | 4576 | 140  |
+
+Lower target fill is much faster. Confirms the intuition that collissions are very bad so can trade space for time. The thing I really like is that now the profiler says 5% of the time is in wyhash.hash which seems like a more approachable problem than "hmmm, movegen slow because its making decisions".
 
 Another thing I noticed while reworking over all the movegen, is I forgot to put captures at the front of the list for knights and kings so fixing that helped pruning and now replay game bench is 1.5x as fast as well. Makes perft a little slower but that's not what I care about. 
 

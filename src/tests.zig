@@ -14,7 +14,6 @@ const assert = @import("common.zig").assert;
 const setup = @import("common.zig").setup;
 const Timer = @import("bench.zig").Timer;
 const ListPool = @import("movegen.zig").ListPool;
-var theLists = &@import("common.zig").lists;
 const countPossibleGames = @import("perft.zig").countPossibleGames;
 
 pub const PerftResult = struct {
@@ -29,7 +28,6 @@ const defaultMemoMB = 100;
 // Can call this in a loop to test speed of raw movegen.
 // TODO: parse from string like big perft does
 test "count possible games" {
-    setup(defaultMemoMB);
     // https://en.wikipedia.org/wiki/Shannon_number
     try (PerftTest{
         .possibleGames = &[_]u64{ 20, 400, 8902, 197281, 4865609 }, // 119060324, 3195901860 is too slow to deal with but passes
@@ -38,18 +36,15 @@ test "count possible games" {
     }).run();
 }
 
-
 test "another perft" {
-    setup(defaultMemoMB);
     // http://www.rocechess.ch/perft.html
     try (PerftTest{
         .possibleGames = &[_]u64{ 48, 2039, 97862, 4085603 },
-        .possibleMates = &[_]u64{0,0,0,0},
+        .possibleMates = &[_]u64{ 0, 0, 0, 0 },
         .fen = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
         .countMates = false,
     }).run();
 }
-
 
 // This relies on tests not being run in parallel!
 var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -58,20 +53,21 @@ pub const PerftTest = struct {
     possibleGames: []const u64,
     possibleMates: []const u64,
     fen: []const u8,
-    countMates: bool = false,  // TODO: bring back
+    countMates: bool = false, // TODO: bring back
 
     pub fn run(self: PerftTest) !void {
+        var ctx = setup(0);
         const initial = try Board.fromFEN(self.fen);
         var game = initial;
         for (self.possibleGames, self.possibleMates, 1..) |expectedGames, expectedMates, i| {
             const start = std.time.nanoTimestamp();
-            const found = try countPossibleGames(&game, .White, i, theLists, self.countMates);
+            const found = try countPossibleGames(&game, .White, i, &ctx.lists, self.countMates);
             const expected: PerftResult = .{ .games = expectedGames, .checkmates = (if (self.countMates) expectedMates else 0) };
             try std.testing.expectEqual(expected.games, found.games);
             if (!@import("builtin").is_test) print("- [{s}] Explored depth {} in {}ms.\n", .{ self.fen, i, @divFloor((std.time.nanoTimestamp() - start), @as(i128, std.time.ns_per_ms)) });
 
             // Ensure that repeatedly calling unplay didn't mutate the board.
-            game.pastBoardHashes = initial.pastBoardHashes;  // undoing leaves junk in extra array space 
+            game.pastBoardHashes = initial.pastBoardHashes; // undoing leaves junk in extra array space
             try std.testing.expectEqual(game, initial);
             _ = arena.reset(.retain_capacity);
         }
@@ -79,7 +75,6 @@ pub const PerftTest = struct {
 };
 
 test "perft 3" {
-    setup(defaultMemoMB);
     // https://www.chessprogramming.org/Perft_Results
     try (PerftTest{
         .possibleGames = &[_]u64{ 14, 191, 2812, 43238, 674624 }, // 11030083, 178633661 slow but passes
@@ -95,8 +90,8 @@ test "write fen" {
 }
 
 test "sane zobrist numbers" {
-    setup(defaultMemoMB);
-    try expectNoDuplicates(u64, &@import("common.zig").Learned.ZOIDBERG);
+    _ = setup(0);
+    try expectNoDuplicates(u64, &@import("learned.zig").ZOIDBERG);
 }
 
 test "dir" {
@@ -127,11 +122,12 @@ const bestMoveTests = [_]TestCase{
 };
 
 fn doesStratMakeBestMove(comptime opts: StratOpts) !void {
+    var ctx = setup(0);
     for (bestMoveTests) |position| {
-        resetMemoTable();
+        ctx.resetMemoTable();
         var game = try Board.fromFEN(position.fen);
         const initialHash = game.zoidberg;
-        const move = try bestMove(opts, &game, maxDepth, maxTime);
+        const move = try bestMove(opts, &ctx, &game, maxDepth, maxTime);
 
         if (!std.mem.eql(u8, position.best[0..4], writeAlgebraic(move)[0..4])) {
             game.debugPrint();
@@ -146,7 +142,6 @@ fn doesStratMakeBestMove(comptime opts: StratOpts) !void {
 }
 
 test "default strat makes best move" {
-    setup(defaultMemoMB);
     try doesStratMakeBestMove(.{});
 }
 
@@ -154,17 +149,14 @@ test "default strat makes best move" {
 // If only one part is wrong, the test with it disabled will still pass.
 
 test "no memo makes best move" {
-    setup(defaultMemoMB);
     try doesStratMakeBestMove(.{ .doMemo = false });
 }
 
 test "no prune makes best move" {
-    setup(defaultMemoMB);
     try doesStratMakeBestMove(.{ .doPruning = false });
 }
 
 test "no iter makes best move" {
-    setup(defaultMemoMB);
     try doesStratMakeBestMove(.{ .doIterative = false });
 }
 

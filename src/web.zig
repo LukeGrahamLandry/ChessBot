@@ -11,8 +11,9 @@ const Learned = @import("learned.zig");
 const print = consolePrint;
 const ListPool = @import("movegen.zig").ListPool;
 const movegen = @import("movegen.zig");
+const SearchGlobals = @import("search.zig").SearchGlobals;
 
-var theLists = &@import("common.zig").lists;
+var ctx: SearchGlobals = undefined;
 
 const walloc = std.heap.wasm_allocator;
 
@@ -78,7 +79,7 @@ export fn destroyBoard(board: *Board) void {
 }
 
 export fn setup() void {
-    @import("common.zig").setup(100);  // TODO: slider for size
+    ctx = @import("common.zig").setup(100);  // TODO: slider for size
 }
 
 export fn restartGame(board: *Board) void {
@@ -92,7 +93,7 @@ export fn getBoardData(board: *Board) [*]u8 {
 
 /// Returns result code or game over string length
 export fn playBotMove(board: *Board, msgPtr: [*] u8, maxLen: u32) i32 {
-    const move = search.bestMove(.{}, board, maxDepth, maxTimeMs) catch |err| {
+    const move = search.bestMove(.{}, &ctx, board, maxDepth, maxTimeMs) catch |err| {
         switch (err) {
             error.GameOver => {
                 // Engine couldn't move.
@@ -112,7 +113,7 @@ export fn playBotMove(board: *Board, msgPtr: [*] u8, maxLen: u32) i32 {
 }
 
 fn checkGameOver(board: *Board, msgPtr: [*] u8, maxLen: u32) i32 {
-    const reason = board.gameOverReason(theLists) catch return -1;
+    const reason = board.gameOverReason(&ctx.lists) catch return -1;
     if (reason == .Continue) return 0;
     const str = @tagName(reason);
     print("Game over: {s}\n", .{str});
@@ -126,11 +127,11 @@ export fn getPossibleMovesBB(board: *Board, from: i32) u64 {
     if (piece.empty()) return 0;
     var result: u64 = 0;
     // TODO: check if in check and not moving king here because its done in genAllMoves
-    const allMoves = movegen.collectOnePieceMoves(board, @intCast(from), theLists) catch |err| {
+    const allMoves = movegen.collectOnePieceMoves(board, @intCast(from), &ctx.lists) catch |err| {
         logErr(err, "getPossibleMoves");
         return 0;
     };
-    defer theLists.release(allMoves);
+    defer ctx.lists.release(allMoves);
     for (allMoves.items) |move| {
         result |= @as(u64, 1) << @intCast(move.to);
     }
@@ -165,7 +166,7 @@ export fn getMaterialEval(board: *Board) i32 {
 export fn playHumanMove(board: *Board, fromIndex: u32, toIndex: u32, msgPtr: [*] u8, maxLen: u32) i32 {
     if (fromIndex >= 64 or toIndex >= 64) return @intFromEnum(JsResult.Error);
 
-    _ = @import("board.zig").inferPlayMove(board, fromIndex, toIndex, theLists) catch |err| {
+    _ = @import("board.zig").inferPlayMove(board, fromIndex, toIndex, &ctx.lists) catch |err| {
         switch (err) {
             error.IllegalMove => return @intFromEnum(JsResult.IllegalMove),
             else => logErr(err, "playHumanMove"),

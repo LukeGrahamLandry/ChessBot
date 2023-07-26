@@ -12,6 +12,7 @@ const OldMove = @import("board.zig").OldMove;
 const inferPlayMove = @import("board.zig").inferPlayMove;
 const Learned = @import("learned.zig");
 const assert = @import("common.zig").assert;
+const ListPool = @import("movegen.zig").ListPool;
 
 pub fn main() !void {
     @panic("TODO: let my engine talk via uci");
@@ -319,7 +320,7 @@ pub fn writeFen(self: *const Board, writer: anytype) !void {
     try buffer.flush();
 }
 
-pub fn playAlgebraic(board: *Board, moveStr: [5]u8) !OldMove {
+pub fn playAlgebraic(board: *Board, moveStr: [5]u8, lists: *ListPool) !OldMove {
     // TODO: promote
     const fromFile = try letterToFile(moveStr[0]);
     const fromRank = try letterToRank(moveStr[1]);
@@ -327,7 +328,7 @@ pub fn playAlgebraic(board: *Board, moveStr: [5]u8) !OldMove {
     const toRank = try letterToRank(moveStr[3]);
     const fromIndex = fromRank * 8 + fromFile;
     const toIndex = toRank * 8 + toFile;
-    return try inferPlayMove(board, fromIndex, toIndex, &@import("common.zig").lists);
+    return try inferPlayMove(board, fromIndex, toIndex, lists);
 }
 
 pub fn writeAlgebraic(move: Move) [5]u8 {

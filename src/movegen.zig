@@ -450,7 +450,7 @@ pub const ChecksInfo = struct {
     // If true, the king must move to a safe square, because multiple enemies can't be blocked/captured. 
     doubleCheck: bool = false,  // 64 bit boolean sad padding noises but we never put this in an array 
     // Where the enemy can attack. The king may not move here. 
-    // Note: this might not include captures that can't take kings like french move or capture by other king. 
+    // Note: this might not include captures that can't take kings like french move. 
     targetedSquares: u64 = 0,
 
     // Pin lines like above but for enemy pawn that could have be captured en-passant but might reveal a check. 
@@ -571,10 +571,7 @@ pub fn getChecksInfo(game: *Board, defendingPlayer: Colour) ChecksInfo {
 
     // Can never be in check from the other king. Don't need to consider it. 
 
-    var out: GetAttackSquares = .{};
-    // Can't fail because this consumer doesn't allocate memory 
-    genPossibleMoves(&out, game, defendingPlayer.other()) catch @panic("unreachable alloc");
-    result.targetedSquares = out.bb;
+    result.targetedSquares = getTargetedSquares(game, defendingPlayer.other());
 
     if (result.doubleCheck){  // Must move king. 
         result.blockSingleCheck = 0;
@@ -604,6 +601,14 @@ pub fn getChecksInfo(game: *Board, defendingPlayer: Colour) ChecksInfo {
     }
 
     return result;
+}
+
+// TODO: this doesnt include french move because this used to just be for detecting checks. 
+pub fn getTargetedSquares(game: *Board, attacker: Colour) u64 {
+    var out: GetAttackSquares = .{};
+    // Can't fail because this consumer doesn't allocate memory 
+    genPossibleMoves(&out, game, attacker) catch @panic("unreachable alloc");
+    return out.bb;
 }
 
 // TODO: This is fricken branch town. Is there a better way to do this? 

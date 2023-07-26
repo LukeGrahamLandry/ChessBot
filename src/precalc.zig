@@ -2,9 +2,11 @@ const std = @import("std");
 const Board = @import("board.zig").Board;
 const printBitBoard = @import("movegen.zig").printBitBoard;
 const print = @import("common.zig").print;
+const panic = @import("common.zig").panic;
 const isWasm = @import("builtin").target.isWasm();
 const Learned = @import("learned.zig");
 
+// This is immutable so multiple threads can share one. 
 pub var tables: Tables = undefined;
 
 pub fn initTables(alloc: std.mem.Allocator) !void {
@@ -26,14 +28,19 @@ const Tables = struct {
 
 // Use the hardcoded java primes to build an attack table. 
 // Doesn't need to try increasing table sizes because the correct size for no collissions given that hasher is precalculated. 
+// Maps the arangement of blocking pieces to the squares you can move to. 64 of them, one for each starting square. 
 fn makeSliderAttackTable(alloc: std.mem.Allocator, comptime possibleTargets: fn (u64, u64, comptime bool) u64, sizes: [64] u7, magic: [64] u64) !AttackTable {
     var result: AttackTable = undefined;
     var totalSize: usize = 0;
     for (0..64) |i| {
-        result[i] = (try fillSliderTable(i, magic[i], sizes[i], alloc, possibleTargets)).?;
-        totalSize += result[i].buffer.len * @sizeOf(u64) / 1024;
+        if (try fillSliderTable(i, magic[i], sizes[i], alloc, possibleTargets)) |table| {
+            result[i] = table;
+            totalSize += result[i].buffer.len * @sizeOf(u64) / 1024;
+        } else {
+            panic("Table {} had collissions. Precalculated size {} was wrong.", .{ i, sizes[i] });
+        }
     }
-    print("Slider attack table size: {} KB.\n", .{ totalSize });
+    // print("Slider attack table size: {} KB.\n", .{ totalSize });
     return result;
 }
 
@@ -52,8 +59,6 @@ pub fn main() !void {
 fn findBetterSliderAttackTable(alloc: std.mem.Allocator, oldSizes: [64] u7, oldMagic: [64] u64, comptime possibleTargets: fn (u64, u64, comptime bool) u64, comptime name: [] const u8) !void {
     var magic = oldMagic;
     var sizes = oldSizes;
-    var totalSize: usize = 0;
-    _ = totalSize;
     var foundAny = false;
     
     var seed: u64 = undefined;
@@ -61,48 +66,52 @@ fn findBetterSliderAttackTable(alloc: std.mem.Allocator, oldSizes: [64] u7, oldM
     var rng = std.rand.DefaultPrng.init(seed);
 
     var arena = std.heap.ArenaAllocator.init(alloc);
-    for (0..10000) |_| {
-        // Higher bits is exponentially more memory so always work on improving the worst table. 
-        const i = maxIndex(u7, &sizes);
+    for (0..1000) |_| {
         const newMagic = rng.next();
-
-        // See how good this number is. Don't care if its just equal to the old one. 
-        var bits: u7 = sizes[i] - 1;
-        while (bits > 1) {
-            if (try fillSliderTable(i, newMagic, bits, arena.allocator(), possibleTargets)) |table| {
-                _ = table;
-                // Save it if its better than the old one. 
-                magic[i] = newMagic;
-                sizes[i] = bits;
-                foundAny = true;
-                // See if its actually even better than that and allows a smaller table. 
-                bits -= 1;
+        // Higher bits is exponentially more memory so always work on improving the worst table. 
+        // const i = maxIndex(u7, &sizes);
+        // the highest got stuck, might as well give the rest a chance
+        for (0..64) |i| {
+            // See how good this number is. Don't care if its just equal to the old one. 
+            var bits: u7 = sizes[i] - 1;
+            while (bits > 1) {
                 _ = arena.reset(.retain_capacity);
-            } else {
-                break;
+                if (try fillSliderTable(i, newMagic, bits, arena.allocator(), possibleTargets)) |table| {
+                    _ = table;
+                    // Save it if its better than the old one. 
+                    magic[i] = newMagic;
+                    sizes[i] = bits;
+                    foundAny = true;
+                    // See if its actually even better than that and allows a smaller table. 
+                    bits -= 1;
+                } else {
+                    break;
+                }
             }
-        }
+        }   
     }
 
     arena.deinit();
-
     if (foundAny) {
-        print("pub const " ++ name ++ "_HASH_MUL = [64] u64 {{", .{});
-        for (magic, 0..) |x, i| {
-            print(" {}", .{ x });
-            if (i != 63) print(",", .{});
-        }
-        print(" }};\n", .{});
-        print("pub const " ++ name ++ "_SIZES = [64] u7 {{", .{});
-        for (sizes, 0..) |x, i| {
-            print(" {}", .{ x });
-            if (i != 63) print(",", .{});
-        }
-        print(" }};\n", .{});
+        printArrays(sizes, magic, name);
     } else {
         print("Didn't find anything good.\n", .{});
     }
-    
+}
+
+fn printArrays(sizes: [64] u7, magic: [64] u64, comptime name: [] const u8) void {
+    print("pub const " ++ name ++ "_HASH_MUL = [64] u64 {{", .{});
+    for (magic, 0..) |x, i| {
+        print(" {}", .{ x });
+        if (i != 63) print(",", .{});
+    }
+    print(" }};\n", .{});
+    print("pub const " ++ name ++ "_SIZES = [64] u7 {{", .{});
+    for (sizes, 0..) |x, i| {
+        print(" {}", .{ x });
+        if (i != 63) print(",", .{});
+    }
+    print(" }};\n", .{});
 }
 
 fn maxIndex(comptime T: type, items: [] T) usize {
@@ -251,6 +260,7 @@ const VisitBitPermutations = struct {
         }
 
         // TODO: why doesnt it know when to stop!!!!!
+        //       it seems like this would indicate a crippling mistake but it's clearly fine. 
         if (self.count == self.expected) return null;
         self.count += 1;
 
@@ -442,10 +452,12 @@ pub const OneTable = struct {
     magic: u64,
     const EMPTY: u64 = ~@as(u64, 0);
 
-    pub fn init(alloc: std.mem.Allocator, bits: u7, magic: u64) !@This() {
+    fn init(alloc: std.mem.Allocator, bits: u7, magic: u64) !@This() {
         return .{ .bitsInv=64-bits, .buffer = try allocOnes(alloc, bits), .magic=magic};
     }
 
+    // Zero is a possible value since there might be no possible moves so have the default be all ones 
+    // (nobody can teleport to all squares of the board), so I can detect it while building the map. 
     fn allocOnes(alloc: std.mem.Allocator, bits: u7) ![]u64 {
         var buffer = try alloc.alloc(u64, try std.math.powi(usize, 2, bits));
         for (buffer) |*e| {
@@ -454,9 +466,11 @@ pub const OneTable = struct {
         return buffer;
     }
 
-    // Returns false on collission. 
+    // Returns false on collission. Only used while building the table at the very start. 
     fn set(self: *@This(), key: u64, value: u64) bool {
         const prevVal = self.get(key);
+        // if they collide but the values happen to be the same that's fine. 
+        // idk if that happens often. feels like it should because of extra dudes past the one that actually blocked you? 
         if (prevVal != EMPTY and prevVal != value) return false;
         self.buffer[self.indexOf(key)] = value;
         return true;
@@ -471,6 +485,7 @@ pub const OneTable = struct {
         return @intCast(index);
     }
     
+    /// Don't forget to apply the mask that removes impossible targets from the key first!
     pub fn get(self: *const @This(), key: u64) u64 {
         return self.buffer[self.indexOf(key)];
     }

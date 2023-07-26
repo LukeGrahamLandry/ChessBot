@@ -1,6 +1,6 @@
-//! Runs perft on the positions from perft.txt. 
-//! If it fails, ask stockfish to list all the possible moves at a each depth, 
-//! and follow the tree down to find the exact position with the bug. 
+//! Runs perft on the positions from perft.txt.
+//! If it fails, ask stockfish to list all the possible moves at a each depth,
+//! and follow the tree down to find the exact position with the bug.
 
 const std = @import("std");
 const Board = @import("board.zig").Board;
@@ -22,7 +22,7 @@ const ListPool = @import("movegen.zig").ListPool;
 const doFishDebugOnFail = true;
 const positionData = @embedFile("perft.txt");
 
-// For things I don't care about freeing. 
+// For things I don't care about freeing.
 var foreverArena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 var forever = foreverArena.allocator();
 
@@ -30,13 +30,13 @@ const Shared = std.atomic.Atomic(usize);
 
 // TODO: CLI divide command like the fish
 pub fn main() !void {
-    @import("common.zig").setup(0);
+    _ = @import("common.zig").setup(0);
     const perfts = (try parsePerfts()).items;
-    
-    // For best parallelism, don't put the longest tasks at the end. You don't want time at the end where only one therad is working. 
+
+    // For best parallelism, don't put the longest tasks at the end. You don't want time at the end where only one therad is working.
     std.sort.insertion(Perfts, perfts, {}, lessThanFn);
 
-    const cores = 1;
+    const cores = 4;
     var taskIndex = Shared.init(0);
     var workers = try forever.alloc(Worker, cores);
     for (0..cores) |i| {
@@ -45,7 +45,7 @@ pub fn main() !void {
             .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
             .lists = try ListPool.init(forever),
             .fish = try Stockfish.init(forever),
-            .thread = try std.Thread.spawn(.{}, workerFn, .{ &workers[i] }),
+            .thread = try std.Thread.spawn(.{}, workerFn, .{&workers[i]}),
             .nextTask = &taskIndex,
             .tasks = perfts,
         };
@@ -63,10 +63,9 @@ pub fn main() !void {
     }
     print("; idle thread time.\n", .{});
 
-
-    if (failed == 0){
+    if (failed == 0) {
         print("Memory usage: {} KB.\n", .{foreverArena.queryCapacity() / 1024});
-        print("Passed All {}.\n", .{ perfts.len });
+        print("Passed All {}.\n", .{perfts.len});
     } else {
         print("Failed {}/{}.\n", .{ failed, perfts.len });
     }
@@ -74,8 +73,8 @@ pub fn main() !void {
 
 pub const Perfts = struct {
     fen: []const u8,
-    levels: [] Perft,
-    allCount: u64 // for sorting
+    levels: []Perft,
+    allCount: u64, // for sorting
 };
 
 pub const Perft = struct {
@@ -90,7 +89,7 @@ const Worker = struct {
     lists: ListPool,
     fish: Stockfish,
     nextTask: *Shared,
-    tasks: [] Perfts,
+    tasks: []Perfts,
     failedCount: u64 = 0,
     passedCount: u64 = 0,
     totalNodes: u64 = 0,
@@ -98,7 +97,7 @@ const Worker = struct {
 };
 
 fn workerFn(self: *Worker) !void {
-    std.time.sleep(50);  // Just make absolutly sure the other thread finishes setting the array. 
+    std.time.sleep(50); // Just make absolutly sure the other thread finishes setting the array.
     const startTime = std.time.nanoTimestamp();
     while (true) {
         const nextTask = self.nextTask.fetchAdd(1, .SeqCst);
@@ -110,15 +109,15 @@ fn workerFn(self: *Worker) !void {
             const nodes = (try countPossibleGames(&game, game.nextPlayer, perft.depth, &self.lists, false)).games;
             self.totalNodes += nodes;
             if (nodes != perft.nodes) {
-                print("[{}/{}] Failed {s} depth {}. Expected {} but found {}.\n", .{ nextTask+1, self.tasks.len, position.fen, perft.depth, perft.nodes, nodes });
+                print("[{}/{}] Failed {s} depth {}. Expected {} but found {}.\n", .{ nextTask + 1, self.tasks.len, position.fen, perft.depth, perft.nodes, nodes });
                 self.failedCount += 1;
                 if (doFishDebugOnFail) {
                     try debugPerft(&self.fish, position.fen, perft.depth, &self.arena, &self.lists);
                     _ = self.arena.reset(.retain_capacity);
                 }
-                break; // All deeper levels will also fail. 
+                break; // All deeper levels will also fail.
             } else {
-                print("[{}/{}] Passed {s} depth {}.\n", .{ nextTask+1, self.tasks.len, position.fen, perft.depth });
+                print("[{}/{}] Passed {s} depth {}.\n", .{ nextTask + 1, self.tasks.len, position.fen, perft.depth });
             }
         } else {
             self.passedCount += 1;
@@ -126,13 +125,13 @@ fn workerFn(self: *Worker) !void {
     }
 
     self.endTime = std.time.nanoTimestamp();
-    if (self.failedCount == 0){
+    if (self.failedCount == 0) {
         const ms = @divFloor((self.endTime - startTime), std.time.ns_per_ms);
-        print("Thread {} finished {} perfts in {}ms. {} nodes / second.\n", .{self.id, self.passedCount, ms, @divFloor(self.totalNodes * 1000, ms)});
+        print("Thread {} finished {} perfts in {}ms. {} nodes / second.\n", .{ self.id, self.passedCount, ms, @divFloor(self.totalNodes * 1000, ms) });
     }
 }
 
-// TODO: try using a memo table here as well. Obviously cheating if i'm just trying to brag about NPS numbers but would make the tests run faster and be an extra check for acidently making collissions more common. 
+// TODO: try using a memo table here as well. Obviously cheating if i'm just trying to brag about NPS numbers but would make the tests run faster and be an extra check for acidently making collissions more common.
 pub fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, lists: *ListPool, countMates: bool) !PerftResult {
     var results: PerftResult = .{};
     if (countMates) @panic("TODO: reimpl count mates");
@@ -140,7 +139,7 @@ pub fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, lists
 
     const allMoves = try movegen.possibleMoves(game, me, lists);
     defer lists.release(allMoves);
-    if (remainingDepth == 1) return .{ .games=allMoves.items.len, .checkmates=0};
+    if (remainingDepth == 1) return .{ .games = allMoves.items.len, .checkmates = 0 };
 
     for (allMoves.items) |move| {
         const unMove = game.play(move);
@@ -156,13 +155,13 @@ pub fn countPossibleGames(game: *Board, me: Colour, remainingDepth: usize, lists
 
 fn parsePerfts() !std.ArrayList(Perfts) {
     var all = std.ArrayList(Perfts).init(forever);
-    
+
     var lines = std.mem.splitScalar(u8, positionData, '\n');
     while (lines.next()) |line| {
         if (line.len == 0 or std.mem.startsWith(u8, line, "//")) continue;
         var parts = std.mem.splitScalar(u8, line, ';');
         const fen = parts.next() orelse unreachable;
-        _ = Board.fromFEN(fen) catch |err| std.debug.panic("{}. Failed to parse fen: {s}", .{err, fen});
+        _ = Board.fromFEN(fen) catch |err| std.debug.panic("{}. Failed to parse fen: {s}", .{ err, fen });
         var perfts = std.ArrayList(Perft).init(forever);
         var total: u64 = 0;
         while (parts.next()) |level| {
@@ -170,12 +169,12 @@ fn parsePerfts() !std.ArrayList(Perfts) {
             const depthInfo = info.next() orelse std.debug.panic("Failed to parse. {s}", .{line});
             const nodesInfo = info.next() orelse std.debug.panic("Failed to parse. {s}", .{line});
             try std.testing.expectEqual(depthInfo[0], 'D');
-            const depth = std.fmt.parseInt(u64, depthInfo[1..], 10) catch |err| std.debug.panic("{}. Failed to parse. {s}    LINE: {s}", .{err, depthInfo, line});
-            const nodes = std.fmt.parseInt(u64, nodesInfo, 10) catch |err| std.debug.panic("{}. Failed to parse. {s}    LINE: {s}", .{err, nodesInfo, line});
-            try perfts.append(.{ .depth=depth, .nodes=nodes } );
+            const depth = std.fmt.parseInt(u64, depthInfo[1..], 10) catch |err| std.debug.panic("{}. Failed to parse. {s}    LINE: {s}", .{ err, depthInfo, line });
+            const nodes = std.fmt.parseInt(u64, nodesInfo, 10) catch |err| std.debug.panic("{}. Failed to parse. {s}    LINE: {s}", .{ err, nodesInfo, line });
+            try perfts.append(.{ .depth = depth, .nodes = nodes });
             total += nodes;
         }
-        try all.append(.{ .fen=fen, .levels=try perfts.toOwnedSlice(), .allCount=total });
+        try all.append(.{ .fen = fen, .levels = try perfts.toOwnedSlice(), .allCount = total });
     }
 
     return all;
@@ -186,7 +185,7 @@ fn lessThanFn(ctx: void, lhs: Perfts, rhs: Perfts) bool {
     return lhs.allCount > rhs.allCount; // flipped cause ascending
 }
 
-fn debugPerft(fish: *Stockfish, fen: [] const u8, depth: u64, arena: *std.heap.ArenaAllocator, lists: *ListPool) !void {
+fn debugPerft(fish: *Stockfish, fen: []const u8, depth: u64, arena: *std.heap.ArenaAllocator, lists: *ListPool) !void {
     var board = try Board.fromFEN(fen);
     print("= Starting {s} = \n", .{fen});
     var foundProblem = false;
@@ -198,8 +197,8 @@ fn debugPerft(fish: *Stockfish, fen: [] const u8, depth: u64, arena: *std.heap.A
     print("= Finished {s} = \n", .{fen});
 }
 
-// TODO: Make ListPool generic over the element type and then I don't need an allocator here and can get rid of all the arenas. 
-//       Would mean not using the hash maps so should make sure it doesn't make it too slow. 
+// TODO: Make ListPool generic over the element type and then I don't need an allocator here and can get rid of all the arenas.
+//       Would mean not using the hash maps so should make sure it doesn't make it too slow.
 //       But the memory usage win for lots of threads is probably worth it.
 fn walkPerft(fish: *Stockfish, board: *Board, depth: u64, arena: *std.heap.ArenaAllocator, lists: *ListPool) !u64 {
     if (depth == 0) return 1;
@@ -207,23 +206,23 @@ fn walkPerft(fish: *Stockfish, board: *Board, depth: u64, arena: *std.heap.Arena
     var alloc = arena.allocator();
     const fen = try board.toFEN(alloc);
 
-    // First decide if this is the branch where we disagree about possible moves. 
-    // Can do that by using depth 1 because we don't care about the actual numbers yet. 
+    // First decide if this is the branch where we disagree about possible moves.
+    // Can do that by using depth 1 because we don't care about the actual numbers yet.
     const fishMoves = (try runFishPerft(fish, board, 1, alloc)).childCount;
     const myMoves = try movegen.possibleMoves(board, board.nextPlayer, lists);
     defer lists.release(myMoves);
 
     var missingMoves = false;
-    var myMovesSet = std.AutoHashMap([5] u8, void).init(alloc);
+    var myMovesSet = std.AutoHashMap([5]u8, void).init(alloc);
 
     // Do I have extra illegal moves?
     for (myMoves.items) |move| {
-        // Don't need to check that it's legal because comparing to stockfish will catch that mistake. 
+        // Don't need to check that it's legal because comparing to stockfish will catch that mistake.
         const text = try move.text();
         try myMovesSet.put(text, {});
         if (!fishMoves.contains(text)) {
             missingMoves = true;
-            print("[{}] ({s}) Found! I have move {s} but fish doesn't. \n", .{depth, fen, &text});
+            print("[{}] ({s}) Found! I have move {s} but fish doesn't. \n", .{ depth, fen, &text });
         }
     }
 
@@ -232,20 +231,20 @@ fn walkPerft(fish: *Stockfish, board: *Board, depth: u64, arena: *std.heap.Arena
     while (keys.next()) |info| {
         if (!myMovesSet.contains(info.*)) {
             missingMoves = true;
-            print("[{}] ({s}) Found! Fish has move {s} but I don't. \n", .{depth, fen, info});
+            print("[{}] ({s}) Found! Fish has move {s} but I don't. \n", .{ depth, fen, info });
         }
     }
 
-    // If we disagreed on moves, this level is the problem, don't need to keep going. 
+    // If we disagreed on moves, this level is the problem, don't need to keep going.
     if (missingMoves) {
         return error.FishDisagree;
     }
-    if (myMoves.items.len != fishMoves.count())  {
+    if (myMoves.items.len != fishMoves.count()) {
         panic("had same moves but different numbers. makes no sense!", .{});
     }
 
-    // We agree on which moves are possible from here but disagree on the total size of the tree. 
-    // Now need to decide which branch we disagree on by running both counts on a higher depth. 
+    // We agree on which moves are possible from here but disagree on the total size of the tree.
+    // Now need to decide which branch we disagree on by running both counts on a higher depth.
     // Recursivly repeat this whole process for each child.
     var myTotal: u64 = 0;
     for (myMoves.items) |myMove| {
@@ -253,29 +252,26 @@ fn walkPerft(fish: *Stockfish, board: *Board, depth: u64, arena: *std.heap.Arena
         defer board.unplay(unMove);
         const myCount = (try countPossibleGames(board, board.nextPlayer, depth - 1, lists, false)).games;
         const fishCount = try runFishPerftCountGames(fish, board, depth - 1, alloc);
-        if (myCount != fishCount){
-            // This branch is the problem. 
-            print("Disagree on count at depth {}: me:{} vs fish:{}. {s}\n", .{depth-1, myCount, fishCount, try board.toFEN(alloc)});
+        if (myCount != fishCount) {
+            // This branch is the problem.
+            print("Disagree on count at depth {}: me:{} vs fish:{}. {s}\n", .{ depth - 1, myCount, fishCount, try board.toFEN(alloc) });
             const calcCount = try walkPerft(fish, board, depth - 1, arena, lists);
-            if (calcCount != myCount) panic("countPossibleGames didnt match walkPerft: {} vs {}\n", .{ myCount, calcCount});
+            if (calcCount != myCount) panic("countPossibleGames didnt match walkPerft: {} vs {}\n", .{ myCount, calcCount });
         }
         myTotal += myCount;
-    }   
+    }
 
     return myTotal;
 }
 
-const FishResult = struct {
-    childCount: std.AutoHashMap([5] u8, u64),
-    total: u64
-};
+const FishResult = struct { childCount: std.AutoHashMap([5]u8, u64), total: u64 };
 
 fn runFishPerft(fish: *Stockfish, board: *Board, depth: u64, alloc: std.mem.Allocator) !FishResult {
     const fen = try board.toFEN(alloc);
-    try fish.send(.{ .SetPositionMoves = .{ .board = board, .moves=null }});
-    try fish.send(.{ .Go = .{ .perft = depth}});
+    try fish.send(.{ .SetPositionMoves = .{ .board = board, .moves = null } });
+    try fish.send(.{ .Go = .{ .perft = depth } });
     var total: u64 = 0;
-    var branches = std.AutoHashMap([5] u8, u64).init(alloc);
+    var branches = std.AutoHashMap([5]u8, u64).init(alloc);
     while (true) {
         const msg = fish.recieve() catch continue;
         switch (msg) {
@@ -300,8 +296,8 @@ fn runFishPerft(fish: *Stockfish, board: *Board, depth: u64, alloc: std.mem.Allo
 
 fn runFishPerftCountGames(fish: *Stockfish, board: *Board, depth: u64, alloc: std.mem.Allocator) !u64 {
     const fen = try board.toFEN(alloc);
-    try fish.send(.{ .SetPositionMoves = .{ .board = board, .moves=null }});
-    try fish.send(.{ .Go = .{ .perft = depth}});
+    try fish.send(.{ .SetPositionMoves = .{ .board = board, .moves = null } });
+    try fish.send(.{ .Go = .{ .perft = depth } });
     var total: u64 = 0;
     while (true) {
         const msg = fish.recieve() catch continue;
