@@ -6,7 +6,7 @@ const Move = @import("board.zig").Move;
 const search = @import("search.zig");
 const Timer = @import("common.zig").Timer;
 const GameOver = @import("board.zig").GameOver;
-const Magic = @import("common.zig").Magic;
+const Learned = @import("learned.zig");
 const assert = @import("common.zig").assert;
 const UCI = @import("uci.zig");
 

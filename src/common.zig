@@ -7,6 +7,7 @@ pub const panic = if (isWasm) @import("web.zig").webPanic else std.debug.panic;
 pub const assert = std.debug.assert;
 
 const ListPool = @import("movegen.zig").ListPool;
+const Learned = @import("learned.zig");
 
 // TODO: Having the magic global variable is awkward. Could pass around a magic search context struct that includes the memo map as well. 
 //       I can't decide if I like the simplicity of global variables when there's only one instance anyway or if explicitly passing it to people is more clear. 
@@ -16,9 +17,9 @@ pub var lists: ListPool = undefined;
 
 pub fn setup(memoSizeMB: usize) void {
     // var t = Timer.start();
-    if (!isTest) print("Zobrist Xoshiro256 seed is {any}.\n", .{Magic.ZOIDBERG_SEED});
-    var rand: std.rand.Xoshiro256 = .{ .s = Magic.ZOIDBERG_SEED };
-    for (&Magic.ZOIDBERG) |*ptr| {
+    if (!isTest) print("Zobrist Xoshiro256 seed is {any}.\n", .{Learned.ZOIDBERG_SEED});
+    var rand: std.rand.Xoshiro256 = .{ .s = Learned.ZOIDBERG_SEED };
+    for (&Learned.ZOIDBERG) |*ptr| {
         ptr.* = rand.next();
     }
 
@@ -46,35 +47,4 @@ pub const Timer = struct {
     pub fn get(self: Timer) i128 {
         return @divFloor((std.time.nanoTimestamp() - self.t), @as(i128, std.time.ns_per_ms));
     }
-};
-
-pub const Magic = struct {
-    // TODO: auto train against the fish to find the best settings. draw avoidence, square preference, etc.
-    // TODO: do I want these to be runtime configurable in the ui?
-
-    // Draws are bad if you're up material but good if you're down materal. Should probably have slight preference against because that's more fun.
-    // TODO: Changing this to not be zero will not work! Meed to multiply by the right dir() when using.
-    pub const DRAW_EVAL = 0;
-
-    // TODO: only good if there are pawns in front of you
-    pub const CASTLE_REWARD: i32 = 50;
-
-    // This gets optimised out if 0.
-    // Otherwise, super slow! Maybe because of the branch on colour for direction?
-    // Must be changing how it prunes cause doing bit magic for dir() is still slow.
-    // Tried turning off capture extend, still slower
-    // TODO: make sure it looses the extra points when the pawn dies
-    pub const PUSH_PAWN: i8 = 0;
-
-    // TODO: are there better numbers? experimentally run a bunch of games until I find the ones with least collissions?
-    /// Magic numbers for Zobrist hashing. I think I'm so funny.
-    /// https://en.wikipedia.org/wiki/Zobrist_hashing
-    pub var ZOIDBERG: [781]u64 = undefined;
-    pub const ZOIDBERG_SEED: [4]u64 = [4]u64{ 11196532868861123662, 6132230720027805519, 14166148882366595784, 2320488099995370816 };
-
-    // These indicate which segment of the Zobrist list is used for each feature of the board.
-    pub const ZOID_TURN_INDEX: usize = 0;
-    pub const ZOID_FRENCH_START: usize = 1;
-    pub const ZOID_CASTLE_START: usize = 9;
-    pub const ZOID_PIECE_START: usize = 13;
 };

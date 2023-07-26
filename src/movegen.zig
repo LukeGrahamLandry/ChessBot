@@ -1,7 +1,7 @@
 //! Generating the list of possible moves for a position.
 
 const std = @import("std");
-const Magic = @import("common.zig").Magic;
+const Learned = @import("learned.zig");
 const print = @import("common.zig").print;
 const assert = @import("common.zig").assert;
 const panic = @import("common.zig").panic;
@@ -358,7 +358,7 @@ const CollectMoves = struct {
         if ((board.checks.blockSingleCheck & toFlag) == 0) return;
         if ((board.checks.pinsByRook & fromFlag) != 0 and (board.checks.pinsByRook & toFlag) == 0) return;
         
-        const move: Move = .{ .from = @intCast(fromIndex), .to = @intCast(toRank * 8 + toFile), .action = .allowFrenchMove, .isCapture = false, .bonus = Magic.PUSH_PAWN * 2 };
+        const move: Move = .{ .from = @intCast(fromIndex), .to = @intCast(toRank * 8 + toFile), .action = .allowFrenchMove, .isCapture = false };
         try self.moves.append(move);
     }
 
@@ -387,7 +387,7 @@ const CollectMoves = struct {
         const check = board.get(toFile, toRank);
 
         if ((colour == .Black and toRank == 0) or (colour == .White and toRank == 7)) {
-            var move: Move = .{ .from = @intCast(fromIndex), .to = @intCast(toRank * 8 + toFile), .action = .{ .promote = .Queen }, .isCapture = !check.empty() and check.colour != colour, .bonus = Magic.PUSH_PAWN };
+            var move: Move = .{ .from = @intCast(fromIndex), .to = @intCast(toRank * 8 + toFile), .action = .{ .promote = .Queen }, .isCapture = !check.empty() and check.colour != colour };
             // Queen promotions are so good that we don't even care about preserving order of the old stuff.
             // TODO: that's wrong cause mate
             if (self.moves.items.len > 0) {
@@ -692,7 +692,7 @@ pub fn irf(fromIndex: usize, toFile: usize, toRank: usize, isCapture: bool) Move
 
 pub fn irfPawn(fromIndex: usize, toFile: usize, toRank: usize, isCapture: bool) Move {
     // std.debug.assert(fromIndex < 64 and toFile < 8 and toRank < 8);
-    return .{ .from = @intCast(fromIndex), .to = @intCast(toRank * 8 + toFile), .action = .none, .isCapture = isCapture, .bonus = Magic.PUSH_PAWN };
+    return .{ .from = @intCast(fromIndex), .to = @intCast(toRank * 8 + toFile), .action = .none, .isCapture = isCapture };
 }
 
 pub fn ii(fromIndex: u6, toIndex: u6, isCapture: bool) Move {

@@ -96,7 +96,7 @@ test "write fen" {
 
 test "sane zobrist numbers" {
     setup(defaultMemoMB);
-    try expectNoDuplicates(u64, &@import("common.zig").Magic.ZOIDBERG);
+    try expectNoDuplicates(u64, &@import("common.zig").Learned.ZOIDBERG);
 }
 
 test "dir" {

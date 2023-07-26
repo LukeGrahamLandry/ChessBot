@@ -1,7 +1,7 @@
 //! Representing the game. Playing and unplaying moves. 
 
 const std = @import("std");
-const Magic = @import("common.zig").Magic;
+const Learned = @import("learned.zig");
 const print = @import("common.zig").print;
 const assert = @import("common.zig").assert;
 const UCI = @import("uci.zig");
@@ -193,8 +193,8 @@ fn getZoidberg(piece: Piece, square: u6) u64 {
     const kindOffset: usize = @intCast(@intFromEnum(piece.kind));
     const colourOffset: usize = @intCast(@intFromEnum(piece.colour));
     const offset = (kindOffset + colourOffset) * 64;
-    const index = Magic.ZOID_PIECE_START + offset + square;
-    return Magic.ZOIDBERG[index];
+    const index = Learned.ZOID_PIECE_START + offset + square;
+    return Learned.ZOIDBERG[index];
 }
 
 // This is a chonker struct (if I store repititions inline) but that's fine because I only ever need one. 
@@ -347,7 +347,7 @@ pub const Board = struct {
             }
         }
 
-        self.zoidberg ^= Magic.ZOIDBERG[Magic.ZOID_TURN_INDEX];
+        self.zoidberg ^= Learned.ZOIDBERG[Learned.ZOID_TURN_INDEX];
         self.zoidberg ^= getZoidberg(thisMove.original, move.from);
         self.zoidberg ^= getZoidberg(thisMove.original, move.to);
         if (!thisMove.taken.empty()) self.zoidberg ^= getZoidberg(thisMove.taken, move.to);
@@ -381,7 +381,7 @@ pub const Board = struct {
                 self.squares[info.rookTo] = .{ .colour = colour, .kind = .Rook };
                 self.squares[info.rookFrom] = Piece.EMPTY;
                 assert(!move.isCapture and (thisMove.taken.kind == .Empty));
-                self.simpleEval += Magic.CASTLE_REWARD * colour.dir();
+                self.simpleEval += Learned.CASTLE_REWARD * colour.dir();
 
                 self.zoidberg ^= getZoidberg(self.squares[info.rookTo], info.rookTo); // add rook back
             },
@@ -392,7 +392,7 @@ pub const Board = struct {
                 const file: u4 = @intCast(@rem(move.to, 8));
                 self.frenchMove = .{ .file = file };
                 assert(!move.isCapture and (thisMove.taken.kind == .Empty));
-                self.zoidberg ^= Magic.ZOIDBERG[Magic.ZOID_FRENCH_START + file];
+                self.zoidberg ^= Learned.ZOIDBERG[Learned.ZOID_FRENCH_START + file];
             },
             .useFrenchMove => |captureIndex| {
                 self.zoidberg ^= getZoidberg(self.squares[captureIndex], captureIndex); // remove the taken pawn
@@ -431,7 +431,7 @@ pub const Board = struct {
         }
         self.checks = move.oldChecks;
         self.lastMove = move.lastMove;
-        self.zoidberg ^= Magic.ZOIDBERG[Magic.ZOID_TURN_INDEX];
+        self.zoidberg ^= Learned.ZOIDBERG[Learned.ZOID_TURN_INDEX];
         // if (slowTrackAllMoves) assert(std.meta.eql(self.line.pop(), move));
         const colour = move.original.colour;
         self.castling = move.old_castling;
@@ -465,12 +465,12 @@ pub const Board = struct {
                 self.peicePositions.unsetBit(info.rookTo, colour);
                 self.squares[info.rookTo] = .{ .colour = .White, .kind = .Empty };
                 self.squares[info.rookFrom] = .{ .colour = colour, .kind = .Rook };
-                self.simpleEval -= Magic.CASTLE_REWARD * colour.dir();
+                self.simpleEval -= Learned.CASTLE_REWARD * colour.dir();
                 self.zoidberg ^= getZoidberg(self.squares[info.rookFrom], info.rookFrom);
             },
             .allowFrenchMove => {
                 const file: u4 = @intCast(@rem(move.move.to, 8));
-                self.zoidberg ^= Magic.ZOIDBERG[Magic.ZOID_FRENCH_START + file];
+                self.zoidberg ^= Learned.ZOIDBERG[Learned.ZOID_FRENCH_START + file];
             },
             .useFrenchMove => |captureIndex| {
                 self.squares[captureIndex] = .{ .kind = .Pawn, .colour = colour.other() };

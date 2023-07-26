@@ -3,13 +3,14 @@ const Board = @import("board.zig").Board;
 const printBitBoard = @import("movegen.zig").printBitBoard;
 const print = @import("common.zig").print;
 const isWasm = @import("builtin").target.isWasm();
+const Learned = @import("learned.zig");
 
 pub var tables: Tables = undefined;
 
 pub fn initTables(alloc: std.mem.Allocator) !void {
     tables = .{
-        .rooks = try makeSliderAttackTable(alloc, possibleRookTargets),
-        .bishops = try makeSliderAttackTable(alloc, possibleBishopTargets),
+        .rooks = try makeSliderAttackTable(alloc, possibleRookTargets, Learned.ROOK_SIZES, Learned.ROOK_HASH_MUL),
+        .bishops = try makeSliderAttackTable(alloc, possibleBishopTargets, Learned.BISHOP_SIZES, Learned.BISHOP_HASH_MUL),
     };
 }
 
@@ -23,34 +24,109 @@ const Tables = struct {
     kings: [64] u64 = makeKingAttackTable(), 
 };
 
-fn makeSliderAttackTable(alloc: std.mem.Allocator, comptime possibleTargets: fn (u64, u64, comptime bool) u64) !AttackTable {
+// Use the hardcoded java primes to build an attack table. 
+// Doesn't need to try increasing table sizes because the correct size for no collissions given that hasher is precalculated. 
+fn makeSliderAttackTable(alloc: std.mem.Allocator, comptime possibleTargets: fn (u64, u64, comptime bool) u64, sizes: [64] u7, magic: [64] u64) !AttackTable {
     var result: AttackTable = undefined;
     var totalSize: usize = 0;
     for (0..64) |i| {
-        var bits: u7 = 8;
-        outer: while (true) {
-            if (bits > 20) @panic("bits too big");
-            // print("Trying {} bits. \n", .{ bits });
-            result[i] = try OneTable.init(alloc, bits);
-            const baseRookTargets = possibleTargets(i, 0, true);
-            var blockerConfigurations = VisitBitPermutations.of(baseRookTargets);
-            var count: usize = 0;
-            while (blockerConfigurations.next()) |flag| {
-                count += 1;
-                const targets = possibleTargets(i, flag, false);
-                const success = result[i].set(flag, targets);
-                if (!success) {
-                    alloc.free(result[i].buffer);
-                    bits += 1;
-                    continue :outer;
-                }
-            }
-            // print("{}. {} bits. {}/{} full.\n", .{ i, bits, count, result[i].buffer.len});
-            break;
-        }
+        result[i] = (try fillSliderTable(i, magic[i], sizes[i], alloc, possibleTargets)).?;
         totalSize += result[i].buffer.len * @sizeOf(u64) / 1024;
     }
     print("Slider attack table size: {} KB.\n", .{ totalSize });
+    return result;
+}
+
+pub fn main() !void {
+    _ = try initTables(std.heap.page_allocator);
+    try findBetterSliderAttackTable(std.heap.page_allocator, Learned.ROOK_SIZES, Learned.ROOK_HASH_MUL, possibleRookTargets, "ROOK");
+    try findBetterSliderAttackTable(std.heap.page_allocator, Learned.BISHOP_SIZES, Learned.BISHOP_HASH_MUL, possibleBishopTargets, "BISHOP");
+}
+
+// TODO: same thing for zoidberg
+// Since the attack table for each square has different sizes and different mask bits of the keys they care about (the unblocked targets), 
+// it seems like maybe they would have different best numbers for the hash function avoiding collissions. 
+// If it finds any improvements, it logs them so I can update the hardcoded ones going forward. 
+// Started by using GOLDEN_RATIO = 11400714819323198485 for everything because I read: 
+// https://probablydance.com/2018/06/16/fibonacci-hashing-the-optimization-that-the-world-forgot-or-a-better-alternative-to-integer-modulo/
+fn findBetterSliderAttackTable(alloc: std.mem.Allocator, oldSizes: [64] u7, oldMagic: [64] u64, comptime possibleTargets: fn (u64, u64, comptime bool) u64, comptime name: [] const u8) !void {
+    var magic = oldMagic;
+    var sizes = oldSizes;
+    var totalSize: usize = 0;
+    _ = totalSize;
+    var foundAny = false;
+    
+    var seed: u64 = undefined;
+    try std.os.getrandom(std.mem.asBytes(&seed));
+    var rng = std.rand.DefaultPrng.init(seed);
+
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    for (0..10000) |_| {
+        // Higher bits is exponentially more memory so always work on improving the worst table. 
+        const i = maxIndex(u7, &sizes);
+        const newMagic = rng.next();
+
+        // See how good this number is. Don't care if its just equal to the old one. 
+        var bits: u7 = sizes[i] - 1;
+        while (bits > 1) {
+            if (try fillSliderTable(i, newMagic, bits, arena.allocator(), possibleTargets)) |table| {
+                _ = table;
+                // Save it if its better than the old one. 
+                magic[i] = newMagic;
+                sizes[i] = bits;
+                foundAny = true;
+                // See if its actually even better than that and allows a smaller table. 
+                bits -= 1;
+                _ = arena.reset(.retain_capacity);
+            } else {
+                break;
+            }
+        }
+    }
+
+    arena.deinit();
+
+    if (foundAny) {
+        print("pub const " ++ name ++ "_HASH_MUL = [64] u64 {{", .{});
+        for (magic, 0..) |x, i| {
+            print(" {}", .{ x });
+            if (i != 63) print(",", .{});
+        }
+        print(" }};\n", .{});
+        print("pub const " ++ name ++ "_SIZES = [64] u7 {{", .{});
+        for (sizes, 0..) |x, i| {
+            print(" {}", .{ x });
+            if (i != 63) print(",", .{});
+        }
+        print(" }};\n", .{});
+    } else {
+        print("Didn't find anything good.\n", .{});
+    }
+    
+}
+
+fn maxIndex(comptime T: type, items: [] T) usize {
+    var max: usize = 0;
+    for (1..items.len) |i| {
+        if (items[i] > items[max]) max = i;
+    }
+    return max;
+}
+
+fn fillSliderTable(sqI: usize, magic: u64, bits: u7, alloc: std.mem.Allocator, comptime possibleTargets: fn (u64, u64, comptime bool) u64) !?OneTable {
+    if (bits > 20) @panic("bits too big");
+
+    var result = try OneTable.init(alloc, bits, magic);
+    const baseTargets = possibleTargets(sqI, 0, true);
+    var blockerConfigurations = VisitBitPermutations.of(baseTargets);
+    while (blockerConfigurations.next()) |flag| {
+        const targets = possibleTargets(sqI, flag, false);
+        const success = result.set(flag, targets);
+        if (!success) {
+            alloc.free(result.buffer);
+            return null;
+        }
+    }
     return result;
 }
 
@@ -109,10 +185,6 @@ fn possibleKingTargets(i: usize) u64 {
 
     return result;
 }
-
-
-// TODO: make sure it doesn't help to mark all the next functions as inline. 
-// TODO: use the same sort of generators for my move gen instead of collecting all moves in a list. 
 
 /// Yield once for each 1 bit in n passing an int with only that bit set. 
 /// ie. n=(all ones) would yield with each power of 2 (64 times total).
@@ -367,10 +439,11 @@ pub const AttackTable = [64] OneTable;
 pub const OneTable = struct {
     buffer: []u64,
     bitsInv: u7,
+    magic: u64,
     const EMPTY: u64 = ~@as(u64, 0);
 
-    pub fn init(alloc: std.mem.Allocator, bits: u7) !@This() {
-        return .{ .bitsInv=64-bits, .buffer = try allocOnes(alloc, bits) };
+    pub fn init(alloc: std.mem.Allocator, bits: u7, magic: u64) !@This() {
+        return .{ .bitsInv=64-bits, .buffer = try allocOnes(alloc, bits), .magic=magic};
     }
 
     fn allocOnes(alloc: std.mem.Allocator, bits: u7) ![]u64 {
@@ -390,11 +463,9 @@ pub const OneTable = struct {
     }
 
     fn indexOf(self: *const @This(), key: u64) usize {
-        // https://probablydance.com/2018/06/16/fibonacci-hashing-the-optimization-that-the-world-forgot-or-a-better-alternative-to-integer-modulo/
         var hash: u128 = key;
         hash ^= hash >> self.bitsInv;
-        const magic = 11400714819323198485; 
-        const all: u64 = @truncate(magic * hash);
+        const all: u64 = @truncate(self.magic * hash);
         const index = all >> @intCast(self.bitsInv);
         // print("{b} -> {b} -> {b}\n", .{key, all, index});
         return @intCast(index);

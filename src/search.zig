@@ -7,7 +7,7 @@ const Piece = @import("board.zig").Piece;
 const Kind = @import("board.zig").Kind;
 const Move = @import("board.zig").Move;
 const GameOver = @import("board.zig").GameOver;
-const Magic = @import("common.zig").Magic;
+const Learned = @import("learned.zig");
 const Timer = @import("common.zig").Timer;
 const print = @import("common.zig").print;
 const panic = @import("common.zig").panic;
@@ -175,7 +175,7 @@ pub fn walkEval(comptime opts: StratOpts, game: *Board, remaining: i32, alphaIn:
         if (comptime stats.use) stats.leafBoardsSeen += 1;
         return game.simpleEval;
     }
-    if (game.halfMoveDraw >= 100 or game.hasInsufficientMaterial() or game.lastMoveWasRepetition()) return Magic.DRAW_EVAL;
+    if (game.halfMoveDraw >= 100 or game.hasInsufficientMaterial() or game.lastMoveWasRepetition()) return Learned.DRAW_EVAL;
     // Getting the time at every leaf node slows it down. But don't want to wait to get all the way back to the top if we're out of time.
     // Note: since I'm not checking at top level, it just doen't limit time if maxDepth=2 but only matters if you give it <5 ms so don't care.
     // TODO: should probably do this even less often 
@@ -209,7 +209,7 @@ pub fn walkEval(comptime opts: StratOpts, game: *Board, remaining: i32, alphaIn:
         if (game.nextPlayerInCheck()) {
             return (IM_MATED_EVAL - remaining) * me.dir();
         } else {
-            return Magic.DRAW_EVAL;
+            return Learned.DRAW_EVAL;
         }
     }
 

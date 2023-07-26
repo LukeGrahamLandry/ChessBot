@@ -1,7 +1,7 @@
 const std = @import("std");
 const board = @import("board.zig");
 const search = @import("search.zig");
-const Magic = @import("common.zig").Magic;
+const Learned = @import("learned.zig");
 const Timer = @import("common.zig").Timer;
 const print = @import("common.zig").print;
 

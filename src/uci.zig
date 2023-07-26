@@ -10,7 +10,7 @@ const Timer = @import("common.zig").Timer;
 const GameOver = @import("board.zig").GameOver;
 const OldMove = @import("board.zig").OldMove;
 const inferPlayMove = @import("board.zig").inferPlayMove;
-const Magic = @import("common.zig").Magic;
+const Learned = @import("learned.zig");
 const assert = @import("common.zig").assert;
 
 pub fn main() !void {
