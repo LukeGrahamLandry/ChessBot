@@ -1,32 +1,156 @@
-//! Implements the universal chess interface: https://gist.github.com/DOBRO/2592c6dad754ba67e6dcaec8c90165bf  
-//! Utils for representing games as strings: FEN parsing, algebraic notation, etc. 
+//! Implements the universal chess interface: https://gist.github.com/DOBRO/2592c6dad754ba67e6dcaec8c90165bf
+//! Utils for representing games as strings: FEN parsing, algebraic notation, etc.
 
 const std = @import("std");
 const Board = @import("board.zig").Board;
 const Piece = @import("board.zig").Piece;
 const Move = @import("board.zig").Move;
-const search = @import("search.zig").default;
+const search = @import("search.zig");
 const Timer = @import("common.zig").Timer;
 const GameOver = @import("board.zig").GameOver;
 const OldMove = @import("board.zig").OldMove;
 const inferPlayMove = @import("board.zig").inferPlayMove;
 const Learned = @import("learned.zig");
 const assert = @import("common.zig").assert;
+const panic = @import("common.zig").panic;
 const ListPool = @import("movegen.zig").ListPool;
 
 pub fn main() !void {
-    @panic("TODO: let my engine talk via uci");
+    var e: Engine = .{};
+    try e.init();
+
+    while (true) {
+        const cmd = waitForUciCommand(std.io.getStdIn().reader(), e.arena.allocator()) catch |err| {
+            std.debug.print("{}\n", .{err});
+            continue;
+        };
+        try e.handle(cmd);
+        try e.worker.printAllResults();
+    }
 }
 
+const Engine = struct {
+    arena: std.heap.ArenaAllocator = undefined,
+    worker: Worker = undefined,
+
+    pub fn init(self: *Engine) !void {
+        self.arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        self.worker = .{
+            .ctx = @import("common.zig").setup(100),
+            .board = try Board.initial(),
+            .thread = try std.Thread.spawn(.{}, engineWorker, .{&self.worker}),
+        };
+    }
+
+    pub fn handle(self: *Engine, cmd: UciCommand) !void {
+        switch (cmd) {
+            .Init => {
+                const result: UciResult = .InitOk;
+                try result.writeTo(std.io.getStdOut().writer());
+            },
+            .AreYouReady => {
+                const result: UciResult = .ReadyOk;
+                try result.writeTo(std.io.getStdOut().writer());
+            },
+            .NewGame => {
+                self.worker.isIdle.wait();
+                self.worker.ctx.resetMemoTable();
+                self.worker.board = try Board.initial();
+            },
+            .SetPositionInitial => {
+                self.worker.isIdle.wait();
+                self.worker.board = try Board.initial();
+            },
+            .SetPositionMoves => |info| {
+                self.worker.isIdle.wait();
+                self.worker.board = info.board.*;
+            },
+            .Go => |info| {
+                self.worker.isIdle.wait();
+                if (info.perft) |_| {
+                    panic("TODO: impl uci perft. \n{}\n", .{cmd});
+                }
+
+                self.worker.maxDepth = info.maxDepthPly orelse 50;
+                self.worker.timeLimitMs = info.maxSearchTimeMs orelse (100 * std.time.ms_per_s);
+                self.worker.isIdle.reset();
+                self.worker.hasWork.set();
+            },
+            .Stop => {
+                self.worker.ctx.forceStop = true;
+                self.worker.isIdle.wait();
+                self.worker.ctx.forceStop = false;
+            },
+            .Quit => {
+                self.worker.ctx.forceStop = true;
+                std.os.exit(0);
+            },
+            else => panic("TODO: other uci commands {}", .{cmd}),
+        }
+
+        _ = self.arena.reset(.retain_capacity);
+    }
+};
+
+fn engineWorker(self: *Worker) !void {
+    const opts: search.StratOpts = .{ .printUci = true };
+    std.time.sleep(std.time.ns_per_ms * 5);
+    self.isIdle.set();
+    while (true) {
+        self.hasWork.wait();
+        self.hasWork.reset();
+        self.isIdle.reset();
+
+        // This knows to print uci stuff to stdout.
+        _ = try search.bestMove(opts, &self.ctx, &self.board, self.maxDepth - 1, self.timeLimitMs);
+        try self.printAllResults();
+        self.isIdle.set();
+    }
+}
+
+fn waitForUciCommand(reader: anytype, alloc: std.mem.Allocator) !UciCommand {
+    var buf: [16384]u8 = undefined;
+    var resultStream = std.io.fixedBufferStream(&buf);
+    // Don't care about the max because fixedBufferStream will give a write error if it overflows.
+    try reader.streamUntilDelimiter(resultStream.writer(), '\n', null);
+    const msg = resultStream.getWritten();
+    return try UciCommand.parse(msg, alloc);
+}
+
+const Worker = struct {
+    thread: std.Thread,
+    ctx: search.SearchGlobals,
+    board: Board,
+    hasWork: std.Thread.ResetEvent = .{},
+    isIdle: std.Thread.ResetEvent = .{},
+
+    // These are set by the 'go' command.
+    maxDepth: usize = 0,
+    timeLimitMs: i128 = 0,
+
+    pub fn printAllResults(self: *Worker) !void {
+        for (self.ctx.uciResults.items) |result| {
+            try result.writeTo(std.io.getStdOut().writer());
+        }
+        self.ctx.uciResults.clearRetainingCapacity();
+    }
+};
+
 // TODO: do I want to use the same names as the commands?
+/// A command from a gui to an engine.
 pub const UciCommand = union(enum) {
     Init,
     AreYouReady,
     NewGame,
     SetPositionInitial,
-    SetPositionMoves: struct { board: *Board, moves: ?[][5]u8 }, // lifetime! don't save these pointers!
-    Go: struct { maxSearchTimeMs: ?u64 = null, maxDepthPly: ?u64 = null, perft: ?u64 = null,},
+    SetPositionMoves: struct { board: *Board, moves: ?[][5]u8 = null }, // lifetime! don't save these pointers!
+    Go: struct {
+        maxSearchTimeMs: ?u64 = null,
+        maxDepthPly: ?u64 = null,
+        perft: ?u64 = null,
+    },
     Stop,
+    Quit,
     SetOption: struct { name: []const u8, value: []const u8 },
 
     pub fn writeTo(cmd: UciCommand, writer: anytype) !void {
@@ -36,6 +160,7 @@ pub const UciCommand = union(enum) {
             .Init => try out.writeAll("uci"),
             .AreYouReady => try out.writeAll("isready"),
             .NewGame => try out.writeAll("ucinewgame"),
+            .Quit => try out.writeAll("ucinewgame"),
             .SetPositionInitial => try out.writeAll("position startpos"),
             .Go => |args| {
                 try out.writeAll("go");
@@ -61,6 +186,49 @@ pub const UciCommand = union(enum) {
 
         try out.writeByte('\n');
         try buffer.flush();
+    }
+
+    // SetPositionMoves allocates the board pointer, caller owns it now.
+    pub fn parse(str: []const u8, alloc: std.mem.Allocator) !UciCommand {
+        // TODO: this sucks. some crazy comptime perfect hash thing?
+        if (std.mem.eql(u8, str, "uci")) {
+            return .Init;
+        } else if (std.mem.eql(u8, str, "isready")) {
+            return .AreYouReady;
+        } else if (std.mem.eql(u8, str, "ucinewgame")) {
+            return .NewGame;
+        } else if (std.mem.eql(u8, str, "stop")) {
+            return .Stop;
+        } else if (std.mem.eql(u8, str, "quit")) {
+            return .Quit;
+        } else if (std.mem.eql(u8, str, "position startpos")) {
+            std.debug.print("initial\n", .{});
+            return .SetPositionInitial;
+        } else if (std.mem.startsWith(u8, str, "position fen ")) {
+            const startingWithFen = str[13..];
+            var board = try alloc.create(Board);
+            board.* = try Board.fromFEN(startingWithFen);
+            return .{ .SetPositionMoves = .{ .board = board } };
+        } else if (std.mem.startsWith(u8, str, "go")) {
+            var words = std.mem.splitScalar(u8, str, ' ');
+            std.debug.assert(std.mem.eql(u8, words.next().?, "go"));
+            var movetime: ?u64 = null;
+            var depth: ?u64 = null;
+            var perft: ?u64 = null;
+            while (words.next()) |word| {
+                if (std.mem.eql(u8, word, "movetime")) {
+                    movetime = std.fmt.parseInt(u64, words.next() orelse break, 10) catch continue;
+                } else if (std.mem.eql(u8, word, "depth")) {
+                    depth = std.fmt.parseInt(u64, words.next() orelse break, 10) catch continue;
+                } else if (std.mem.eql(u8, word, "perft")) {
+                    perft = std.fmt.parseInt(u64, words.next() orelse break, 10) catch continue;
+                }
+            }
+            return .{ .Go = .{ .maxSearchTimeMs = movetime, .maxDepthPly = depth, .perft = perft } };
+        }
+
+        // TODO: the rest
+        return error.UnknownUciStr;
     }
 };
 
@@ -91,6 +259,7 @@ pub const UciInfo = struct {
 
 pub const PerftNode = struct { move: [5]u8, count: u64 };
 
+// A response from an engine to a gui.
 pub const UciResult = union(enum) {
     InitOk,
     ReadyOk,
@@ -161,23 +330,74 @@ pub const UciResult = union(enum) {
             var words = std.mem.splitSequence(u8, str, ": ");
             // TODO: handle errors
             const move = words.next().?;
-            var result: [5] u8 = std.mem.zeroes([5] u8);
+            var result: [5]u8 = std.mem.zeroes([5]u8);
             if (move.len <= 5) {
                 @memcpy(result[0..move.len], move);
             } else {
                 return error.UnknownUciStr;
             }
             const count = std.fmt.parseInt(u64, words.next() orelse return error.UnknownUciStr, 10) catch return error.UnknownUciStr;
-            return .{ .PerftDivide = .{ .move=result, .count = count}};
+            return .{ .PerftDivide = .{ .move = result, .count = count } };
         } else if (std.mem.startsWith(u8, str, "Nodes searched:")) {
             var words = std.mem.splitSequence(u8, str, ": ");
             _ = words.next().?;
             const count = std.fmt.parseInt(u64, words.next() orelse return error.UnknownUciStr, 10) catch return error.UnknownUciStr;
-            return .{ .PerftDone = .{ .total=count }};
+            return .{ .PerftDone = .{ .total = count } };
         }
 
         // std.debug.print("UnknownUciStr: {s}\n", .{str});
         return error.UnknownUciStr;
+    }
+
+    pub fn writeTo(cmd: UciResult, writer: anytype) !void {
+        var buffer = std.io.bufferedWriter(writer);
+        var out = buffer.writer();
+        switch (cmd) {
+            .InitOk => try out.writeAll("uciok"),
+            .ReadyOk => try out.writeAll("readyok"),
+            .BestMove => |maybeMove| {
+                try out.writeAll("bestmove ");
+                if (maybeMove) |move| {
+                    try out.writeAll(move[0..4]);
+                    if (move[4] != 0) {
+                        try out.writeByte(move[4]);
+                    } else {
+                        try out.writeByte(' ');
+                    }
+                } else {
+                    try out.writeAll("(none)");
+                }
+            },
+            .Info => |info| {
+                try out.writeAll("info");
+                if (info.time) |time| {
+                    try out.print(" time {}", .{time});
+                }
+                if (info.depth) |depth| {
+                    try out.print(" depth {}", .{depth});
+                }
+                if (info.pv) |pv| {
+                    _ = pv;
+                    panic("TODO: writeTo() for info pv", .{});
+                } else {
+                    // My search isnt tracking pvs rn but it can give the best move at each level.
+                    if (info.pvFirstMove) |move| {
+                        try out.writeAll(" pv ");
+                        try out.writeAll(move[0..4]);
+                        if (move[4] != 0) {
+                            try out.writeByte(move[4]);
+                        } else {
+                            try out.writeByte(' ');
+                        }
+                    }
+                }
+                // TODO: the rest.
+            },
+            else => panic("TODO: writeTo() for {}\n", .{cmd}),
+        }
+
+        try out.writeByte('\n');
+        try buffer.flush();
     }
 };
 
@@ -299,7 +519,7 @@ pub fn writeFen(self: *const Board, writer: anytype) !void {
     }
 
     const playerChar: u8 = if (self.nextPlayer == .White) 'w' else 'b';
-    try out.print(" {c} ", .{ playerChar });
+    try out.print(" {c} ", .{playerChar});
 
     if (self.castling.whiteRight) try out.writeByte('K');
     if (self.castling.whiteLeft) try out.writeByte('Q');
@@ -316,7 +536,7 @@ pub fn writeFen(self: *const Board, writer: anytype) !void {
         },
     }
 
-    try out.print("{} {}", .{ self.halfMoveDraw, self.fullMoves});
+    try out.print("{} {}", .{ self.halfMoveDraw, self.fullMoves });
     try buffer.flush();
 }
 
@@ -381,12 +601,13 @@ pub fn letterToRank(letter: u8) !u6 {
     return @intCast(letter - '1');
 }
 
-// TODO: finish this. need to track pv and return that info every search iteration. 
+// TODO: finish this. need to track pv and return that info every search iteration.
 // TODO: another thread to do work.
 // TODO: search has global variables so this struct isn't thread safe.
-const Engine = struct {
+const oldEngine = struct {
     board: Board,
     resultQueue: std.ArrayList(UciResult), // TODO: super slow! should be VecDeque!
+    taskQueue: std.ArrayList(UciResult),
 
     pub fn init(alloc: std.mem.Allocator) !Engine {
         return .{ .board = try Board.initial(), .resultQueue = std.ArrayList(UciResult).init(alloc) };

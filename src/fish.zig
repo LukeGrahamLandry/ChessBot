@@ -19,12 +19,14 @@ const Opts = struct {
 
     // These are passed to stockfish to limit its strength.
     fishSkillLevel: usize = 0, // 0-20.
-    fishTimeLimitMS: u64 = 5,
+
+    engineATimeLimitMS: u64 = 50,
+    engineBTimeLimitMS: u64 = 5,
 
     // These control my strength. The search stops when either time or depth is exceeded.
     // Limiting my time and allowing high depth like real games rewards performance improvements.
-    myTimeLimitMS: i128 = 50,
-    myMaxDepth: usize = 50, // anything above 10 is basically unlimited other than endgame.
+    // myTimeLimitMS: i128 = 50,
+    // myMaxDepth: usize = 50, // anything above 10 is basically unlimited other than endgame.
     myMemoMB: usize = 100,
 };
 
@@ -46,11 +48,13 @@ pub fn main() !void {
         workers[i] = .{
             .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
             .ctx = @import("common.zig").setup(config.myMemoMB),
-            .fish = try Stockfish.init(forever),
             .thread = try std.Thread.spawn(.{}, workerFn, .{&workers[i]}),
             .gamesPlayed = &played,
             .stats = &stats,
             .config = config,
+            .engineA = try Stockfish.initOther("/Users/luke/test/zig-out/bin/uci", forever),
+            .engineB = try Stockfish.initOther("/Users/luke/test/zig-out/bin/uci", forever),
+            // .engineB = try Stockfish.initOther("stockfish", forever),
         };
     }
 
@@ -64,13 +68,13 @@ pub fn main() !void {
 const Shared = std.atomic.Atomic(usize);
 
 const Stats = struct {
-    win: Shared = Shared.init(0),
-    lose: Shared = Shared.init(0),
+    winA: Shared = Shared.init(0),
+    winB: Shared = Shared.init(0),
     draw: Shared = Shared.init(0),
     fail: Shared = Shared.init(0),
 
     fn log(self: Stats) void {
-        print("[info]: Win {}. Lose {}. Draw {}. Error {}.\n", .{ self.win.loadUnchecked(), self.lose.loadUnchecked(), self.draw.loadUnchecked(), self.fail.loadUnchecked() });
+        print("[info]: A Wins {}. B Wins {}. Draw {}. Error {}.\n", .{ self.winA.loadUnchecked(), self.winB.loadUnchecked(), self.draw.loadUnchecked(), self.fail.loadUnchecked() });
     }
 };
 
@@ -78,17 +82,24 @@ const Worker = struct {
     thread: std.Thread,
     config: Opts = .{},
     ctx: search.SearchGlobals,
-    fish: Stockfish,
+    engineA: Stockfish,
+    engineB: Stockfish,
     arena: std.heap.ArenaAllocator,
     stats: *Stats,
     gamesPlayed: *Shared,
 };
 
 pub fn workerFn(self: *Worker) !void {
-    try self.fish.send(.Init);
-    self.fish.blockUntilRecieve(.InitOk);
+    std.time.sleep(std.time.ns_per_ms * 50);
+
+    try self.engineA.send(.Init);
+    try self.engineB.send(.Init);
+    self.engineA.blockUntilRecieve(.InitOk);
+    self.engineB.blockUntilRecieve(.InitOk);
+
     const fishLevelStr = try std.fmt.allocPrint(self.arena.allocator(), "{}", .{self.config.fishSkillLevel});
-    try self.fish.send(.{ .SetOption = .{ .name = "Skill Level", .value = fishLevelStr } });
+    try self.engineB.send(.{ .SetOption = .{ .name = "Skill Level", .value = fishLevelStr } });
+    // try self.engineA.send(.{ .SetOption = .{ .name = "Skill Level", .value = fishLevelStr } });
 
     while (true) {
         const g = self.gamesPlayed.fetchAdd(1, .SeqCst);
@@ -104,8 +115,8 @@ pub fn workerFn(self: *Worker) !void {
 
         _ = switch (result) {
             .Continue => @panic("game done but continue?"),
-            .WhiteWins => self.stats.win.fetchAdd(1, .SeqCst),
-            .BlackWins => self.stats.lose.fetchAdd(1, .SeqCst),
+            .WhiteWins => self.stats.winA.fetchAdd(1, .SeqCst),
+            .BlackWins => self.stats.winB.fetchAdd(1, .SeqCst),
             else => self.stats.draw.fetchAdd(1, .SeqCst),
         };
 
@@ -113,32 +124,39 @@ pub fn workerFn(self: *Worker) !void {
         _ = self.arena.reset(.retain_capacity);
     }
 
-    try self.fish.deinit();
+    try self.engineA.deinit();
+    try self.engineB.deinit();
 }
 
 // TODO: output pgn
 // TODO: alternate who plays white
 pub fn playOneGame(self: *Worker) !GameOver {
     const gt = Timer.start();
-    try self.fish.send(.NewGame);
-    try self.fish.send(.AreYouReady);
-    self.fish.blockUntilRecieve(.ReadyOk);
+
+    try self.engineA.send(.NewGame);
+    try self.engineA.send(.AreYouReady);
+    try self.engineB.send(.NewGame);
+    try self.engineB.send(.AreYouReady);
+    self.engineA.blockUntilRecieve(.ReadyOk);
+    self.engineB.blockUntilRecieve(.ReadyOk);
 
     var moveHistory = std.ArrayList([5]u8).init(self.arena.allocator());
     var board = try Board.initial();
-    for (0..self.config.maxMoves) |i| {
-        _ = i;
-        const move = search.bestMove(.{}, &self.ctx, &board, self.config.myMaxDepth, self.config.myTimeLimitMS) catch |err| {
+    for (0..self.config.maxMoves) |_| {
+        // const move = search.bestMove(.{}, &self.ctx, &board, 50, self.config.engineATimeLimitMS) catch |err| {
+        playUciMove(self, &self.engineA, self.config.engineATimeLimitMS, &board, &moveHistory) catch |err| {
+            return try logGameOver(err, &board, &moveHistory, gt, &self.ctx.lists);
+        };
+        // const moveStr = UCI.writeAlgebraic(move);
+        // try moveHistory.append(moveStr);
+        // _ = board.play(move);
+        // board.debugPrint();
+
+        playUciMove(self, &self.engineB, self.config.engineBTimeLimitMS, &board, &moveHistory) catch |err| {
             return try logGameOver(err, &board, &moveHistory, gt, &self.ctx.lists);
         };
 
-        const moveStr = UCI.writeAlgebraic(move);
-        try moveHistory.append(moveStr);
-        _ = board.play(move);
-
-        playUciMove(self, &board, &moveHistory) catch |err| {
-            return try logGameOver(err, &board, &moveHistory, gt, &self.ctx.lists);
-        };
+        // board.debugPrint();
     } else {
         print("[info]: Played {} moves each. Stopping the game because nobody cares. \n", .{self.config.maxMoves});
         board.debugPrint();
@@ -161,8 +179,9 @@ fn logGameOver(err: anyerror, board: *Board, moveHistory: *std.ArrayList([5]u8),
                 .FiftyMoveDraw => "Draw (50 move rule).",
                 .MaterialDraw => "Draw (insufficient material).",
                 .RepetitionDraw => "Draw (3 repetition).",
-                .WhiteWins => "White (luke) wins.",
-                .BlackWins => "Black (fish) wins.",
+                // TODO: print engine names.
+                .WhiteWins => "Engine A wins.",
+                .BlackWins => "Engine B wins.",
             };
             print("[info]: {s} The game lasted {} ply ({} ms). \n", .{ msg, moveHistory.items.len, gt.get() });
             board.debugPrint();
@@ -172,43 +191,42 @@ fn logGameOver(err: anyerror, board: *Board, moveHistory: *std.ArrayList([5]u8),
     }
 }
 
-fn playUciMove(self: *Worker, board: *Board, moveHistory: *std.ArrayList([5]u8)) !void {
-    try self.fish.send(.AreYouReady);
-    self.fish.blockUntilRecieve(.ReadyOk);
-    if (moveHistory.items.len == 0) {
-        try self.fish.send(.SetPositionInitial);
-    } else {
-        try self.fish.send(.{ .SetPositionMoves = .{ .board = board, .moves = moveHistory.items } });
-    }
-    try self.fish.send(.{ .Go = .{ .maxSearchTimeMs = self.config.fishTimeLimitMS } });
+fn playUciMove(self: *Worker, engine: *Stockfish, timeLimitMS: u64, board: *Board, moveHistory: *std.ArrayList([5]u8)) !void {
+    try engine.send(.AreYouReady);
+    engine.blockUntilRecieve(.ReadyOk);
+    try engine.send(.{ .SetPositionMoves = .{ .board = board, .moves = moveHistory.items } });
+    try engine.send(.{ .Go = .{ .maxSearchTimeMs = timeLimitMS } });
 
     const moveStr = m: {
         var bestMove: ?[5]u8 = null;
         var moveTime: u64 = 0;
         while (true) {
-            const infoMsg = try self.fish.recieve();
+            const infoMsg = try engine.recieve();
+            // print("{}\n", .{infoMsg});
             switch (infoMsg) {
                 .Info => |info| {
                     if (info.time) |time| {
-                        if (time <= self.config.fishTimeLimitMS) {
+                        if (time <= timeLimitMS) {
                             if (info.pvFirstMove) |move| {
                                 bestMove = move;
                                 moveTime = time;
                             }
                         } else {
-                            try self.fish.send(.Stop);
+                            try engine.send(.Stop);
                             // Not breaking out of the loop because still want to consume all calculations that took too long.
                         }
                     }
                 },
-                .BestMove => |bestmove| {
-                    if (bestmove) |move| {
+                .BestMove => |engineBestMove| {
+                    if (engineBestMove) |move| {
                         if (bestMove == null) {
                             print("[info]: The fish didn't move in time.\n", .{});
                             board.debugPrint();
                             return error.FishTooSlow;
                         } else {
+                            // print("{}\n", .{std.mem.eql(u8, &move, &bestMove.?)});
                             break :m move;
+                            // break :m bestMove.?;  // TODO: why does this seem to play better?
                         }
                     } else {
                         // The fish knows it has no moves!
@@ -221,48 +239,55 @@ fn playUciMove(self: *Worker, board: *Board, moveHistory: *std.ArrayList([5]u8))
         unreachable;
     };
 
+    // board.debugPrint();
+    // print("Move: {any}\n", .{moveStr});
     _ = try UCI.playAlgebraic(board, moveStr, &self.ctx.lists);
     try moveHistory.append(moveStr);
+
+    const reason = try board.gameOverReason(&self.ctx.lists);
+    if (reason != .Continue) return error.GameOver;
 }
 
 pub const Stockfish = struct {
     process: std.ChildProcess,
-    buffer: Reader,
-    const Reader = std.io.BufferedReader(4096, std.fs.File.Reader);
 
     // I think the allocator is just used for arg strings and stuff.
     // TODO: make sure its not putting all output there but that seems dumb and I think I would notice.
-    pub fn init(alloc: std.mem.Allocator) !Stockfish {
-        var process = std.ChildProcess.init(&[_][]const u8{"stockfish"}, alloc);
+    pub fn init(alloc: std.mem.Allocator) !@This() {
+        // TODO: helpful error message if stockfish isnt installed.
+        return try Stockfish.initOther("stockfish", alloc);
+    }
+
+    pub fn initOther(command: []const u8, alloc: std.mem.Allocator) !@This() {
+        var process = std.ChildProcess.init(&[_][]const u8{command}, alloc);
         process.stdin_behavior = .Pipe;
         process.stdout_behavior = .Pipe;
-        process.stderr_behavior = .Pipe;
-        process.stdout = std.io.getStdIn();
-        try process.spawn(); // TODO: helpful error message if stockfish isnt installed.
+        process.stderr_behavior = .Inherit;
+        // process.stdout = std.io.getStdIn();
+        try process.spawn();
         return .{
             .process = process,
-            .buffer = .{ .unbuffered_reader = process.stdout.?.reader() },
         };
     }
 
-    pub fn deinit(self: *Stockfish) !void {
+    pub fn deinit(self: *@This()) !void {
         _ = try self.process.kill();
     }
 
-    pub fn send(self: *Stockfish, cmd: UCI.UciCommand) !void {
+    pub fn send(self: *@This(), cmd: UCI.UciCommand) !void {
         try cmd.writeTo(self.process.stdin.?.writer());
     }
 
-    pub fn recieve(self: *Stockfish) !UCI.UciResult {
+    pub fn recieve(self: *@This()) !UCI.UciResult {
         var buf: [16384]u8 = undefined;
         var resultStream = std.io.fixedBufferStream(&buf);
         // Don't care about the max because fixedBufferStream will give a write error if it overflows.
-        try self.buffer.reader().streamUntilDelimiter(resultStream.writer(), '\n', null);
+        try self.process.stdout.?.reader().streamUntilDelimiter(resultStream.writer(), '\n', null);
         const msg = resultStream.getWritten();
         return try UCI.UciResult.parse(msg);
     }
 
-    pub fn blockUntilRecieve(self: *Stockfish, expected: UCI.UciResult) void {
+    pub fn blockUntilRecieve(self: *@This(), expected: UCI.UciResult) void {
         // TODO: timeout detect to if it died
         while (true) {
             std.Thread.yield() catch continue;

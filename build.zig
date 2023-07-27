@@ -13,11 +13,12 @@ pub fn build(b: *std.Build) void {
     // });
     // b.installArtifact(wasm_exe);
 
-    // makeBin(b, "uci", target, optimize);
+    makeBin(b, "uci", target, optimize);
     makeBin(b, "fish", target, optimize);
-    makeBin(b, "bench", target, optimize);
-    makeBin(b, "perft", target, optimize);
-    makeBin(b, "precalc", target, optimize);
+    // TODO
+    // makeBin(b, "bench", target, optimize);
+    // makeBin(b, "perft", target, optimize);
+    // makeBin(b, "precalc", target, optimize);
 
     const unit_tests = b.addTest(.{
         .root_source_file = .{ .path = "src/tests.zig" },
@@ -29,7 +30,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_unit_tests.step);
 }
 
-fn makeBin(b: *std.Build, comptime name: [] const u8, target: std.zig.CrossTarget, optimize: std.builtin.Mode) void {
+fn makeBin(b: *std.Build, comptime name: []const u8, target: std.zig.CrossTarget, optimize: std.builtin.Mode) void {
     const exe = b.addExecutable(.{
         .name = name,
         .root_source_file = .{ .path = "src/" ++ name ++ ".zig" },
