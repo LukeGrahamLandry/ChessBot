@@ -47,9 +47,11 @@ pub const SearchGlobals = struct {
     memoMap: MemoTable,
     forceStop: bool = false,
     uciResults: std.ArrayList(UCI.UciResult),
+    rng: std.rand.DefaultPrng,
 
     pub fn init(memoMapSizeMB: u64, alloc: std.mem.Allocator) !@This() {
-        return .{ .memoMap = try MemoTable.initWithCapacity(memoMapSizeMB, alloc), .evalGuesses = try std.ArrayList(i32).initCapacity(alloc, 50), .lists = try ListPool.init(alloc), .uciResults = std.ArrayList(UCI.UciResult).init(alloc) };
+        const seed: u64 = @truncate(@as(u128, @bitCast(nanoTimestamp())));
+        return .{ .memoMap = try MemoTable.initWithCapacity(memoMapSizeMB, alloc), .evalGuesses = try std.ArrayList(i32).initCapacity(alloc, 50), .lists = try ListPool.init(alloc), .uciResults = std.ArrayList(UCI.UciResult).init(alloc), .rng = std.rand.DefaultPrng.init(seed) };
     }
 
     pub fn resetMemoTable(self: *@This()) void {
@@ -62,6 +64,7 @@ pub const SearchGlobals = struct {
 pub fn bestMove(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, maxDepth: usize, timeLimitMs: i128) !Move {
     if (!opts.printUci and (game.halfMoveDraw >= 100 or game.hasInsufficientMaterial() or game.lastMoveWasRepetition())) return error.GameOver; // Draw
     const me = game.nextPlayer;
+    assert(ctx.lists.noneLost());
 
     const startTime = nanoTimestamp();
     const endTime = startTime + (timeLimitMs * std.time.ns_per_ms);
@@ -87,22 +90,27 @@ pub fn bestMove(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, max
     var favourite: Move = topLevelMoves.items[0];
     const startDepth = if (opts.doIterative) 0 else @min(maxDepth, 100);
     for (startDepth..(@min(maxDepth, 100) + 1)) |depth| { // @min is sanity check for list pool capacity
+        var pv = try ctx.lists.get();
         var stats: Stats = .{};
         var alpha = LOWEST_EVAL;
         var beta = -LOWEST_EVAL;
         var bestVal: i32 = LOWEST_EVAL * me.dir();
         // TODO: this is almost the same as walkEval.
         for (topLevelMoves.items, 0..) |move, i| {
+            var line = try ctx.lists.get();
+            try line.append(move);
             const unMove = game.play(move);
             defer game.unplay(unMove);
-            const eval = walkEval(opts, ctx, game, @intCast(depth), alpha, beta, &stats, false, endTime) catch |err| {
+            const eval = walkEval(opts, ctx, game, @intCast(depth), alpha, beta, &stats, false, endTime, &line) catch |err| {
+                ctx.lists.release(pv);
+                ctx.lists.release(line);
                 if (err == error.ForceStop) {
                     // If we ran out of time, just return the best result from the last search.
                     if (thinkTime == -1) {
                         print("Didn't even finish one layer in {}ms! Playing random move! \n", .{timeLimitMs});
                         favourite = topLevelMoves.items[0];
                     } else {
-                        if (isWasm) print("Out of time. Using move from depth {} ({}ms)\n", .{ depth - 1, @divFloor(thinkTime, std.time.ns_per_ms) });
+                        print("Out of time. Using move from depth {} ({}ms)\n", .{ depth - 1, @divFloor(thinkTime, std.time.ns_per_ms) });
                     }
                     if (opts.printUci) {
                         const result: UCI.UciResult = .{ .BestMove = UCI.writeAlgebraic(favourite) };
@@ -127,18 +135,36 @@ pub fn bestMove(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, max
                     beta = @min(beta, bestVal);
                 },
             }
+
+            if (eval == bestVal) {
+                pv.items.len = line.items.len;
+                @memcpy(pv.items, line.items);
+            }
+            ctx.lists.release(line);
         }
 
         std.sort.insertionContext(0, topLevelMoves.items.len, PairContext{ .moves = topLevelMoves.items, .evals = ctx.evalGuesses.items, .me = me });
         thinkTime = nanoTimestamp() - startTime;
-        favourite = topLevelMoves.items[0];
+        favourite = pv.items[0]; // topLevelMoves.items[0]; //
 
         if (opts.printUci) {
-            const info: UCI.UciInfo = .{ .time = @intCast(@divFloor(thinkTime, std.time.ns_per_ms)), .depth = @intCast(depth + 1), .pvFirstMove = UCI.writeAlgebraic(favourite) };
+            var str = try std.BoundedArray(u8, 10000).init(0);
+            for (pv.items) |move| {
+                if ((try move.text())[4] == 0) {
+                    try str.appendSlice((try move.text())[0..4]);
+                } else {
+                    try str.appendSlice((try move.text())[0..]);
+                }
+
+                try str.append(' ');
+            }
+
+            const info: UCI.UciInfo = .{ .time = @intCast(@divFloor(thinkTime, std.time.ns_per_ms)), .depth = @intCast(depth + 1), .pvFirstMove = UCI.writeAlgebraic(favourite), .cp = ctx.evalGuesses.items[0], .pv = str.slice() };
             const result: UCI.UciResult = .{ .Info = info };
             // try ctx.uciResults.append(result);
             try result.writeTo(std.io.getStdOut().writer());
         }
+        ctx.lists.release(pv);
     }
 
     if (opts.printUci) {
@@ -146,9 +172,9 @@ pub fn bestMove(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, max
         // try ctx.uciResults.append(result);
         try result.writeTo(std.io.getStdOut().writer());
     }
-    if (isWasm) print("Reached max depth {} in {}ms.\n", .{ maxDepth, @divFloor(thinkTime, std.time.ns_per_ms) });
+    print("Reached max depth {} in {}ms.\n", .{ maxDepth, @divFloor(thinkTime, std.time.ns_per_ms) });
 
-    return topLevelMoves.items[0];
+    return favourite;
 }
 
 const PairContext = struct {
@@ -175,14 +201,15 @@ const PairContext = struct {
 // Returns the absolute eval of <game>, positive means white is winning, after game.nextPlayer makes a move.
 // Returns error.GameOver if there were no possible moves or other draws.
 // TODO: redo my captures only thing to be lookForPeace and only simpleEval if no captures on the board
-pub fn walkEval(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, remaining: i32, alphaIn: i32, betaIn: i32, stats: *Stats, comptime capturesOnly: bool, endTime: i128) error{ OutOfMemory, ForceStop, Overflow }!i32 {
+// TODO: pv doesnt need to copy the whole list every time
+pub fn walkEval(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, remaining: i32, alphaIn: i32, betaIn: i32, stats: *Stats, comptime capturesOnly: bool, endTime: i128, line: *ListPool.List) error{ OutOfMemory, ForceStop, Overflow }!i32 {
     const me = game.nextPlayer;
     if (ctx.forceStop) return error.ForceStop;
     if (remaining == 0) {
         if (comptime stats.use) stats.leafBoardsSeen += 1;
         return game.simpleEval;
     }
-    if (game.halfMoveDraw >= 100 or game.hasInsufficientMaterial() or game.lastMoveWasRepetition()) return Learned.DRAW_EVAL;
+    if (game.halfMoveDraw >= 100 or game.hasInsufficientMaterial() or game.lastMoveWasRepetition()) return Learned.DRAW_EVAL * game.nextPlayer.dir();
     // Getting the time at every leaf node slows it down. But don't want to wait to get all the way back to the top if we're out of time.
     // Note: since I'm not checking at top level, it just doen't limit time if maxDepth=2 but only matters if you give it <5 ms so don't care.
     // TODO: should probably do this even less often
@@ -232,12 +259,17 @@ pub fn walkEval(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, rem
     var bestVal: i32 = LOWEST_EVAL * me.dir();
     var memoKind: MemoKind = .Exact;
     var foundMove: ?Move = null;
+    var pv = ctx.lists.copyOf(line);
+    defer ctx.lists.release(pv);
     for (moves.items) |move| {
+        var nextLine = ctx.lists.copyOf(line);
+        defer ctx.lists.release(nextLine);
+        try nextLine.append(move);
         const eval = e: {
             if (remaining > 1) {
                 const unMove = game.play(move);
                 defer game.unplay(unMove);
-                break :e try walkEval(opts, ctx, game, remaining - 1, alpha, beta, stats, capturesOnly, endTime);
+                break :e try walkEval(opts, ctx, game, remaining - 1, alpha, beta, stats, capturesOnly, endTime, &nextLine);
             } else {
                 // Don't need to do the extra work to prep for legal move generation if this is a leaf node.
                 // This trick was the justification for switching from pseudo-legal generation.
@@ -250,7 +282,11 @@ pub fn walkEval(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, rem
         switch (me) {
             .White => {
                 bestVal = @max(bestVal, eval);
-                if (bestVal == eval) foundMove = move;
+                if (bestVal == eval) {
+                    foundMove = move;
+                    pv.items.len = nextLine.items.len;
+                    @memcpy(pv.items, nextLine.items);
+                }
                 alpha = @max(alpha, bestVal);
                 if (opts.doPruning and bestVal >= beta) {
                     memoKind = .BetaPrune;
@@ -259,7 +295,11 @@ pub fn walkEval(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, rem
             },
             .Black => {
                 bestVal = @min(bestVal, eval);
-                if (bestVal == eval) foundMove = move;
+                if (bestVal == eval) {
+                    foundMove = move;
+                    pv.items.len = nextLine.items.len;
+                    @memcpy(pv.items, nextLine.items);
+                }
                 beta = @min(beta, bestVal);
                 if (opts.doPruning and bestVal <= alpha) {
                     memoKind = .AlphaPrune;
@@ -273,6 +313,8 @@ pub fn walkEval(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, rem
         ctx.memoMap.setAndOverwriteBucket(game, .{ .eval = bestVal, .remaining = @intCast(remaining), .move = foundMove.?, .kind = memoKind });
     }
 
+    line.items.len = pv.items.len;
+    @memcpy(line.items, pv.items);
     return bestVal;
 }
 

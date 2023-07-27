@@ -40,7 +40,7 @@ pub fn main() !void {
     const config: Opts = .{};
     print("[info]: {}\n", .{config});
 
-    const cores = 4;
+    const cores = 1;
     var played = Shared.init(0);
     var stats: Stats = .{};
     var workers = try forever.alloc(Worker, cores);
@@ -53,8 +53,8 @@ pub fn main() !void {
             .stats = &stats,
             .config = config,
             .engineA = try Stockfish.initOther("/Users/luke/test/zig-out/bin/uci", forever),
-            .engineB = try Stockfish.initOther("/Users/luke/test/zig-out/bin/uci", forever),
-            // .engineB = try Stockfish.initOther("stockfish", forever),
+            // .engineB = try Stockfish.initOther("/Users/luke/test/zig-out/bin/uci", forever),
+            .engineB = try Stockfish.initOther("stockfish", forever),
         };
     }
 
@@ -192,6 +192,7 @@ fn logGameOver(err: anyerror, board: *Board, moveHistory: *std.ArrayList([5]u8),
 }
 
 fn playUciMove(self: *Worker, engine: *Stockfish, timeLimitMS: u64, board: *Board, moveHistory: *std.ArrayList([5]u8)) !void {
+    print("----------\n", .{});
     try engine.send(.AreYouReady);
     engine.blockUntilRecieve(.ReadyOk);
     try engine.send(.{ .SetPositionMoves = .{ .board = board, .moves = moveHistory.items } });
@@ -205,6 +206,7 @@ fn playUciMove(self: *Worker, engine: *Stockfish, timeLimitMS: u64, board: *Boar
             // print("{}\n", .{infoMsg});
             switch (infoMsg) {
                 .Info => |info| {
+                    print("info: {s}\n", .{info.pvFirstMove.?});
                     if (info.time) |time| {
                         if (time <= timeLimitMS) {
                             if (info.pvFirstMove) |move| {
@@ -239,8 +241,9 @@ fn playUciMove(self: *Worker, engine: *Stockfish, timeLimitMS: u64, board: *Boar
         unreachable;
     };
 
-    // board.debugPrint();
-    // print("Move: {any}\n", .{moveStr});
+    board.debugPrint();
+    print("Move: {s}\n", .{moveStr});
+    print("----------\n", .{});
     _ = try UCI.playAlgebraic(board, moveStr, &self.ctx.lists);
     try moveHistory.append(moveStr);
 
@@ -284,6 +287,7 @@ pub const Stockfish = struct {
         // Don't care about the max because fixedBufferStream will give a write error if it overflows.
         try self.process.stdout.?.reader().streamUntilDelimiter(resultStream.writer(), '\n', null);
         const msg = resultStream.getWritten();
+        print("[] {s}\n", .{msg});
         return try UCI.UciResult.parse(msg);
     }
 

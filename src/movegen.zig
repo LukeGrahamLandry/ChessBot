@@ -15,14 +15,14 @@ const tables = &@import("precalc.zig").tables;
 
 pub fn possibleMoves(board: *const Board, me: Colour, lists: *ListPool) !ListPool.List {
     var moves = try lists.get();
-    const out: CollectMoves = .{ .moves=&moves, .filter=.Any };
+    const out: CollectMoves = .{ .moves = &moves, .filter = .Any };
     try genPossibleMoves(out, board, me);
     return moves;
 }
 
 pub fn collectOnePieceMoves(board: *const Board, i: usize, lists: *ListPool) !ListPool.List {
     var moves = try lists.get();
-    const out: CollectMoves = .{ .moves=&moves, .filter=.Any };
+    const out: CollectMoves = .{ .moves = &moves, .filter = .Any };
     try genOnePieceMoves(out, board, i);
     return moves;
 }
@@ -31,7 +31,7 @@ pub fn genPossibleMoves(out: anytype, board: *const Board, me: Colour) !void {
     var mySquares = board.peicePositions.getFlag(me);
     if (out.filter != .CurrentlyCalcChecks) assert(me == board.nextPlayer);
 
-    if (out.filter != .CurrentlyCalcChecks and board.checks.doubleCheck) {  // must move king. 
+    if (out.filter != .CurrentlyCalcChecks and board.checks.doubleCheck) { // must move king.
         const kingIndex = if (me == .White) board.whiteKingIndex else board.blackKingIndex;
         try kingMove(out, board, kingIndex, board.nextPlayer);
         return;
@@ -46,7 +46,7 @@ pub fn genPossibleMoves(out: anytype, board: *const Board, me: Colour) !void {
 }
 
 // Using something like this is temping because I spend a lot of time putting things in lists and often only look at the first.
-// But that's only cause pruning is working which relies partly on having all the moves and putting the best at the front. 
+// But that's only cause pruning is working which relies partly on having all the moves and putting the best at the front.
 pub const MoveIter = struct {
     targets: u64,
     board: *const Board,
@@ -54,11 +54,11 @@ pub const MoveIter = struct {
 
     pub fn of(board: *const Board, me: Colour, lists: *ListPool) @This() {
         assert(me == board.nextPlayer);
-        if (!board.checks.doubleCheck) { 
-            return .{ .board=board, .targets=board.peicePositions.getFlag(me), .lists=lists};     
-        } else { // must move king. 
+        if (!board.checks.doubleCheck) {
+            return .{ .board = board, .targets = board.peicePositions.getFlag(me), .lists = lists };
+        } else { // must move king.
             const kingIndex = if (me == .White) board.whiteKingIndex else board.blackKingIndex;
-            return .{ .board=board, .targets=@as(u64, 1) << @intCast(kingIndex), .lists=lists};
+            return .{ .board = board, .targets = @as(u64, 1) << @intCast(kingIndex), .lists = lists };
         }
     }
 
@@ -69,7 +69,7 @@ pub const MoveIter = struct {
             self.targets = self.targets ^ flag;
 
             var moves = try self.lists.get();
-            const out: CollectMoves = .{ .moves=&moves, .filter=.Any };
+            const out: CollectMoves = .{ .moves = &moves, .filter = .Any };
             try genOnePieceMoves(out, self.board, offset);
             return moves;
         } else {
@@ -108,17 +108,17 @@ fn bishopSlide(out: anytype, board: *const Board, i: usize, colour: Colour) !voi
 }
 
 fn sliderMoves(out: anytype, board: *const Board, i: usize, colour: Colour, comptime isRook: bool) !void {
-    // These aren't really branches. The function is generic over that param. 
+    // These aren't really branches. The function is generic over that param.
     const masksTable = if (isRook) &tables.rookMasks else &tables.bishopMasks;
     const targetsTable = if (isRook) &tables.rooks else &tables.bishops;
     const myPinKind = if (isRook) board.checks.pinsByRook else board.checks.pinsByBishop;
-    const otherPinKind = if (isRook) board.checks.pinsByBishop else  board.checks.pinsByRook;
+    const otherPinKind = if (isRook) board.checks.pinsByBishop else board.checks.pinsByRook;
 
     // When calculating danger squares the king can't move to,
     // - defended pieces count as targetable
     // - the king doesn't count as a blocker
-    // - you don't care about pins 
-    // This being simpler is a win from using the lookup to generate all targets at once. 
+    // - you don't care about pins
+    // This being simpler is a win from using the lookup to generate all targets at once.
     // TODO: this should be a seperate function.
     if (comptime (out.filter == .CurrentlyCalcChecks)) {
         var pieces = board.peicePositions.black | board.peicePositions.white;
@@ -130,16 +130,16 @@ fn sliderMoves(out: anytype, board: *const Board, i: usize, colour: Colour, comp
         return;
     }
 
-    // If pinned by the other type of piece, you can't move at all. 
+    // If pinned by the other type of piece, you can't move at all.
     const startFlag = @as(u64, 1) << @intCast(i);
     if ((otherPinKind & startFlag) != 0) return;
-    
+
     var pieces = board.peicePositions.black | board.peicePositions.white;
 
     const mask = pieces & masksTable[i];
     const myPieces = board.peicePositions.getFlag(colour);
     var targets = targetsTable[i].get(mask) & (~myPieces) & board.checks.blockSingleCheck;
-    
+
     // If pinned by the same type of piece, you need to stay on the pin lines
     if ((myPinKind & startFlag) != 0) targets &= myPinKind;
 
@@ -174,7 +174,7 @@ fn pawnMove(out: anytype, board: *const Board, i: usize, file: usize, rank: usiz
     }
 
     if (rookPinned) return;
-    
+
     if (file < 7) { // right
         try out.pawnAttack(board, i, file + 1, targetRank, piece.colour);
         // TODO: are these right?
@@ -187,7 +187,7 @@ fn pawnMove(out: anytype, board: *const Board, i: usize, file: usize, rank: usiz
 }
 
 fn frenchMove(out: anytype, board: *const Board, i: usize, targetFile: usize, targetRank: usize, colour: Colour) !void {
-    if (out.filter == .CurrentlyCalcChecks) return;  // dont care, cant take kings.
+    if (out.filter == .CurrentlyCalcChecks) return; // dont care, cant take kings.
 
     // Most of the time you can't en-passant so make that case as fast as possible.
     switch (board.frenchMove) {
@@ -200,11 +200,11 @@ fn frenchMove(out: anytype, board: *const Board, i: usize, targetFile: usize, ta
             if (!board.squares[captureIndex].is(colour.other(), .Pawn)) return; // TODO: why isnt this always true?
             const toFlag = @as(u64, 1) << @intCast(endIndex);
             const captureFlag = @as(u64, 1) << @intCast(captureIndex);
-            // Works because block**Single**Check so only one thing will be attacking. 
+            // Works because block**Single**Check so only one thing will be attacking.
             if ((board.checks.blockSingleCheck & toFlag) == 0 and (board.checks.blockSingleCheck & captureFlag) == 0) return;
             const fromFlag = @as(u64, 1) << @intCast(i);
-            
-            // TODO: no and. can both be crushed it together into one bit thing? 
+
+            // TODO: no and. can both be crushed it together into one bit thing?
 
             // Normal pins
             const rookPinned = (board.checks.pinsByRook & fromFlag) != 0;
@@ -212,7 +212,7 @@ fn frenchMove(out: anytype, board: *const Board, i: usize, targetFile: usize, ta
             if (rookPinned and (board.checks.pinsByRook & toFlag) == 0) return;
             if (bishopPinned and (board.checks.pinsByBishop & toFlag) == 0) return;
 
-            // Fancy pins        
+            // Fancy pins
             const frenchRookPinned = (board.checks.frenchPinByRook & captureFlag) != 0;
             const frenchBishopPinned = (board.checks.frenchPinByBishop & captureFlag) != 0;
             if (frenchRookPinned and (board.checks.frenchPinByRook & toFlag) == 0) return;
@@ -243,13 +243,13 @@ pub fn ff(i: anytype) u64 {
     return @as(u64, 1) << @as(u6, i);
 }
 
-// This wouldn't work for fisher random but that's not the universe we live in right now. 
+// This wouldn't work for fisher random but that's not the universe we live in right now.
 pub fn tryCastle(out: anytype, board: *const Board, colour: Colour, comptime goingLeft: bool) !void {
     if (out.filter == .CurrentlyCalcChecks) return;
     if (!board.castling.get(colour, goingLeft)) return;
 
     // Are there any pieces blocking us from castling?
-    const shift: u6 = if (colour == .Black) 7*8 else 0;
+    const shift: u6 = if (colour == .Black) 7 * 8 else 0;
     const leftNoChecks = comptime (ff(2) | ff(3) | ff(4));
     const rightNoChecks = comptime (ff(6) | ff(5) | ff(4));
     var pathFlag = (if (goingLeft) leftNoChecks else rightNoChecks) << shift;
@@ -270,12 +270,12 @@ pub fn tryCastle(out: anytype, board: *const Board, colour: Colour, comptime goi
     assert(board.squares[rookFrom].is(colour, .Rook));
     assert(board.squares[rookTo].empty());
 
-    // Make the move. 
+    // Make the move.
     const move: Move = .{ .from = kingFrom, .to = kingTo, .action = .{ .castle = .{
         .rookFrom = rookFrom,
         .rookTo = rookTo,
     } }, .isCapture = false };
-    try out.append(move);   
+    try out.append(move);
 }
 
 fn knightMove(out: anytype, board: *const Board, i: usize, colour: Colour) !void {
@@ -284,7 +284,7 @@ fn knightMove(out: anytype, board: *const Board, i: usize, colour: Colour) !void
         return;
     }
 
-    // Pinned knights can never move. 
+    // Pinned knights can never move.
     const startFlag = @as(u64, 1) << @intCast(i);
     if (((board.checks.pinsByBishop | board.checks.pinsByRook) & startFlag) != 0) return;
 
@@ -304,15 +304,15 @@ fn emitMoves(out: anytype, board: *const Board, i: usize, _targets: u64, colour:
     }
 }
 
-const directions = [8] [2] isize {
-    [2] isize { 1, 0 },
-    [2] isize { -1, 0 },
-    [2] isize { 0, 1 },
-    [2] isize { 0, -1 },
-    [2] isize { 1, 1 },
-    [2] isize { 1, -1 },
-    [2] isize { -1, 1 },
-    [2] isize { -1, -1 },
+const directions = [8][2]isize{
+    [2]isize{ 1, 0 },
+    [2]isize{ -1, 0 },
+    [2]isize{ 0, 1 },
+    [2]isize{ 0, -1 },
+    [2]isize{ 1, 1 },
+    [2]isize{ 1, -1 },
+    [2]isize{ -1, 1 },
+    [2]isize{ -1, -1 },
 };
 
 // TODO: goal of the movegen adventure is get rid of this complicated struct because the functions know that one is just rying to colelct the bit map and they can deal with that more efficiently
@@ -321,15 +321,15 @@ const CollectMoves = struct {
     moves: *ListPool.List,
     comptime filter: MoveFilter = .Any,
 
-    // The new lookup move gen doesn't need to be told when to stop sliders so this method can be simpler. 
-    // This does not do any validation. The piece moving must not be a king and the target square must be legal. 
-    // All this does is make the move and do the ordering trick of prefering captures. 
+    // The new lookup move gen doesn't need to be told when to stop sliders so this method can be simpler.
+    // This does not do any validation. The piece moving must not be a king and the target square must be legal.
+    // All this does is make the move and do the ordering trick of prefering captures.
     fn slideNew(self: CollectMoves, board: *const Board, fromIndex: u6, toIndexx: u6, toFlag: u64, colour: Colour) !void {
         const enemyPieces = if (colour == .White) board.peicePositions.black else board.peicePositions.white;
 
         if ((toFlag & enemyPieces) == 0) { // moving to empty square
             try self.moves.append(ii(fromIndex, toIndexx, false));
-        } else { // taking an enemy piece. do move ordering for better prune. 
+        } else { // taking an enemy piece. do move ordering for better prune.
             var toPush = ii(fromIndex, toIndexx, true);
 
             // Have this be a comptime param that gets passed down so I can easily benchmark.
@@ -350,14 +350,14 @@ const CollectMoves = struct {
     }
 
     pub fn pawnForwardTwo(self: CollectMoves, board: *const Board, fromIndex: usize, toFile: usize, toRank: usize) !void {
-        if (comptime (self.filter == .CurrentlyCalcChecks)) return;  // Pawns can't capture forward. 
+        if (comptime (self.filter == .CurrentlyCalcChecks)) return; // Pawns can't capture forward.
 
         // std.debug.assert(fromIndex < 64 and toFile < 8 and toRank < 8);
-        const toFlag = @as(u64, 1) << @intCast(toRank*8 + toFile);
+        const toFlag = @as(u64, 1) << @intCast(toRank * 8 + toFile);
         const fromFlag = @as(u64, 1) << @intCast(fromIndex);
         if ((board.checks.blockSingleCheck & toFlag) == 0) return;
         if ((board.checks.pinsByRook & fromFlag) != 0 and (board.checks.pinsByRook & toFlag) == 0) return;
-        
+
         const move: Move = .{ .from = @intCast(fromIndex), .to = @intCast(toRank * 8 + toFile), .action = .allowFrenchMove, .isCapture = false };
         try self.moves.append(move);
     }
@@ -372,11 +372,11 @@ const CollectMoves = struct {
 
     fn maybePromote(self: CollectMoves, board: *const Board, fromIndex: usize, toFile: usize, toRank: usize, colour: Colour) !void {
         if (self.filter != .CurrentlyCalcChecks) {
-            const toFlag = @as(u64, 1) << @intCast(toRank*8 + toFile);
+            const toFlag = @as(u64, 1) << @intCast(toRank * 8 + toFile);
             if ((board.checks.blockSingleCheck & toFlag) == 0) return;
             const fromFlag = @as(u64, 1) << @intCast(fromIndex);
 
-            // TODO: no and. can both be crushed it together into one bit thing? 
+            // TODO: no and. can both be crushed it together into one bit thing?
             const rookPinned = (board.checks.pinsByRook & fromFlag) != 0;
             const bishopPinned = (board.checks.pinsByBishop & fromFlag) != 0;
             if (rookPinned and (board.checks.pinsByRook & toFlag) == 0) return;
@@ -410,12 +410,12 @@ const CollectMoves = struct {
 };
 
 fn toMask(f: usize, r: usize) u64 {
-    const i = r*8 + f;
+    const i = r * 8 + f;
     return @as(u64, 1) << @intCast(i);
 }
 
 pub const GetAttackSquares = struct {
-    /// Includes your own peices when they could be taken back. Places the other king can't move. 
+    /// Includes your own peices when they could be taken back. Places the other king can't move.
     bb: u64 = 0,
     comptime filter: MoveFilter = .CurrentlyCalcChecks,
 
@@ -438,30 +438,30 @@ pub const GetAttackSquares = struct {
     }
 };
 
-pub const ChecksInfo = struct { 
-    // If not in check: all ones. 
-    // If in single check: a piece must move TO one of these squares OR the king must move to a safe square. 
-    // Includes the enemy (even a single knight) because capturing is fine. 
-    blockSingleCheck: u64 = 0, 
-    // Your peices may not move FROM these squares because they will reveal a check from an enemy slider. 
+pub const ChecksInfo = struct {
+    // If not in check: all ones.
+    // If in single check: a piece must move TO one of these squares OR the king must move to a safe square.
+    // Includes the enemy (even a single knight) because capturing is fine.
+    blockSingleCheck: u64 = 0,
+    // Your peices may not move FROM these squares because they will reveal a check from an enemy slider.
     // Directions must be tracked seperatly because you can move along the pin axis. It works out so they never overlaop and let you move between pins.
     pinsByRook: u64 = 0,
     pinsByBishop: u64 = 0,
-    // If true, the king must move to a safe square, because multiple enemies can't be blocked/captured. 
-    doubleCheck: bool = false,  // 64 bit boolean sad padding noises but we never put this in an array 
-    // Where the enemy can attack. The king may not move here. 
-    // Note: this might not include captures that can't take kings like french move. 
+    // If true, the king must move to a safe square, because multiple enemies can't be blocked/captured.
+    doubleCheck: bool = false, // 64 bit boolean sad padding noises but we never put this in an array
+    // Where the enemy can attack. The king may not move here.
+    // Note: this might not include captures that can't take kings like french move.
     targetedSquares: u64 = 0,
 
-    // Pin lines like above but for enemy pawn that could have be captured en-passant but might reveal a check. 
+    // Pin lines like above but for enemy pawn that could have be captured en-passant but might reveal a check.
     frenchPinByBishop: u64 = 0,
     frenchPinByRook: u64 = 0,
 };
 
-// TODO: This is super branchy. Maybe I could do better if I had bit boards of each piece type. 
-// TODO: It would be very nice if I could update this iterativly as moves were made instead of recalculating every time. Feels almost possible? 
-// TODO: split into more manageable functions. 
-// TODO: dont call this on the leaf nodes fo the tree. the hope was that even if its slower, it moves the work up the tree a level. 
+// TODO: This is super branchy. Maybe I could do better if I had bit boards of each piece type.
+// TODO: It would be very nice if I could update this iterativly as moves were made instead of recalculating every time. Feels almost possible?
+// TODO: split into more manageable functions.
+// TODO: dont call this on the leaf nodes fo the tree. the hope was that even if its slower, it moves the work up the tree a level.
 pub fn getChecksInfo(game: *Board, defendingPlayer: Colour) ChecksInfo {
     const mySquares = game.peicePositions.getFlag(defendingPlayer);
     const otherSquares = game.peicePositions.getFlag(defendingPlayer.other());
@@ -469,7 +469,7 @@ pub fn getChecksInfo(game: *Board, defendingPlayer: Colour) ChecksInfo {
 
     var result: ChecksInfo = .{};
 
-    // Queens, Rooks, Bishops and any resulting pins. 
+    // Queens, Rooks, Bishops and any resulting pins.
     inline for (directions[0..8], 0..) |offset, dir| outer: {
         var checkFile = @as(isize, @intCast(myKingIndex % 8));
         var checkRank = @as(isize, @intCast(myKingIndex / 8));
@@ -480,14 +480,14 @@ pub fn getChecksInfo(game: *Board, defendingPlayer: Colour) ChecksInfo {
             checkRank += offset[1];
             if (checkFile > 7 or checkRank > 7 or checkFile < 0 or checkRank < 0) break;
             const checkFlag = toMask(@intCast(checkFile), @intCast(checkRank));
-            const checkIndex = checkRank*8 + checkFile;
+            const checkIndex = checkRank * 8 + checkFile;
             const kind = game.squares[@intCast(checkIndex)].kind;
             const isEnemy = (otherSquares & checkFlag) != 0;
             wipFlag |= checkFlag;
             if (isEnemy) {
                 const isSlider = (kind == .Queen or ((dir < 4 and kind == .Rook) or (dir >= 4 and kind == .Bishop)));
                 if (isSlider) {
-                    if (lookingForPin) {  // Found a pin. Can't move the friend from before.  
+                    if (lookingForPin) { // Found a pin. Can't move the friend from before.
                         if (dir < 4) {
                             result.pinsByRook |= wipFlag;
                         } else {
@@ -495,8 +495,8 @@ pub fn getChecksInfo(game: *Board, defendingPlayer: Colour) ChecksInfo {
                         }
                     } else {
                         if (result.blockSingleCheck != 0) {
-                            result.doubleCheck = true; 
-                            // Don't care about any other checks or pins. Just need to move king. 
+                            result.doubleCheck = true;
+                            // Don't care about any other checks or pins. Just need to move king.
                             break :outer;
                         }
                         result.blockSingleCheck |= wipFlag;
@@ -508,21 +508,21 @@ pub fn getChecksInfo(game: *Board, defendingPlayer: Colour) ChecksInfo {
             }
             const isFriend = (mySquares & checkFlag) != 0;
             if (isFriend) {
-                if (lookingForPin) break;  // Two friendly in a row means we're safe
+                if (lookingForPin) break; // Two friendly in a row means we're safe
                 // This piece might be pinned, so keep looking for an enemy behind us.
                 lookingForPin = true;
             }
         }
     }
-    
-    // Knights. Can't be blocked, they just take up one square in the flag and must be captured. 
+
+    // Knights. Can't be blocked, they just take up one square in the flag and must be captured.
     var knightTargets = tables.knights[myKingIndex] & otherSquares;
     while (knightTargets != 0) {
         const offset = @ctz(knightTargets);
         var flag = @as(u64, 1) << @intCast(offset);
         knightTargets = knightTargets ^ flag;
-        
-        // TODO: It would be very convient if I had a bitboard for each piece type. 
+
+        // TODO: It would be very convient if I had a bitboard for each piece type.
         //       Then I could do this whole loop as blockSingleCheck |= knightTargets; if (@popCount(blockSingleCheck) > 1) doubleCheck = true;
         const p = game.squares[@intCast(offset)];
         if (p.kind == .Knight) {
@@ -530,13 +530,13 @@ pub fn getChecksInfo(game: *Board, defendingPlayer: Colour) ChecksInfo {
                 result.blockSingleCheck |= flag;
             } else {
                 result.doubleCheck = true;
-                break;  // TODO: is it better to just not branch here? 
+                break; // TODO: is it better to just not branch here?
             }
         }
     }
 
-    // Pawns. Don't care about going forward or french move because those can't capture a king. 
-    // They only move one so can't be blocked. 
+    // Pawns. Don't care about going forward or french move because those can't capture a king.
+    // They only move one so can't be blocked.
     // TODO: this is kinda copy-paste-y
     var kingRank = @as(usize, @intCast(myKingIndex / 8));
     var kingFile = @as(usize, @intCast(myKingIndex % 8));
@@ -569,33 +569,33 @@ pub fn getChecksInfo(game: *Board, defendingPlayer: Colour) ChecksInfo {
         }
     }
 
-    // Can never be in check from the other king. Don't need to consider it. 
+    // Can never be in check from the other king. Don't need to consider it.
 
     result.targetedSquares = getTargetedSquares(game, defendingPlayer.other());
 
-    if (result.doubleCheck){  // Must move king. 
+    if (result.doubleCheck) { // Must move king.
         result.blockSingleCheck = 0;
     } else {
-        // Don't need to bother doing this if we we're in double check because king must move. 
+        // Don't need to bother doing this if we we're in double check because king must move.
         switch (game.frenchMove) {
             .none => {
-                // No french available so don't care. 
+                // No french available so don't care.
             },
             .file => |file| {
-                // It feels like you could also avoid this by checking if enemy is targeting thier own pawn but since a pawn from both sides moves it doesn't work. 
-                // TODO: could check bit map two out on either side and need to do more work if any of those hit. 
-                
-                // If we don't have a pawn in position to take, there's no need to do more work to check if its pinned. 
+                // It feels like you could also avoid this by checking if enemy is targeting thier own pawn but since a pawn from both sides moves it doesn't work.
+                // TODO: could check bit map two out on either side and need to do more work if any of those hit.
+
+                // If we don't have a pawn in position to take, there's no need to do more work to check if its pinned.
                 const capturedPawnRank = if (defendingPlayer == .White) @as(usize, 4) else @as(usize, 3);
                 const hasLeft = file > 0 and (game.get(file - 1, capturedPawnRank).is(defendingPlayer, .Pawn));
                 const hasRight = file < 7 and (game.get(file + 1, capturedPawnRank).is(defendingPlayer, .Pawn));
                 if (hasLeft or hasRight) {
                     getFrenchPins(game, defendingPlayer, file, &result);
                 }
-            }
+            },
         }
 
-        if (result.blockSingleCheck == 0) {  // Not in check. 
+        if (result.blockSingleCheck == 0) { // Not in check.
             result.blockSingleCheck = ~result.blockSingleCheck;
         }
     }
@@ -603,23 +603,23 @@ pub fn getChecksInfo(game: *Board, defendingPlayer: Colour) ChecksInfo {
     return result;
 }
 
-// TODO: this doesnt include french move because this used to just be for detecting checks. 
+// TODO: this doesnt include french move because this used to just be for detecting checks.
 pub fn getTargetedSquares(game: *Board, attacker: Colour) u64 {
     var out: GetAttackSquares = .{};
-    // Can't fail because this consumer doesn't allocate memory 
+    // Can't fail because this consumer doesn't allocate memory
     genPossibleMoves(&out, game, attacker) catch @panic("unreachable alloc");
     return out.bb;
 }
 
-// TODO: This is fricken branch town. Is there a better way to do this? 
+// TODO: This is fricken branch town. Is there a better way to do this?
 pub fn getFrenchPins(game: *Board, defendingPlayer: Colour, frenchFile: u4, result: *ChecksInfo) void {
     const mySquares = game.peicePositions.getFlag(defendingPlayer);
     const otherSquares = game.peicePositions.getFlag(defendingPlayer.other());
     const myKingIndex = if (defendingPlayer == .White) game.whiteKingIndex else game.blackKingIndex;
     const capturedPawnRank = if (defendingPlayer == .White) @as(u64, 4) else @as(u64, 3);
 
-    // TODO: checking all directions seems silly, should only look towards the pawn. 
-    // TODO: before the loop, check if I have any pawns in the right squares to capture. because it actually happening is rare 
+    // TODO: checking all directions seems silly, should only look towards the pawn.
+    // TODO: before the loop, check if I have any pawns in the right squares to capture. because it actually happening is rare
     inline for (directions[0..8], 0..) |offset, dir| {
         var checkFile = @as(isize, @intCast(myKingIndex % 8));
         var checkRank = @as(isize, @intCast(myKingIndex / 8));
@@ -631,15 +631,15 @@ pub fn getFrenchPins(game: *Board, defendingPlayer: Colour, frenchFile: u4, resu
             checkRank += offset[1];
             if (checkFile > 7 or checkRank > 7 or checkFile < 0 or checkRank < 0) break;
             const checkFlag = toMask(@intCast(checkFile), @intCast(checkRank));
-            const checkIndex = checkRank*8 + checkFile;
+            const checkIndex = checkRank * 8 + checkFile;
             const kind = game.squares[@intCast(checkIndex)].kind;
             const isEnemy = (otherSquares & checkFlag) != 0;
             wipFlag |= checkFlag;
             if (isEnemy) {
                 if (lookingForPin) {
                     const isSlider = (kind == .Queen or ((dir < 4 and kind == .Rook) or (dir >= 4 and kind == .Bishop)));
-                    if (isSlider) { 
-                        // ok heck, we're pinned! 
+                    if (isSlider) {
+                        // ok heck, we're pinned!
                         if (dir < 4) {
                             result.frenchPinByRook |= wipFlag;
                         } else {
@@ -650,17 +650,17 @@ pub fn getFrenchPins(game: *Board, defendingPlayer: Colour, frenchFile: u4, resu
                         break;
                     }
                 } else {
-                    if (kind == .Pawn){
+                    if (kind == .Pawn) {
                         if (checkRank == capturedPawnRank and checkFile == frenchFile) {
                             lookingForPin = true;
-                            // this is the pawn we care about and we didn't see anything blocking line of sight so keep looking for sliders. 
+                            // this is the pawn we care about and we didn't see anything blocking line of sight so keep looking for sliders.
                             continue;
-                        } else { 
+                        } else {
                             // wrong pawn. dont care
                             break;
                         }
                     } else {
-                        // We didn't hit the french target pawn so don't care. 
+                        // We didn't hit the french target pawn so don't care.
                         break;
                     }
                 }
@@ -680,8 +680,8 @@ pub fn getFrenchPins(game: *Board, defendingPlayer: Colour, frenchFile: u4, resu
                         continue;
                     }
                 } else {
-                    // otherwise, it can't be a french pin, dont care. 
-                    break;  
+                    // otherwise, it can't be a french pin, dont care.
+                    break;
                 }
             }
         }
@@ -706,17 +706,17 @@ pub fn ii(fromIndex: u6, toIndex: u6, isCapture: bool) Move {
 
 pub fn printBitBoard(bb: u64) void {
     print("{b}\n", .{bb});
-   
+
     for (0..8) |i| {
         print("|", .{});
         for (0..8) |j| {
-            const rank = 7-i;
+            const rank = 7 - i;
             const file = j;
-            const mask: u64 = @as(u64, 1) << @intCast(rank*8+file);
+            const mask: u64 = @as(u64, 1) << @intCast(rank * 8 + file);
             const char: u8 = if ((mask & bb) != 0) 'X' else ' ';
-            print("{c}|", .{ char });
+            print("{c}|", .{char});
         }
-       print("\n", .{});
+        print("\n", .{});
     }
 }
 
@@ -730,13 +730,14 @@ pub fn AnyListPool(comptime element: type) type {
         alloc: std.mem.Allocator,
 
         pub const List = ListType(element);
+        const POOL_SIZE = 128;
 
         pub fn init(alloc: std.mem.Allocator) !ListPool {
-            var self: ListPool = .{ .lists = try ListType(List).initCapacity(alloc, 128), .alloc=alloc };
-            for (0..128) |_| { // pre-allocate enough lists that we'll probably never need to make a new one. should be the expected depth number. 
+            var self: ListPool = .{ .lists = try ListType(List).initCapacity(alloc, POOL_SIZE), .alloc = alloc };
+            for (0..POOL_SIZE) |_| { // pre-allocate enough lists that we'll probably never need to make a new one. should be the expected depth number.
                 // If all 16 of your pieces were somehow a queen in the middle of the board with no other pieces blocking
-                // (maybe they're magic 4th dimensional queens, idk), that's still only 448 moves. So 512 will never overflow. 
-                // I'm sure there's a smaller upper bound than that but also nobody cares. 
+                // (maybe they're magic 4th dimensional queens, idk), that's still only 448 moves. So 512 will never overflow.
+                // I'm sure there's a smaller upper bound than that but also nobody cares.
                 try self.lists.append(try List.initCapacity(self.alloc, if (BE_EVIL) 512 else 128));
             }
             return self;
@@ -752,28 +753,39 @@ pub fn AnyListPool(comptime element: type) type {
                 if (self.lists.popOrNull()) |list| {
                     return list;
                 } else {
-                    return try List.initCapacity(self.alloc, 128); 
+                    return try List.initCapacity(self.alloc, 128);
                 }
             }
         }
 
-        // TODO: do i need to errdefer this in functions that return one or is it already too messed up to recover if an allocation fails. 
+        // TODO: do i need to errdefer this in functions that return one or is it already too messed up to recover if an allocation fails.
         pub fn release(self: *ListPool, list: List) void {
-            self.lists.append(list) catch @panic("OOM releasing list.");  // If this fails you made like way too many lists. 
+            self.lists.append(list) catch @panic("OOM releasing list."); // If this fails you made like way too many lists.
             self.lists.items[self.lists.items.len - 1].clearRetainingCapacity();
+        }
+
+        pub fn copyOf(self: *ListPool, other: *const List) List {
+            var new = try self.get();
+            new.items.len = other.items.len;
+            @memcpy(new.items, other.items);
+            return new;
+        }
+
+        pub fn noneLost(self: ListPool) bool {
+            return self.lists.items.len == POOL_SIZE;
         }
     };
 }
 
-// This is a terrible idea but its also like 15% faster and probably fine. 
-// Very disappointing. Clearly a sign that I shouldn't be putting so many things in lists 
-// but not sure how to do that and still get move ordering. 
+// This is a terrible idea but its also like 15% faster and probably fine.
+// Very disappointing. Clearly a sign that I shouldn't be putting so many things in lists
+// but not sure how to do that and still get move ordering.
 fn UnsafeList(comptime element: type) type {
-    return struct { 
+    return struct {
         items: []element,
 
         pub fn initCapacity(alloc: std.mem.Allocator, num: usize) !@This() {
-            var self: @This() =  .{ .items = try alloc.alloc(element, num) };
+            var self: @This() = .{ .items = try alloc.alloc(element, num) };
             self.clearRetainingCapacity();
             return self;
         }
@@ -781,7 +793,6 @@ fn UnsafeList(comptime element: type) type {
         pub fn append(self: *@This(), e: element) !void {
             self.items.len += 1;
             self.items[self.items.len - 1] = e;
-            
         }
 
         pub fn clearRetainingCapacity(self: *@This()) void {

@@ -21,7 +21,10 @@ pub fn main() !void {
 
     while (true) {
         const cmd = waitForUciCommand(std.io.getStdIn().reader(), e.arena.allocator()) catch |err| {
-            std.debug.print("{}\n", .{err});
+            std.debug.print("[uci] {}\n", .{err});
+            if (err == error.EndOfStream) break;
+            // be a slightly less hyper agressive spin loop
+            std.time.sleep(5 * std.time.ns_per_ms);
             continue;
         };
         try e.handle(cmd);
@@ -102,7 +105,9 @@ fn engineWorker(self: *Worker) !void {
         self.isIdle.reset();
 
         // This knows to print uci stuff to stdout.
-        _ = try search.bestMove(opts, &self.ctx, &self.board, self.maxDepth - 1, self.timeLimitMs);
+        self.board.debugPrint();
+        const move = try search.bestMove(opts, &self.ctx, &self.board, self.maxDepth - 1, self.timeLimitMs);
+        std.debug.print("best: {s}\n", .{try move.text()});
         try self.printAllResults();
         self.isIdle.set();
     }
@@ -114,6 +119,7 @@ fn waitForUciCommand(reader: anytype, alloc: std.mem.Allocator) !UciCommand {
     // Don't care about the max because fixedBufferStream will give a write error if it overflows.
     try reader.streamUntilDelimiter(resultStream.writer(), '\n', null);
     const msg = resultStream.getWritten();
+    std.debug.print("[uci]: {s}\n", .{msg});
     return try UciCommand.parse(msg, alloc);
 }
 
@@ -236,7 +242,6 @@ pub const UciInfo = struct {
     depth: ?u64 = null,
     seldepth: ?u64 = null,
     multipv: ?u64 = null,
-    score_cp: ?i64 = null,
     nodes: ?u64 = null,
     nps: ?u64 = null,
     hashfull: ?u64 = null,
@@ -376,9 +381,12 @@ pub const UciResult = union(enum) {
                 if (info.depth) |depth| {
                     try out.print(" depth {}", .{depth});
                 }
+                if (info.cp) |cp| {
+                    try out.print(" score cp {}", .{cp});
+                }
                 if (info.pv) |pv| {
-                    _ = pv;
-                    panic("TODO: writeTo() for info pv", .{});
+                    try out.writeAll(" pv ");
+                    try out.writeAll(pv);
                 } else {
                     // My search isnt tracking pvs rn but it can give the best move at each level.
                     if (info.pvFirstMove) |move| {

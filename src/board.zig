@@ -1,4 +1,4 @@
-//! Representing the game. Playing and unplaying moves. 
+//! Representing the game. Playing and unplaying moves.
 
 const std = @import("std");
 const Learned = @import("learned.zig");
@@ -21,7 +21,7 @@ pub const Kind = enum(u4) {
     King = 1,
 
     pub fn material(self: Kind) i32 {
-        const values = [_] i32 { 0, 100000, 900, 300, 300, 500, 100 };
+        const values = [_]i32{ 0, 100000, 900, 300, 300, 500, 100 };
         return values[@intFromEnum(self)];
     }
 };
@@ -140,7 +140,7 @@ pub const OldMove = struct {
     frenchMove: FrenchMove,
     oldHalfMoveDraw: u32 = 0,
     debugZoidberg: u64,
-    oldChecks: ChecksInfo, 
+    oldChecks: ChecksInfo,
     pastStartIndex: usize,
 };
 
@@ -197,7 +197,7 @@ fn getZoidberg(piece: Piece, square: u6) u64 {
     return Learned.ZOIDBERG[index];
 }
 
-// This is a chonker struct (if I store repititions inline) but that's fine because I only ever need one. 
+// This is a chonker struct (if I store repititions inline) but that's fine because I only ever need one.
 pub const Board = struct {
     // TODO: this could be a PackedIntArray if I remove padding from Piece and deal with re-encoding to bytes before sending to js. is that better?
     //       probably not since I dont need to hash all the bytes anymore and i dont copy them into table and dont copy to play moves so who cares how big this struct is
@@ -215,13 +215,13 @@ pub const Board = struct {
     fullMoves: u32 = 1,
     // line: if (slowTrackAllMoves) std.BoundedArray(OldMove, 300) else void = if (slowTrackAllMoves) std.BoundedArray(OldMove, 300).init(0) catch @panic("Overflow line.") else {}, // inefficient but useful for debugging.
     zoidberg: u64 = 1,
-    lastMove: ?Move = null,  
-    checks: ChecksInfo = .{}, 
+    lastMove: ?Move = null,
+    checks: ChecksInfo = .{},
 
-    // For draw by repetition. 
+    // For draw by repetition.
     // If I were reusing the list it would only need to be 50 long (becuase draw anyway if no captures or pawn moves),
-    // but to allow undo, I'm just keeping the whole history and moving the start index forward. 
-    pastBoardHashes: [512] u64 = undefined,
+    // but to allow undo, I'm just keeping the whole history and moving the start index forward.
+    pastBoardHashes: [512]u64 = undefined,
     pastStartIndex: usize = 0,
     pastEndIndex: usize = 1,
 
@@ -246,7 +246,7 @@ pub const Board = struct {
         return self.squares[rank * 8 + file];
     }
 
-    // TODO: returning an error because can't be comptime because needs move lookup table. 
+    // TODO: returning an error because can't be comptime because needs move lookup table.
     pub fn initial() !Board {
         return try fromFEN(INIT_FEN);
     }
@@ -276,7 +276,7 @@ pub const Board = struct {
     /// This assumes that <move> is legal.
     pub fn playNoUpdateChecks(self: *Board, move: Move) OldMove {
         assert(move.from != move.to);
-        const thisMove: OldMove = .{ .move = move, .taken = self.squares[move.to], .original = self.squares[move.from], .old_castling = self.castling, .debugPeicePositions = self.peicePositions, .debugSimpleEval = self.simpleEval, .frenchMove = self.frenchMove, .oldHalfMoveDraw = self.halfMoveDraw, .debugZoidberg = self.zoidberg, .lastMove=self.lastMove, .oldChecks=self.checks, .pastStartIndex=self.pastStartIndex };
+        const thisMove: OldMove = .{ .move = move, .taken = self.squares[move.to], .original = self.squares[move.from], .old_castling = self.castling, .debugPeicePositions = self.peicePositions, .debugSimpleEval = self.simpleEval, .frenchMove = self.frenchMove, .oldHalfMoveDraw = self.halfMoveDraw, .debugZoidberg = self.zoidberg, .lastMove = self.lastMove, .oldChecks = self.checks, .pastStartIndex = self.pastStartIndex };
         assert(thisMove.original.colour == self.nextPlayer);
         const colour = thisMove.original.colour;
         self.simpleEval -= thisMove.taken.eval();
@@ -323,7 +323,7 @@ pub const Board = struct {
             if (thisMove.original.kind == .Rook) {
                 const fromRank = @divFloor(move.from, 8);
                 const rookRank: u6 = if (colour == .White) 0 else 7;
-                if (fromRank == rookRank){  // check for weird consturcted positions where your rook got to the other side. TODO: do it by colour instead
+                if (fromRank == rookRank) { // check for weird consturcted positions where your rook got to the other side. TODO: do it by colour instead
                     if (move.from == 0 or move.from == (7 * 8)) {
                         self.castling.set(colour, true, false);
                     } else if (move.from == 7 or move.from == (7 * 8 + 7)) {
@@ -333,17 +333,17 @@ pub const Board = struct {
             }
 
             // If you take a rook, they can't castle on that side.
-            if (thisMove.taken.kind == .Rook) {  
+            if (thisMove.taken.kind == .Rook) {
                 assert(thisMove.taken.colour == colour.other());
                 const toRank = @divFloor(move.to, 8);
                 const rookRank: u6 = if (colour.other() == .White) 0 else 7;
-                if (toRank == rookRank){   // check for weird consturcted positions where your rook got to the other side
+                if (toRank == rookRank) { // check for weird consturcted positions where your rook got to the other side
                     if (move.to == 0 or move.to == (7 * 8)) {
                         self.castling.set(colour.other(), true, false);
                     } else if (move.to == 7 or move.to == (7 * 8 + 7)) {
                         self.castling.set(colour.other(), false, false);
                     }
-                } 
+                }
             }
         }
 
@@ -413,10 +413,11 @@ pub const Board = struct {
         self.nextPlayer = self.nextPlayer.other();
         // if (slowTrackAllMoves) self.line.append(thisMove) catch @panic("Overflow line.");
         self.lastMove = move;
-        
-        // Unsafe! This assumes capacity. 
+
+        // Unsafe! This assumes capacity.
         self.pastBoardHashes[self.pastEndIndex] = self.zoidberg;
         self.pastEndIndex += 1;
+        assert(self.simpleEval == self.slowSimpleEval());
         return thisMove;
     }
 
@@ -505,6 +506,14 @@ pub const Board = struct {
         assert(self.zoidberg == move.debugZoidberg);
     }
 
+    pub fn slowSimpleEval(self: *Board) i32 {
+        var result: i32 = 0;
+        for (self.squares) |s| {
+            result += s.eval();
+        }
+        return result;
+    }
+
     pub fn fromFEN(fen: []const u8) error{InvalidFen}!Board {
         var b = try UCI.parseFen(fen);
         b.checks = getChecksInfo(&b, b.nextPlayer);
@@ -564,7 +573,7 @@ pub const Board = struct {
         return .Stalemate;
     }
 
-    // This could be faster if it didn't generate every possible move first but it's not used in the search loop so nobody cares. 
+    // This could be faster if it didn't generate every possible move first but it's not used in the search loop so nobody cares.
     pub fn nextPlayerHasLegalMoves(game: *Board, lists: *ListPool) !bool {
         const colour = game.nextPlayer;
         const moves = try movegen.possibleMoves(game, colour, lists);
