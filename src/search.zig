@@ -26,6 +26,7 @@ pub const StratOpts = struct {
     doIterative: bool = true, // When false, it will play garbage moves if it runs out of time because it won't have other levels to fall back to.
     doMemo: bool = true,
     printUci: bool = false,
+    followCapturesDepth: i32 = 0,
 };
 
 pub const MoveErr = error{ GameOver, OutOfMemory, ForceStop, Overflow, ThisIsntThreadSafe };
@@ -91,26 +92,25 @@ pub fn bestMove(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, max
     const startDepth = if (opts.doIterative) 0 else @min(maxDepth, 100);
     for (startDepth..(@min(maxDepth, 100) + 1)) |depth| { // @min is sanity check for list pool capacity
         var pv = try ctx.lists.get();
+        defer ctx.lists.release(pv);
         var stats: Stats = .{};
         var alpha = LOWEST_EVAL;
         var beta = -LOWEST_EVAL;
-        var bestVal: i32 = LOWEST_EVAL * me.dir();
         // TODO: this is almost the same as walkEval.
         for (topLevelMoves.items, 0..) |move, i| {
             var line = try ctx.lists.get();
+            defer ctx.lists.release(line);
             try line.append(move);
             const unMove = game.play(move);
             defer game.unplay(unMove);
-            const eval = walkEval(opts, ctx, game, @intCast(depth), alpha, beta, &stats, false, endTime, &line) catch |err| {
-                ctx.lists.release(pv);
-                ctx.lists.release(line);
+            const eval = -(walkEval(opts, ctx, game, @intCast(depth), -beta, -alpha, &stats, false, endTime, &line) catch |err| {
                 if (err == error.ForceStop) {
                     // If we ran out of time, just return the best result from the last search.
                     if (thinkTime == -1) {
-                        print("Didn't even finish one layer in {}ms! Playing random move! \n", .{timeLimitMs});
+                        if (isWasm) print("Didn't even finish one layer in {}ms! Playing random move! \n", .{timeLimitMs});
                         favourite = topLevelMoves.items[0];
                     } else {
-                        print("Out of time. Using move from depth {} ({}ms)\n", .{ depth - 1, @divFloor(thinkTime, std.time.ns_per_ms) });
+                        if (isWasm) print("Out of time. Using move from depth {} ({}ms)\n", .{ depth - 1, @divFloor(thinkTime, std.time.ns_per_ms) });
                     }
                     if (opts.printUci) {
                         const result: UCI.UciResult = .{ .BestMove = UCI.writeAlgebraic(favourite) };
@@ -121,31 +121,28 @@ pub fn bestMove(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, max
                 } else {
                     return err;
                 }
-            };
+            });
             ctx.evalGuesses.items[i] = eval;
 
             // Update a/b to pass better ones to walkEval but it would never be able to prune here because the we're always the same player.
-            switch (me) {
-                .White => {
-                    bestVal = @max(bestVal, eval);
-                    alpha = @max(alpha, bestVal);
-                },
-                .Black => {
-                    bestVal = @min(bestVal, eval);
-                    beta = @min(beta, bestVal);
-                },
+            if (eval > alpha) {
+                alpha = eval;
+                if (opts.printUci) {
+                    pv.items.len = line.items.len;
+                    @memcpy(pv.items, line.items);
+                }
             }
-
-            if (eval == bestVal) {
-                pv.items.len = line.items.len;
-                @memcpy(pv.items, line.items);
-            }
-            ctx.lists.release(line);
         }
 
-        std.sort.insertionContext(0, topLevelMoves.items.len, PairContext{ .moves = topLevelMoves.items, .evals = ctx.evalGuesses.items, .me = me });
+        if (opts.printUci) assert(pv.items.len > 0); // There must be some best line.
+
+        std.sort.insertionContext(0, topLevelMoves.items.len, PairContext{ .moves = topLevelMoves.items, .evals = ctx.evalGuesses.items });
         thinkTime = nanoTimestamp() - startTime;
-        favourite = pv.items[0]; // topLevelMoves.items[0]; //
+
+        // Using topLevelMoves.items[0] passed my simple test by coincidence because I put captures first in the list
+        // so it chooses those over other moves it thinks are equal. I want to use pv because then the move played matches.
+        // But that reveals it thinks hanging pieces beyond depth is fine.
+        favourite = topLevelMoves.items[0]; // pv.items[0] // remember to use the right score
 
         if (opts.printUci) {
             var str = try std.BoundedArray(u8, 10000).init(0);
@@ -164,7 +161,6 @@ pub fn bestMove(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, max
             // try ctx.uciResults.append(result);
             try result.writeTo(std.io.getStdOut().writer());
         }
-        ctx.lists.release(pv);
     }
 
     if (opts.printUci) {
@@ -172,7 +168,7 @@ pub fn bestMove(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, max
         // try ctx.uciResults.append(result);
         try result.writeTo(std.io.getStdOut().writer());
     }
-    print("Reached max depth {} in {}ms.\n", .{ maxDepth, @divFloor(thinkTime, std.time.ns_per_ms) });
+    if (isWasm) print("Reached max depth {} in {}ms.\n", .{ maxDepth, @divFloor(thinkTime, std.time.ns_per_ms) });
 
     return favourite;
 }
@@ -180,14 +176,10 @@ pub fn bestMove(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, max
 const PairContext = struct {
     moves: []Move,
     evals: []i32,
-    me: Colour,
 
     // Flipped cause accending
     pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
-        switch (ctx.me) {
-            .White => return ctx.evals[a] > ctx.evals[b],
-            .Black => return ctx.evals[a] < ctx.evals[b],
-        }
+        return ctx.evals[a] > ctx.evals[b];
     }
 
     pub fn swap(ctx: @This(), a: usize, b: usize) void {
@@ -198,17 +190,13 @@ const PairContext = struct {
 
 // https://en.wikipedia.org/wiki/Alpha%E2%80%93beta_pruning
 // The alpha-beta values effect lower layers, not higher layers, so passed by value.
-// Returns the absolute eval of <game>, positive means white is winning, after game.nextPlayer makes a move.
+// Returns the relative eval of <game>, positive means current player is winning, after game.nextPlayer makes a move.
 // Returns error.GameOver if there were no possible moves or other draws.
 // TODO: redo my captures only thing to be lookForPeace and only simpleEval if no captures on the board
 // TODO: pv doesnt need to copy the whole list every time
 pub fn walkEval(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, remaining: i32, alphaIn: i32, betaIn: i32, stats: *Stats, comptime capturesOnly: bool, endTime: i128, line: *ListPool.List) error{ OutOfMemory, ForceStop, Overflow }!i32 {
     const me = game.nextPlayer;
     if (ctx.forceStop) return error.ForceStop;
-    if (remaining == 0) {
-        if (comptime stats.use) stats.leafBoardsSeen += 1;
-        return game.simpleEval;
-    }
     if (game.halfMoveDraw >= 100 or game.hasInsufficientMaterial() or game.lastMoveWasRepetition()) return Learned.DRAW_EVAL * game.nextPlayer.dir();
     // Getting the time at every leaf node slows it down. But don't want to wait to get all the way back to the top if we're out of time.
     // Note: since I'm not checking at top level, it just doen't limit time if maxDepth=2 but only matters if you give it <5 ms so don't care.
@@ -220,12 +208,12 @@ pub fn walkEval(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, rem
         if (ctx.memoMap.get(game)) |cached| {
             if (cached.remaining >= remaining) {
                 if (comptime stats.use) stats.memoHits += 1;
-                if (!opts.doPruning) assert(cached.kind == .Exact);
+                if (!opts.doPruning) assert(cached.kind != .BetaPrune);
 
                 switch (cached.kind) {
-                    .Exact => return cached.eval,
-                    .AlphaPrune => if (cached.eval <= alphaIn) return cached.eval,
-                    .BetaPrune => if (cached.eval >= betaIn) return cached.eval,
+                    .Exact => return cached.eval * me.dir(),
+                    .BetaPrune => if ((cached.eval * me.dir()) >= betaIn) return cached.eval * me.dir(),
+                    .AlphaIgnore => if ((cached.eval * me.dir()) <= alphaIn) return (cached.eval * me.dir()), // TODO: ?
                 }
             }
             cacheHit = cached;
@@ -241,81 +229,170 @@ pub fn walkEval(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, rem
 
     if (moves.items.len == 0) { // <me> can't make any moves. Either got checkmated or its a draw.
         if (game.nextPlayerInCheck()) {
-            return (IM_MATED_EVAL - remaining) * me.dir();
+            return (IM_MATED_EVAL - remaining);
         } else {
             return Learned.DRAW_EVAL;
         }
     }
 
     if (cacheHit) |cached| {
-        for (0..moves.items.len) |i| {
-            if (moves.items[i].from == cached.move.from and moves.items[i].to == cached.move.to) {
-                std.mem.swap(Move, &moves.items[0], &moves.items[i]);
-                break;
+        if (cached.move) |move| {
+            for (0..moves.items.len) |i| {
+                if (moves.items[i].from == move.from and moves.items[i].to == move.to) {
+                    std.mem.swap(Move, &moves.items[0], &moves.items[i]);
+                    break;
+                }
             }
         }
     }
 
-    var bestVal: i32 = LOWEST_EVAL * me.dir();
     var memoKind: MemoKind = .Exact;
+    _ = memoKind;
     var foundMove: ?Move = null;
-    var pv = ctx.lists.copyOf(line);
+    var pv = if (opts.printUci) ctx.lists.copyOf(line) else try ctx.lists.get();
     defer ctx.lists.release(pv);
     for (moves.items) |move| {
-        var nextLine = ctx.lists.copyOf(line);
+        var nextLine = if (opts.printUci) ctx.lists.copyOf(line) else try ctx.lists.get();
+        defer ctx.lists.release(nextLine);
+        try nextLine.append(move);
+
+        const eval = e: {
+            if (remaining > 0) {
+                const unMove = game.play(move);
+                defer game.unplay(unMove);
+                break :e -(try walkEval(opts, ctx, game, remaining - 1, -beta, -alpha, stats, capturesOnly, endTime, &nextLine));
+            } else {
+                if (opts.followCapturesDepth > 0) {
+                    const unMove = game.play(move);
+                    defer game.unplay(unMove);
+                    break :e -(try lookForPeace(opts, ctx, game, opts.followCapturesDepth, -beta, -alpha, &nextLine));
+                } else {
+                    const unMove = game.playNoUpdateChecks(move);
+                    defer game.unplay(unMove);
+                    break :e game.simpleEval * me.dir();
+                }
+            }
+        };
+
+        if (eval > alpha) {
+            alpha = eval;
+            foundMove = move;
+            if (opts.printUci) {
+                pv.items.len = nextLine.items.len;
+                @memcpy(pv.items, nextLine.items);
+            }
+        }
+
+        if (opts.doPruning and eval >= beta) {
+            // That move made this subtree super good so we probably won't get here.
+            if (opts.printUci) {
+                line.items.len = nextLine.items.len;
+                @memcpy(line.items, nextLine.items);
+            }
+
+            if (opts.doMemo) { // Can never get here if forceStop=true.
+                ctx.memoMap.setAndOverwriteBucket(game, .{ .eval = eval * me.dir(), .remaining = @intCast(remaining), .move = move, .kind = .BetaPrune });
+            }
+            return beta;
+        }
+    }
+
+    if (opts.doMemo) { // Can never get here if forceStop=true.
+        if (foundMove) |move| {
+            ctx.memoMap.setAndOverwriteBucket(game, .{ .eval = alpha * me.dir(), .remaining = @intCast(remaining), .move = move, .kind = .Exact });
+        } else {
+            // No move was good enough to make this subtree interesting
+            ctx.memoMap.setAndOverwriteBucket(game, .{ .eval = alpha * me.dir(), .remaining = @intCast(remaining), .move = null, .kind = .AlphaIgnore });
+        }
+    }
+
+    if (opts.printUci) {
+        line.items.len = pv.items.len;
+        @memcpy(line.items, pv.items);
+    }
+    return alpha;
+}
+
+pub fn lookForPeace(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, remaining: i32, alphaIn: i32, betaIn: i32, line: *ListPool.List) error{ OutOfMemory, ForceStop, Overflow }!i32 {
+    const me = game.nextPlayer;
+    if (ctx.forceStop) return error.ForceStop;
+    if (remaining == 0) {
+        return game.simpleEval * me.dir();
+    }
+    if (game.halfMoveDraw >= 100 or game.hasInsufficientMaterial() or game.lastMoveWasRepetition()) return Learned.DRAW_EVAL * game.nextPlayer.dir();
+
+    // Want to mutate copies of values from parameters.
+    var alpha = alphaIn;
+    var beta = betaIn;
+
+    const base = game.simpleEval * me.dir();
+    if (base >= beta) {
+        return beta;
+    }
+    if (alpha < base) {
+        alpha = base;
+    }
+
+    // this makes it worse. fair enough, extra work.
+    // const targets = movegen.getTargetedSquares(game, game.nextPlayer);
+    // const otherPieces = if (game.nextPlayer == .White) game.peicePositions.black else game.peicePositions.white;
+    // if ((targets & otherPieces) == 0) return game.simpleEval * me.dir();
+
+    var moves = try movegen.possibleMoves(game, me, &ctx.lists);
+    defer ctx.lists.release(moves);
+
+    if (moves.items.len == 0) { // <me> can't make any moves. Either got checkmated or its a draw.
+        if (game.nextPlayerInCheck()) {
+            return (IM_MATED_EVAL - remaining);
+        } else {
+            return Learned.DRAW_EVAL;
+        }
+    }
+
+    var pv = if (opts.printUci) ctx.lists.copyOf(line) else try ctx.lists.get();
+    defer ctx.lists.release(pv);
+    for (moves.items) |move| {
+        if (!move.isCapture) continue;
+        var nextLine = if (opts.printUci) ctx.lists.copyOf(line) else try ctx.lists.get();
         defer ctx.lists.release(nextLine);
         try nextLine.append(move);
         const eval = e: {
-            if (remaining > 1) {
+            if (remaining > 0) {
                 const unMove = game.play(move);
                 defer game.unplay(unMove);
-                break :e try walkEval(opts, ctx, game, remaining - 1, alpha, beta, stats, capturesOnly, endTime, &nextLine);
+                break :e -(try lookForPeace(opts, ctx, game, remaining - 1, -beta, -alpha, &nextLine));
             } else {
                 // Don't need to do the extra work to prep for legal move generation if this is a leaf node.
                 // This trick was the justification for switching from pseudo-legal generation.
                 const unMove = game.playNoUpdateChecks(move);
                 defer game.unplay(unMove);
-                break :e game.simpleEval;
+                break :e game.simpleEval * me.dir();
             }
         };
 
-        switch (me) {
-            .White => {
-                bestVal = @max(bestVal, eval);
-                if (bestVal == eval) {
-                    foundMove = move;
-                    pv.items.len = nextLine.items.len;
-                    @memcpy(pv.items, nextLine.items);
-                }
-                alpha = @max(alpha, bestVal);
-                if (opts.doPruning and bestVal >= beta) {
-                    memoKind = .BetaPrune;
-                    break;
-                }
-            },
-            .Black => {
-                bestVal = @min(bestVal, eval);
-                if (bestVal == eval) {
-                    foundMove = move;
-                    pv.items.len = nextLine.items.len;
-                    @memcpy(pv.items, nextLine.items);
-                }
-                beta = @min(beta, bestVal);
-                if (opts.doPruning and bestVal <= alpha) {
-                    memoKind = .AlphaPrune;
-                    break;
-                }
-            },
+        if (eval > alpha) {
+            alpha = eval;
+            if (opts.printUci) {
+                pv.items.len = nextLine.items.len;
+                @memcpy(pv.items, nextLine.items);
+            }
+        }
+
+        if (opts.doPruning and eval >= beta) {
+            // That move made this subtree super good so we probably won't get here.
+            if (opts.printUci) {
+                line.items.len = nextLine.items.len;
+                @memcpy(line.items, nextLine.items);
+            }
+            return beta;
         }
     }
 
-    if (opts.doMemo) { // Can never get here if forceStop=true.
-        ctx.memoMap.setAndOverwriteBucket(game, .{ .eval = bestVal, .remaining = @intCast(remaining), .move = foundMove.?, .kind = memoKind });
+    if (opts.printUci) {
+        line.items.len = pv.items.len;
+        @memcpy(line.items, pv.items);
     }
-
-    line.items.len = pv.items.len;
-    @memcpy(line.items, pv.items);
-    return bestVal;
+    return alpha;
 }
 
 pub const MemoEntry = struct {
@@ -324,9 +401,9 @@ pub const MemoEntry = struct {
     value: MemoValue,
 };
 
-const MemoKind = enum(u2) { Exact, AlphaPrune, BetaPrune };
+const MemoKind = enum(u2) { Exact, AlphaIgnore, BetaPrune };
 
-pub const MemoValue = struct { eval: i32, remaining: i16, move: Move, kind: MemoKind };
+pub const MemoValue = struct { eval: i32, remaining: i16, move: ?Move, kind: MemoKind };
 
 // Sets overwrite if their buckets collide so never have to worry about it filling up with old boards.
 // That also means there's no chain of bucket collissions to follow when reading a value.

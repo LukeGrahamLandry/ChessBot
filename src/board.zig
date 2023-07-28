@@ -654,9 +654,14 @@ pub const InferMoveErr = error{IllegalMove} || @import("search.zig").MoveErr;
 
 pub fn inferPlayMove(board: *Board, fromIndex: u32, toIndex: u32, lists: *ListPool) InferMoveErr!OldMove {
     const colour = board.nextPlayer;
-    if (board.squares[fromIndex].empty()) return error.IllegalMove;
-    if (board.squares[fromIndex].colour != colour) return error.IllegalMove;
-
+    if (board.squares[fromIndex].empty()) {
+        print("empty\n", .{});
+        return error.IllegalMove;
+    }
+    if (board.squares[fromIndex].colour != colour) {
+        print("wrong colour\n", .{});
+        return error.IllegalMove;
+    }
     // TODO: ui should know when promoting so it can let you choose which piece to make.
     //       right now this relies on you probably want a queen and queen is ordered first
     //       TODO: test that checks queen is first in list
@@ -672,6 +677,7 @@ pub fn inferPlayMove(board: *Board, fromIndex: u32, toIndex: u32, lists: *ListPo
             break;
         }
     } else {
+        print("not found\n", .{});
         return error.IllegalMove;
     }
 

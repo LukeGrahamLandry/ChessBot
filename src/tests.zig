@@ -119,6 +119,8 @@ const maxTime = 1000;
 const bestMoveTests = [_]TestCase{
     .{ .fen = "rnbqk1nr/ppppbppp/8/4P3/6P1/8/PPPPP2P/RNBQKBNR b KQkq g3 0 3", .best = "e7h4" },
     .{ .fen = "rnbqkb1r/ppp1ppp1/5n2/3pP2p/3P4/8/PPP2PPP/RNBQKBNR w KQkq h6 0 4", .best = "e5f6" },
+    .{ .fen = "6nk/2b3nn/1P6/8/8/8/1B6/6RK w - - 0 1", .best = "b2g7" },
+    .{ .fen = "6nk/7n/5N2/8/8/2q5/1B2b3/6RK w - - 0 1", .best = "g1g8" },
 };
 
 fn doesStratMakeBestMove(comptime opts: StratOpts) !void {

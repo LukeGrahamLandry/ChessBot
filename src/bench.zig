@@ -9,7 +9,7 @@ const print = @import("common.zig").print;
 var allocatorT = std.heap.GeneralPurposeAllocator(.{}){};
 var alloc = allocatorT.allocator();
 
-const maxDepth = 6;
+const maxDepth = 4;
 const maxTime = 10000;
 var ctx: search.SearchGlobals = undefined;
 
@@ -18,14 +18,14 @@ const gameStr = "b1c3 d7d5 a1b1 d5d4 c3b5 g8f6 b1a1 d4d3 g1h3 e7e5 h1g1 f8c5 g1h
 // const gameStr = "b2b3 e7e6 c1b2 d7d5 g1f3 b8d7 h1g1 g8f6 c2c4 c7c6 c4d5 f6d5 e2e4 d5b4 b2c3 e6e5 d2d4 e5d4 f3d4 d7f6 d1e2 c8g4 f2f3 g4c8 g1h1 h7h6 a2a3 b4a6 d4c2 a6c7 b1d2 c8e6 e1c1 f8c5 b3b4 c5b6 d2c4 f6d7 c4b6 a7b6 e2d2 f7f6 c1b2 d8e7 d2d6 b6b5 d6c7 e8g8 c3d4 a8c8 c7b7 c8b8 b7a7 b8a8 d4c5 e7e8 a7c7 d7c5 b4c5 g8h7 d1e1 b5b4 c2b4 f8f7 c7c6 e6d7 c6b6 e8e5 b2b1 a8a3 b4c2 a3a8 f1a6 a8b8 a6b7 h7h8 c5c6 d7c6 b6c6 b8b7 b1c1 e5b2 c1d2 f7c7 c6e8 h8h7 e1c1";
 pub fn main() !void {
     ctx = @import("common.zig").setup(100);
-    print("maxDepth={}. maxTime={}ms. \nGame: {s} \n", .{maxDepth, maxTime, gameStr});
+    print("maxDepth={}. maxTime={}ms. \nGame: {s} \n", .{ maxDepth, maxTime, gameStr });
     _ = try replayGame(.{});
     // _ = try replayGame(.{ .doIterative = false });
     // _ = try replayGame(.{ .doMemo = false });
     // _ = try replayGame(.{ .doMemo = false, .doIterative = false });
     // // _ = try replayGame(.{ .doPruning = false });  // Takes sooooo long
 
-    // // For working on move gen. 
+    // // For working on move gen.
     // try (@import("tests.zig").PerftTest{
     //     .possibleGames = &[_]u64{ 20, 400, 8902, 197281, 4865609, 119060324 },  //, 3195901860
     //     .possibleMates = &[_]u64{ 0, 0, 0, 8, 347, 10828 },  //, 435767
@@ -44,7 +44,7 @@ fn replayGame(comptime opts: search.StratOpts) !std.ArrayList(board.Move) {
     var undoStack = std.ArrayList(board.OldMove).init(alloc);
     var m: usize = 0;
     while (true) {
-        // TODO: catch gameover on last move. 
+        // TODO: catch gameover on last move.
         try bestMoves.append(try search.bestMove(opts, &ctx, &game, maxDepth, maxTime));
 
         const word = moves.next() orelse break;
@@ -63,6 +63,6 @@ fn replayGame(comptime opts: search.StratOpts) !std.ArrayList(board.Move) {
     }
 
     try std.testing.expectEqual(game.zoidberg, 1);
-    print("\nFinished game in {}ms. {}. {}\n", .{t.get(), try game.gameOverReason(&ctx.lists), opts});
+    print("\nFinished game in {}ms. {}. {}\n", .{ t.get(), try game.gameOverReason(&ctx.lists), opts });
     return bestMoves;
 }

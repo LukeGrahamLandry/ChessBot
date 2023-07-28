@@ -730,7 +730,7 @@ pub fn AnyListPool(comptime element: type) type {
         alloc: std.mem.Allocator,
 
         pub const List = ListType(element);
-        const POOL_SIZE = 128;
+        const POOL_SIZE = 512;
 
         pub fn init(alloc: std.mem.Allocator) !ListPool {
             var self: ListPool = .{ .lists = try ListType(List).initCapacity(alloc, POOL_SIZE), .alloc = alloc };
