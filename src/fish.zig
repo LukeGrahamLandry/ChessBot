@@ -195,7 +195,7 @@ fn playUciMove(self: *Worker, engine: *Stockfish, timeLimitMS: u64, board: *Boar
     // print("----------\n", .{});
     try engine.send(.AreYouReady);
     engine.blockUntilRecieve(.ReadyOk);
-    try engine.send(.{ .SetPositionMoves = .{ .board = board, .moves = moveHistory.items } });
+    try engine.send(.{ .SetPositionMoves = .{ .board = board } });
     try engine.send(.{ .Go = .{ .maxSearchTimeMs = timeLimitMS } });
 
     const moveStr = m: {

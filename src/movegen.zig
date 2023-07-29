@@ -156,14 +156,14 @@ fn pawnMove(out: anytype, board: *const Board, i: usize, file: usize, rank: usiz
         .White => w: {
             assert(rank < 7);
             if (!bishopPinned and out.filter == .Any and rank == 1 and board.emptyAt(file, 2) and board.emptyAt(file, 3)) { // forward two
-                try out.pawnForwardTwo(board, i, file, 3); // cant promote
+                try pawnForwardTwo(out.moves, board, i, file, 3); // cant promote
             }
             break :w rank + 1;
         },
         .Black => b: {
             assert(rank > 0);
             if (!bishopPinned and out.filter == .Any and rank == 6 and board.emptyAt(file, 5) and board.emptyAt(file, 4)) { // forward two
-                try out.pawnForwardTwo(board, i, file, 4); // cant promote
+                try pawnForwardTwo(out.moves, board, i, file, 4); // cant promote
             }
             break :b rank - 1;
         },
@@ -218,7 +218,7 @@ fn frenchMove(out: anytype, board: *const Board, i: usize, targetFile: usize, ta
             if (frenchRookPinned and (board.checks.frenchPinByRook & toFlag) == 0) return;
             if (frenchBishopPinned and (board.checks.frenchPinByBishop & toFlag) == 0) return;
 
-            try out.append(.{ .from = @intCast(i), .to = @intCast(endIndex), .action = .{ .useFrenchMove = @intCast(captureIndex) }, .isCapture = true });
+            try out.moves.append(.{ .from = @intCast(i), .to = @intCast(endIndex), .action = .{ .useFrenchMove = @intCast(captureIndex) }, .isCapture = true });
         },
     }
 }
@@ -275,7 +275,7 @@ pub fn tryCastle(out: anytype, board: *const Board, colour: Colour, comptime goi
         .rookFrom = rookFrom,
         .rookTo = rookTo,
     } }, .isCapture = false };
-    try out.append(move);
+    try out.moves.append(move);
 }
 
 fn knightMove(out: anytype, board: *const Board, i: usize, colour: Colour) !void {
@@ -300,8 +300,47 @@ fn emitMoves(out: anytype, board: *const Board, i: usize, _targets: u64, colour:
         const offset = @ctz(targets);
         var flag = @as(u64, 1) << @intCast(offset);
         targets = targets ^ flag;
-        try out.slideNew(board, @intCast(i), @intCast(offset), flag, colour);
+        try addMoveOrdered(out.moves, board, @intCast(i), @intCast(offset), flag, colour);
     }
+}
+
+// The new lookup move gen doesn't need to be told when to stop sliders so this method can be simpler.
+// This does not do any validation. The piece moving must not be a king and the target square must be legal.
+// All this does is make the move and do the ordering trick of prefering captures.
+// TODO: try just making the list and doing more complicated ordering like prefer capture string pieces with weak ones.
+fn addMoveOrdered(moves: *ListPool.List, board: *const Board, fromIndex: u6, toIndexx: u6, toFlag: u64, colour: Colour) !void {
+    const enemyPieces = if (colour == .White) board.peicePositions.black else board.peicePositions.white;
+
+    if ((toFlag & enemyPieces) == 0) { // moving to empty square
+        try moves.append(ii(fromIndex, toIndexx, false));
+    } else { // taking an enemy piece. do move ordering for better prune.
+        var toPush = ii(fromIndex, toIndexx, true);
+
+        // Have this be a comptime param that gets passed down so I can easily benchmark.
+        // This is a capture, we like that, put it first. Capturing more valuable pieces is also good.
+        for (moves.items, 0..) |move, index| {
+            const holding = board.squares[toPush.to].kind.material();
+            const lookingAt = board.squares[move.to].kind.material();
+            if (holding == 0) break;
+            if (holding > lookingAt) {
+                moves.items[index] = toPush;
+                toPush = move;
+            }
+        }
+
+        try moves.append(toPush);
+        return;
+    }
+}
+
+pub fn pawnForwardTwo(moves: *ListPool.List, board: *const Board, fromIndex: usize, toFile: usize, toRank: usize) !void {
+    const toFlag = @as(u64, 1) << @intCast(toRank * 8 + toFile);
+    const fromFlag = @as(u64, 1) << @intCast(fromIndex);
+    if ((board.checks.blockSingleCheck & toFlag) == 0) return;
+    if ((board.checks.pinsByRook & fromFlag) != 0 and (board.checks.pinsByRook & toFlag) == 0) return;
+
+    const move: Move = .{ .from = @intCast(fromIndex), .to = @intCast(toRank * 8 + toFile), .action = .allowFrenchMove, .isCapture = false };
+    try moves.append(move);
 }
 
 const directions = [8][2]isize{
@@ -320,68 +359,22 @@ const directions = [8][2]isize{
 const CollectMoves = struct {
     moves: *ListPool.List,
     comptime filter: MoveFilter = .Any,
-
-    // The new lookup move gen doesn't need to be told when to stop sliders so this method can be simpler.
-    // This does not do any validation. The piece moving must not be a king and the target square must be legal.
-    // All this does is make the move and do the ordering trick of prefering captures.
-    fn slideNew(self: CollectMoves, board: *const Board, fromIndex: u6, toIndexx: u6, toFlag: u64, colour: Colour) !void {
-        const enemyPieces = if (colour == .White) board.peicePositions.black else board.peicePositions.white;
-
-        if ((toFlag & enemyPieces) == 0) { // moving to empty square
-            try self.moves.append(ii(fromIndex, toIndexx, false));
-        } else { // taking an enemy piece. do move ordering for better prune.
-            var toPush = ii(fromIndex, toIndexx, true);
-
-            // Have this be a comptime param that gets passed down so I can easily benchmark.
-            // This is a capture, we like that, put it first. Capturing more valuable pieces is also good.
-            for (self.moves.items, 0..) |move, index| {
-                const holding = board.squares[toPush.to].kind.material();
-                const lookingAt = board.squares[move.to].kind.material();
-                if (holding == 0) break;
-                if (holding > lookingAt) {
-                    self.moves.items[index] = toPush;
-                    toPush = move;
-                }
-            }
-
-            try self.moves.append(toPush);
-            return;
-        }
-    }
-
-    pub fn pawnForwardTwo(self: CollectMoves, board: *const Board, fromIndex: usize, toFile: usize, toRank: usize) !void {
-        if (comptime (self.filter == .CurrentlyCalcChecks)) return; // Pawns can't capture forward.
-
-        // std.debug.assert(fromIndex < 64 and toFile < 8 and toRank < 8);
-        const toFlag = @as(u64, 1) << @intCast(toRank * 8 + toFile);
-        const fromFlag = @as(u64, 1) << @intCast(fromIndex);
-        if ((board.checks.blockSingleCheck & toFlag) == 0) return;
-        if ((board.checks.pinsByRook & fromFlag) != 0 and (board.checks.pinsByRook & toFlag) == 0) return;
-
-        const move: Move = .{ .from = @intCast(fromIndex), .to = @intCast(toRank * 8 + toFile), .action = .allowFrenchMove, .isCapture = false };
-        try self.moves.append(move);
-    }
-
-    pub fn append(self: CollectMoves, move: Move) !void {
-        try self.moves.append(move);
-    }
+    dramaticMovesOnly: bool = false,
 
     pub fn pawnAttack(self: CollectMoves, board: *const Board, fromIndex: usize, toFile: usize, toRank: usize, colour: Colour) !void {
         if (!board.emptyAt(toFile, toRank) and board.get(toFile, toRank).colour != colour) try self.maybePromote(board, fromIndex, toFile, toRank, colour);
     }
 
     fn maybePromote(self: CollectMoves, board: *const Board, fromIndex: usize, toFile: usize, toRank: usize, colour: Colour) !void {
-        if (self.filter != .CurrentlyCalcChecks) {
-            const toFlag = @as(u64, 1) << @intCast(toRank * 8 + toFile);
-            if ((board.checks.blockSingleCheck & toFlag) == 0) return;
-            const fromFlag = @as(u64, 1) << @intCast(fromIndex);
+        const toFlag = @as(u64, 1) << @intCast(toRank * 8 + toFile);
+        if ((board.checks.blockSingleCheck & toFlag) == 0) return;
+        const fromFlag = @as(u64, 1) << @intCast(fromIndex);
 
-            // TODO: no and. can both be crushed it together into one bit thing?
-            const rookPinned = (board.checks.pinsByRook & fromFlag) != 0;
-            const bishopPinned = (board.checks.pinsByBishop & fromFlag) != 0;
-            if (rookPinned and (board.checks.pinsByRook & toFlag) == 0) return;
-            if (bishopPinned and (board.checks.pinsByBishop & toFlag) == 0) return;
-        }
+        // TODO: no and. can both be crushed it together into one bit thing?
+        const rookPinned = (board.checks.pinsByRook & fromFlag) != 0;
+        const bishopPinned = (board.checks.pinsByBishop & fromFlag) != 0;
+        if (rookPinned and (board.checks.pinsByRook & toFlag) == 0) return;
+        if (bishopPinned and (board.checks.pinsByBishop & toFlag) == 0) return;
 
         // TODO: including promotions on fast path should be seperate option
         const check = board.get(toFile, toRank);
@@ -404,7 +397,7 @@ const CollectMoves = struct {
                 try self.moves.append(move);
             }
         } else {
-            try self.moves.append(irfPawn(fromIndex, toFile, toRank, !check.empty() and check.colour != colour));
+            try addMoveOrdered(self.moves, board, @intCast(fromIndex), @intCast(toRank * 8 + toFile), toFlag, colour);
         }
     }
 };
@@ -418,10 +411,6 @@ pub const GetAttackSquares = struct {
     /// Includes your own peices when they could be taken back. Places the other king can't move.
     bb: u64 = 0,
     comptime filter: MoveFilter = .CurrentlyCalcChecks,
-
-    pub fn append(self: *GetAttackSquares, move: Move) !void {
-        self.bb |= @as(u64, 1) << move.to;
-    }
 
     pub fn pawnAttack(self: *GetAttackSquares, board: *const Board, fromIndex: usize, toFile: usize, toRank: usize, colour: Colour) !void {
         _ = fromIndex;
@@ -691,11 +680,6 @@ pub fn getFrenchPins(game: *Board, defendingPlayer: Colour, frenchFile: u4, resu
 // TODO: barely used. just write the code.
 
 pub fn irf(fromIndex: usize, toFile: usize, toRank: usize, isCapture: bool) Move {
-    // std.debug.assert(fromIndex < 64 and toFile < 8 and toRank < 8);
-    return .{ .from = @intCast(fromIndex), .to = @intCast(toRank * 8 + toFile), .action = .none, .isCapture = isCapture };
-}
-
-pub fn irfPawn(fromIndex: usize, toFile: usize, toRank: usize, isCapture: bool) Move {
     // std.debug.assert(fromIndex < 64 and toFile < 8 and toRank < 8);
     return .{ .from = @intCast(fromIndex), .to = @intCast(toRank * 8 + toFile), .action = .none, .isCapture = isCapture };
 }

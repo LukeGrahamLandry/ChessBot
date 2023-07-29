@@ -9,7 +9,7 @@ const print = @import("common.zig").print;
 var allocatorT = std.heap.GeneralPurposeAllocator(.{}){};
 var alloc = allocatorT.allocator();
 
-const maxDepth = 4;
+const maxDepth = 6;
 const maxTime = 10000;
 var ctx: search.SearchGlobals = undefined;
 

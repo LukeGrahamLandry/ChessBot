@@ -268,7 +268,7 @@ const FishResult = struct { childCount: std.AutoHashMap([5]u8, u64), total: u64 
 
 fn runFishPerft(fish: *Stockfish, board: *Board, depth: u64, alloc: std.mem.Allocator) !FishResult {
     const fen = try board.toFEN(alloc);
-    try fish.send(.{ .SetPositionMoves = .{ .board = board, .moves = null } });
+    try fish.send(.{ .SetPositionMoves = .{ .board = board } });
     try fish.send(.{ .Go = .{ .perft = depth } });
     var total: u64 = 0;
     var branches = std.AutoHashMap([5]u8, u64).init(alloc);
@@ -296,7 +296,7 @@ fn runFishPerft(fish: *Stockfish, board: *Board, depth: u64, alloc: std.mem.Allo
 
 fn runFishPerftCountGames(fish: *Stockfish, board: *Board, depth: u64, alloc: std.mem.Allocator) !u64 {
     const fen = try board.toFEN(alloc);
-    try fish.send(.{ .SetPositionMoves = .{ .board = board, .moves = null } });
+    try fish.send(.{ .SetPositionMoves = .{ .board = board } });
     try fish.send(.{ .Go = .{ .perft = depth } });
     var total: u64 = 0;
     while (true) {

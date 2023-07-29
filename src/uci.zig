@@ -15,12 +15,17 @@ const assert = @import("common.zig").assert;
 const panic = @import("common.zig").panic;
 const ListPool = @import("movegen.zig").ListPool;
 
+var book: std.AutoHashMap(u64, Move) = undefined;
+
 pub fn main() !void {
     var e: Engine = .{};
     try e.init();
+    var forever = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var lists = try ListPool.init(forever.allocator());
+    book = try @import("book.zig").loadBookFromFile("book.chess", forever.allocator());
 
     while (true) {
-        const cmd = waitForUciCommand(std.io.getStdIn().reader(), e.arena.allocator()) catch |err| {
+        const cmd = waitForUciCommand(std.io.getStdIn().reader(), e.arena.allocator(), &lists) catch |err| {
             std.debug.print("[uci] {}\n", .{err});
             if (err == error.EndOfStream) break;
             // be a slightly less hyper agressive spin loop
@@ -39,7 +44,7 @@ const Engine = struct {
     pub fn init(self: *Engine) !void {
         self.arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         self.worker = .{
-            .ctx = @import("common.zig").setup(100),
+            .ctx = @import("common.zig").setup(1500),
             .board = try Board.initial(),
             .thread = try std.Thread.spawn(.{}, engineWorker, .{&self.worker}),
         };
@@ -74,8 +79,13 @@ const Engine = struct {
                     panic("TODO: impl uci perft. \n{}\n", .{cmd});
                 }
 
-                self.worker.maxDepth = info.maxDepthPly orelse 50;
-                self.worker.timeLimitMs = info.maxSearchTimeMs orelse (100 * std.time.ms_per_s);
+                // TODO: think more about what's a good time management strategy
+                // TODO: ponder (think on opponent's turn about predicted move)
+                const inc = if (self.worker.board.nextPlayer == .White) info.winc else info.binc;
+                const time = if (self.worker.board.nextPlayer == .White) info.wtime else info.btime;
+                const thismove = (inc orelse 1000) + ((time orelse 0) / 100);
+                self.worker.maxDepth = 30; // info.maxDepthPly orelse 10;
+                self.worker.timeLimitMs = thismove; // info.maxSearchTimeMs orelse (3 * std.time.ms_per_s);
                 self.worker.isIdle.reset();
                 self.worker.hasWork.set();
             },
@@ -104,23 +114,36 @@ fn engineWorker(self: *Worker) !void {
         self.hasWork.reset();
         self.isIdle.reset();
 
+        if (self.board.fullMoves <= 6) {
+            if (book.get(self.board.zoidberg)) |move| {
+                const info: UciInfo = .{ .time = 1, .depth = 1, .pvFirstMove = writeAlgebraic(move) };
+                const result: UciResult = .{ .Info = info };
+                const bestmove: UciResult = .{ .BestMove = writeAlgebraic(move) };
+                try result.writeTo(std.io.getStdOut().writer());
+                try bestmove.writeTo(std.io.getStdOut().writer());
+
+                try self.printAllResults();
+                self.isIdle.set();
+                continue;
+            }
+        }
+
         // This knows to print uci stuff to stdout.
-        self.board.debugPrint();
-        const move = try search.bestMove(opts, &self.ctx, &self.board, self.maxDepth - 1, self.timeLimitMs);
-        std.debug.print("best: {s}\n", .{try move.text()});
+        _ = try search.bestMove(opts, &self.ctx, &self.board, self.maxDepth - 1, self.timeLimitMs);
+
         try self.printAllResults();
         self.isIdle.set();
     }
 }
 
-fn waitForUciCommand(reader: anytype, alloc: std.mem.Allocator) !UciCommand {
+fn waitForUciCommand(reader: anytype, alloc: std.mem.Allocator, lists: *ListPool) !UciCommand {
     var buf: [16384]u8 = undefined;
     var resultStream = std.io.fixedBufferStream(&buf);
     // Don't care about the max because fixedBufferStream will give a write error if it overflows.
     try reader.streamUntilDelimiter(resultStream.writer(), '\n', null);
     const msg = resultStream.getWritten();
     std.debug.print("[uci]: {s}\n", .{msg});
-    return try UciCommand.parse(msg, alloc);
+    return try UciCommand.parse(msg, alloc, lists);
 }
 
 const Worker = struct {
@@ -134,6 +157,7 @@ const Worker = struct {
     maxDepth: usize = 0,
     timeLimitMs: i128 = 0,
 
+    // TODO: get rid of this and the list in ctx. was just when i was testing piping different processes together
     pub fn printAllResults(self: *Worker) !void {
         for (self.ctx.uciResults.items) |result| {
             try result.writeTo(std.io.getStdOut().writer());
@@ -149,11 +173,15 @@ pub const UciCommand = union(enum) {
     AreYouReady,
     NewGame,
     SetPositionInitial,
-    SetPositionMoves: struct { board: *Board, moves: ?[][5]u8 = null }, // lifetime! don't save these pointers!
+    SetPositionMoves: struct { board: *Board }, // lifetime! don't save these pointers!
     Go: struct {
         maxSearchTimeMs: ?u64 = null,
         maxDepthPly: ?u64 = null,
         perft: ?u64 = null,
+        winc: ?u64 = null,
+        binc: ?u64 = null,
+        wtime: ?u64 = null,
+        btime: ?u64 = null,
     },
     Stop,
     Quit,
@@ -195,7 +223,7 @@ pub const UciCommand = union(enum) {
     }
 
     // SetPositionMoves allocates the board pointer, caller owns it now.
-    pub fn parse(str: []const u8, alloc: std.mem.Allocator) !UciCommand {
+    pub fn parse(str: []const u8, alloc: std.mem.Allocator, lists: *ListPool) !UciCommand {
         // TODO: this sucks. some crazy comptime perfect hash thing?
         if (std.mem.eql(u8, str, "uci")) {
             return .Init;
@@ -208,19 +236,39 @@ pub const UciCommand = union(enum) {
         } else if (std.mem.eql(u8, str, "quit")) {
             return .Quit;
         } else if (std.mem.eql(u8, str, "position startpos")) {
-            std.debug.print("initial\n", .{});
             return .SetPositionInitial;
         } else if (std.mem.startsWith(u8, str, "position fen ")) {
+            // TODO: support moves after
             const startingWithFen = str[13..];
             var board = try alloc.create(Board);
             board.* = try Board.fromFEN(startingWithFen);
             return .{ .SetPositionMoves = .{ .board = board } };
+        } else if (std.mem.startsWith(u8, str, "position startpos moves ")) {
+            var words = std.mem.splitScalar(u8, str, ' ');
+            assert(std.mem.eql(u8, words.next().?, "position"));
+            assert(std.mem.eql(u8, words.next().?, "startpos"));
+            assert(std.mem.eql(u8, words.next().?, "moves"));
+            var board = try alloc.create(Board);
+            board.* = try Board.initial();
+            while (words.next()) |word| {
+                if (word.len <= 5) {
+                    var moveStr = std.mem.zeroes([5]u8);
+                    @memcpy(moveStr[0..word.len], word);
+                    _ = try playAlgebraic(board, moveStr, lists);
+                }
+            }
+            return .{ .SetPositionMoves = .{ .board = board } };
         } else if (std.mem.startsWith(u8, str, "go")) {
             var words = std.mem.splitScalar(u8, str, ' ');
             std.debug.assert(std.mem.eql(u8, words.next().?, "go"));
+            // TODO: at least make the result struct up front instead of stupid variables.
             var movetime: ?u64 = null;
             var depth: ?u64 = null;
             var perft: ?u64 = null;
+            var winc: ?u64 = null;
+            var binc: ?u64 = null;
+            var wtime: ?u64 = null;
+            var btime: ?u64 = null;
             while (words.next()) |word| {
                 if (std.mem.eql(u8, word, "movetime")) {
                     movetime = std.fmt.parseInt(u64, words.next() orelse break, 10) catch continue;
@@ -228,9 +276,17 @@ pub const UciCommand = union(enum) {
                     depth = std.fmt.parseInt(u64, words.next() orelse break, 10) catch continue;
                 } else if (std.mem.eql(u8, word, "perft")) {
                     perft = std.fmt.parseInt(u64, words.next() orelse break, 10) catch continue;
+                } else if (std.mem.eql(u8, word, "winc")) {
+                    winc = std.fmt.parseInt(u64, words.next() orelse break, 10) catch continue;
+                } else if (std.mem.eql(u8, word, "binc")) {
+                    binc = std.fmt.parseInt(u64, words.next() orelse break, 10) catch continue;
+                } else if (std.mem.eql(u8, word, "wtime")) {
+                    wtime = std.fmt.parseInt(u64, words.next() orelse break, 10) catch continue;
+                } else if (std.mem.eql(u8, word, "btime")) {
+                    btime = std.fmt.parseInt(u64, words.next() orelse break, 10) catch continue;
                 }
             }
-            return .{ .Go = .{ .maxSearchTimeMs = movetime, .maxDepthPly = depth, .perft = perft } };
+            return .{ .Go = .{ .maxSearchTimeMs = movetime, .maxDepthPly = depth, .perft = perft, .binc = binc, .winc = winc, .wtime = wtime, .btime = btime } };
         }
 
         // TODO: the rest

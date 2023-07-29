@@ -1,122 +1,344 @@
 const std = @import("std");
 const Move = @import("board.zig").Move;
 const Board = @import("board.zig").Board;
+const Colour = @import("board.zig").Colour;
+const Kind = @import("board.zig").Kind;
+const UCI = @import("uci.zig");
+const movegen = @import("movegen.zig");
+const assert = std.debug.assert;
 
-// This is probably an inefficient use of time because better possition after 5 moves or whatever is nice,
-// but really I need to make it understand that shuffling it's pieces is bad.
-// Also any comparisons are kinda pointless until I fix the pruning.
+pub fn main() !void {
+    assert(@sizeOf(Move) == 8);
+    std.debug.print("\nStart building book.\n", .{});
+    var ctx = @import("common.zig").setup(0);
+    // zig-out is just a good place to put stuff that's git ignored
+    const file = try std.fs.cwd().openFile("zig-out/lichess_db_standard_rated_2014-11.pgn", .{});
+    const buffered = std.io.bufferedReaderSize(1024 * 1024, file.reader());
 
-const SmallMove = packed struct(u12) {
-    from: u6,
-    to: u6,
+    var pgn: PngReader = .{ .reader = buffered };
+    try pgn.findNextInterestingGame();
 
-    const NULL: SmallMove = .{ .from = 0, .to = 0 };
-};
+    var general = std.heap.GeneralPurposeAllocator(.{}){};
+    var seen = std.AutoHashMap(u64, PosInfo).init(general.allocator());
 
-const Node = packed struct(u32) {
-    move: SmallMove,
-    start: u12,
-    count: u8,
-};
-
-const ParseErr = error{ UnsupportedDataVersion, DeserializationFailed };
-
-// TODO: I thought this would be more efficient than [] {hash, bestMove} that you binary search later
-//       because that's 10 bytes per move where this is only 4, but I'm sure there are often more than 2.2 paths
-//       to the same position in the opening so actually this is probably worse.
-//       Maybe do this first, with a stable interface, then see how muc hbetter I can make it
-// A tree packed into an array so it can be directly read in from a data file without any copying.
-const OpeningBook = struct {
-    // Node 0 is the version number (u16) and first layer node count (u16)!
-    nodes: []Node,
-    rootCount: u16,
-
-    // The OpeningBook returned is backed by the same bytes as you passed in.
-    fn init(bytes: []u32) ParseErr!OpeningBook {
-        if (bytes.len == 0) return error.DeserializationFailed;
-        const version: u32 = bytes[0] >> 16;
-        if (version > VERSION or version < MIN_VERSION) return error.UnsupportedDataVersion;
-        const rootCount: u32 = (bytes[0] << 16) >> 16;
-        const nodes: []Node = @ptrCast(bytes);
-        for (nodes[1..]) |node| {
-            if (node.start >= nodes.len) return error.DeserializationFailed;
-            const last = node.start + node.count - 1;
-            if (last >= nodes.len) return error.DeserializationFailed;
+    var gameCount: usize = 0;
+    while (gameCount < 300000) {
+        std.debug.print("{}\n", .{gameCount});
+        const move = (pgn.getMove(&ctx.lists) catch |err| {
+            if (err == error.GameOver) {
+                try pgn.findNextInterestingGame();
+                gameCount += 1;
+                continue;
+            }
+            return err;
+        }) orelse {
+            try pgn.findNextInterestingGame();
+            gameCount += 1;
+            continue;
+        };
+        if (seen.getPtr(pgn.board.zoidberg)) |info| {
+            if (info.moveCount.getPtr(move)) |count| {
+                count.* += 1;
+            } else {
+                try info.moveCount.put(move, 1);
+            }
+        } else {
+            var info: PosInfo = .{ .hash = pgn.board.zoidberg, .moveCount = std.AutoHashMap(Move, u64).init(general.allocator()) };
+            try info.moveCount.put(move, 1);
+            try seen.put(pgn.board.zoidberg, info);
         }
-        std.debug.print("Loaded opening book version {}. {} first moves. \n", .{ version, rootCount });
-        return .{ .nodes = nodes, .rootCount = @intCast(rootCount) };
-    }
-
-    fn getRoot(self: OpeningBook) []Node {
-        return self.nodes[1..(self.rootCount + 1)];
-    }
-
-    fn getChildren(self: OpeningBook, parent: Node) []Node {
-        const end = parent.start + parent.count;
-        return self.nodes[parent.start..end];
-    }
-
-    // Must be the same allocator as used for the bytes given to init.
-    fn deinit(self: OpeningBook, alloc: std.mem.Allocator) void {
-        alloc.free(self.nodes);
-    }
-};
-
-const MIN_VERSION: u32 = 1;
-const VERSION: u32 = 1;
-
-// A convient tree structure for building a packed opening book data file.
-const BuilderNode = struct {
-    move: SmallMove,
-    children: std.ArrayList(BuilderNode),
-
-    // Copies the data. The caller still owns self and also the returned slice.
-    // Not returning a []u8 because dealing with alignment checks is a pain.
-    fn toBytes(self: BuilderNode, alloc: std.mem.Allocator) ![]u32 {
-        var data = std.ArrayList(u32).init(alloc);
-        const rootCount: u32 = @intCast(self.children.items.len);
-        std.debug.assert(VERSION < (1 << 16) and rootCount < (1 << 16));
-        const header: u32 = (VERSION << 16) | rootCount;
-        try data.append(header);
-        for (self.children.items) |child| {
-            try writeNode(child, &data);
+        if (pgn.moveIndex > 6) {
+            try pgn.next();
+            try pgn.findNextInterestingGame();
+            gameCount += 1;
+            // std.debug.print("{s}\n", .{pgn.line});
+            continue;
         }
-
-        return try data.toOwnedSlice();
+        _ = pgn.board.play(move);
     }
 
-    fn writeNode(
-        self: BuilderNode,
-        data: *std.ArrayList(u32),
-    ) !void {
-        var node: Node = .{ .move = self.move, .start = @intCast(data.items.len), .count = @intCast(self.children.items.len) };
-        try data.append(@as(*u32, @ptrCast(&node)).*);
-        for (self.children.items) |child| {
-            try writeNode(child, data);
+    var book = std.AutoHashMap(u64, Move).init(general.allocator());
+
+    var positions = seen.iterator();
+    while (positions.next()) |pos| {
+        var count: usize = 0;
+        var bestCount: usize = 0;
+        var bestMove: Move = undefined;
+        var moves = pos.value_ptr.moveCount.iterator();
+        while (moves.next()) |move| {
+            count += move.value_ptr.*;
+            if (move.value_ptr.* > bestCount) {
+                bestMove = move.key_ptr.*;
+            }
+        }
+        if (count > 1) {
+            try book.put(pos.key_ptr.*, bestMove);
         }
     }
 
-    // Should probably do this in an arena allocator so you don't have to call this method.
-    fn deinit(self: BuilderNode) void {
-        for (self.children.items) |child| {
-            child.deinit();
-        }
-        self.children.deinit();
-    }
-};
+    std.debug.print("Positions in book: {}\n", .{book.count()});
+    std.debug.print("Size: {} KB\n", .{book.capacity() * @sizeOf(@TypeOf(book).KV) / 1024});
 
-pub fn main() !void {}
+    const data = try serializeBook(book, general.allocator());
+    const bookAgain = try deserializeBook(data, general.allocator());
+    try checkBookEql(book, bookAgain);
 
-pub fn findNextMove(game: *Board, moves: []Move) ?SmallMove {
-    _ = game;
-    _ = moves;
+    try writeBookToFile(book, "book.chess", general.allocator());
+    const bookFromFile = try loadBookFromFile("book.chess", general.allocator());
+    try checkBookEql(book, bookFromFile);
+    std.debug.print("It worked!\n", .{});
 }
 
-test "serialize book" {
-    var tst = std.testing.allocator;
-    const original: BuilderNode = .{ .move = SmallMove.NULL, .children = std.ArrayList(BuilderNode).init(tst) };
-    defer original.deinit();
-    const bytes = try original.toBytes(tst);
-    const parsed = try OpeningBook.init(bytes);
-    parsed.deinit(tst);
+fn checkBookEql(a: std.AutoHashMap(u64, Move), b: std.AutoHashMap(u64, Move)) !void {
+    try std.testing.expectEqual(a.count(), b.count());
+    var iter = a.iterator();
+    while (iter.next()) |expected| {
+        if (b.get(expected.key_ptr.*)) |found| {
+            try std.testing.expectEqual(found, expected.value_ptr.*);
+        } else {
+            std.debug.panic("Didn't find {}\n", .{expected.key_ptr.*});
+        }
+    }
 }
+
+// Caller owns the returned memory
+pub fn loadBookFromFile(path: []const u8, alloc: std.mem.Allocator) !std.AutoHashMap(u64, Move) {
+    const size = (try std.fs.cwd().statFile(path)).size;
+    var buffer = try alloc.alloc(u8, size);
+    defer alloc.free(buffer);
+    assert(size % 16 == 0);
+
+    var fileBytes = try std.fs.cwd().readFile("book.chess", buffer);
+    var fileData: []u64 = undefined;
+    fileData.ptr = @ptrCast(@alignCast(fileBytes.ptr));
+    fileData.len = fileBytes.len / 8;
+
+    return try deserializeBook(fileData, alloc);
+}
+
+// Caller still owns the original book
+pub fn writeBookToFile(book: std.AutoHashMap(u64, Move), path: []const u8, alloc: std.mem.Allocator) !void {
+    var data = try serializeBook(book, alloc);
+    defer alloc.free(data);
+    var bytes: []u8 = undefined;
+    bytes.len = data.len * 8;
+    bytes.ptr = @as([*]u8, @constCast(@ptrCast(data.ptr))); // TODO: why does this need const cast
+
+    const dataFile = try std.fs.cwd().createFile(path, .{});
+    try dataFile.writer().writeAll(bytes);
+    dataFile.close();
+}
+
+// Caller owns the returned memory and still owns the original book
+fn serializeBook(book: std.AutoHashMap(u64, Move), alloc: std.mem.Allocator) ![]const u64 {
+    var data = std.ArrayList(u64).init(alloc);
+    var bookIter = book.iterator();
+    while (bookIter.next()) |entry| {
+        try data.append(entry.key_ptr.*);
+        const value: u64 = @as(*u64, @ptrCast(@alignCast(entry.value_ptr))).*;
+        try data.append(value);
+    }
+    return try data.toOwnedSlice();
+}
+
+// Caller owns the returned memory
+fn deserializeBook(data: []const u64, alloc: std.mem.Allocator) !std.AutoHashMap(u64, Move) {
+    var book = std.AutoHashMap(u64, Move).init(alloc);
+    assert(data.len % 2 == 0);
+    var i: usize = 0;
+    while (i < data.len) {
+        const key = data[i];
+        const value: Move = @as(*const Move, @ptrCast((&data[i + 1]))).*;
+        try book.put(key, value);
+        i += 2;
+    }
+    return book;
+}
+
+const Reader = std.io.BufferedReader(1024 * 1024, std.fs.File.Reader);
+
+const PngReader = struct {
+    buf: [16384]u8 = undefined,
+    line: []const u8 = "",
+    reader: Reader,
+    emptyLineCount: u64 = 0,
+    moveIndex: usize = 0,
+    moves: ?std.mem.SplitIterator(u8, .scalar) = null,
+    nextMovePart: ?[]const u8 = null,
+    board: Board = undefined,
+
+    fn next(self: *@This()) !void {
+        var resultStream = std.io.fixedBufferStream(&self.buf);
+        try self.reader.reader().streamUntilDelimiter(resultStream.writer(), '\n', null);
+        self.line = resultStream.getWritten();
+        if (self.line.len == 0) {
+            self.emptyLineCount += 1;
+            try self.next();
+        }
+    }
+
+    fn findNextInterestingGame(self: *@This()) !void {
+        try self.next();
+        while (self.lookingAtInfo()) {
+            const key = try self.infoKey();
+            const isElo = std.mem.eql(u8, key, "WhiteElo") or std.mem.eql(u8, key, "BlackElo");
+            if (isElo) {
+                const value = std.fmt.parseInt(usize, try self.infoValue(), 10) catch 0;
+                if (value < 1600) {
+                    try self.skipToMoves();
+                    try self.next();
+                    continue;
+                }
+            }
+            try self.next();
+        }
+        try self.skipToMoves();
+    }
+
+    fn infoKey(self: *@This()) ![]const u8 {
+        assert(self.lookingAtInfo());
+        var parts = std.mem.splitScalar(u8, self.line, ' ');
+        return (parts.next().?)[1..];
+    }
+
+    fn infoValue(self: *@This()) ![]const u8 {
+        assert(self.lookingAtInfo());
+        var parts = std.mem.splitScalar(u8, self.line, '"');
+        assert(parts.next() != null);
+        const val = parts.next().?;
+        return val[0..val.len];
+    }
+
+    fn skipToMoves(self: *@This()) !void {
+        while (self.lookingAtInfo()) {
+            try self.next();
+        }
+
+        if (std.mem.indexOfAny(u8, self.line, "[]{}%?!")) |_| {
+            try self.next();
+            try self.skipToMoves();
+            return;
+        }
+
+        self.nextMovePart = null;
+        self.board = try Board.initial();
+        self.moveIndex = 0;
+        self.moves = std.mem.splitScalar(u8, self.line, '.');
+        if (!std.mem.eql(u8, self.moves.?.next().?, "1")) {
+            try self.next();
+            try self.skipToMoves();
+        }
+    }
+
+    fn getMove(self: *@This(), lists: *movegen.ListPool) !?Move {
+        assert(!self.lookingAtInfo());
+
+        if (self.nextMovePart) |blackMove| {
+            self.nextMovePart = null;
+            const move = try parseMove(&self.board, blackMove, lists);
+            self.moveIndex += 1;
+            return move;
+        }
+
+        if (self.moves.?.next()) |fullMoveText| {
+            var parts = std.mem.splitScalar(u8, fullMoveText, ' ');
+            assert(parts.next().?.len == 0);
+            const whiteMove = parts.next().?;
+            if (parts.next()) |blackMove| {
+                self.nextMovePart = blackMove;
+            }
+            const move = try parseMove(&self.board, whiteMove, lists);
+            self.moveIndex += 1;
+            return move;
+        }
+
+        return null;
+    }
+
+    fn lookingAtInfo(self: @This()) bool {
+        return self.line[0] == '[';
+    }
+};
+
+fn parseMove(board: *Board, pgnText: []const u8, lists: *movegen.ListPool) !Move {
+    // std.debug.print("{s}\n", .{pgnText});
+    const moves = try movegen.possibleMoves(board, board.nextPlayer, lists);
+    defer lists.release(moves);
+
+    if (std.mem.startsWith(u8, pgnText, "O-O")) {
+        const wantLeft = std.mem.startsWith(u8, pgnText, "O-O-O");
+        for (moves.items) |move| {
+            const isLeft = move.to % 8 != 6;
+            switch (move.action) {
+                .castle => if (isLeft == wantLeft) return move,
+                else => {},
+            }
+        }
+        return error.InvalidMove; // can't castle
+    } else if (std.mem.indexOfAny(u8, pgnText, "-*")) |_| {
+        return error.GameOver;
+    }
+
+    const kind = if (pgnText.len == 2) .Pawn else whichPiece(pgnText[0]) catch .Pawn;
+    var start = pgnText.len - 2;
+    if (pgnText[pgnText.len - 1] == '+' or pgnText[pgnText.len - 1] == '#') start -= 1;
+    var promotionTarget: ?Kind = null;
+    if (pgnText[start] == '=') {
+        promotionTarget = try whichPiece(pgnText[start + 1]);
+        start -= 2;
+    }
+
+    const targetSquare = (try UCI.letterToRank(pgnText[start + 1])) * 8 + (try UCI.letterToFile(pgnText[start]));
+    var matchingMoves = try lists.get();
+    defer lists.release(matchingMoves);
+    for (moves.items) |move| {
+        if (promotionTarget) |wantKind| {
+            switch (move.action) {
+                .promote => |gotKind| {
+                    if (wantKind != gotKind) continue;
+                },
+                else => continue,
+            }
+        }
+        if (move.to == targetSquare and board.squares[move.from].kind == kind) try matchingMoves.append(move);
+    }
+    if (matchingMoves.items.len == 0) return error.InvalidMove; // no moves match
+    if (matchingMoves.items.len == 1) return matchingMoves.items[0];
+
+    const hasKindLetter = !std.meta.isError(whichPiece(pgnText[0]));
+    const infoIndex: usize = if (hasKindLetter) 1 else 0;
+
+    if (UCI.letterToFile(pgnText[infoIndex]) catch null) |file| {
+        for (matchingMoves.items) |move| {
+            if (move.from % 8 == file) return move;
+        }
+    }
+    if (UCI.letterToRank(pgnText[infoIndex]) catch null) |rank| {
+        for (matchingMoves.items) |move| {
+            if (move.from / 8 == rank) return move;
+        }
+    }
+
+    return error.InvalidMove; // multiple moves match
+}
+
+fn whichPiece(letter: u8) !Kind {
+    return switch (letter) {
+        'N' => .Knight,
+        'B' => .Bishop,
+        'Q' => .Queen,
+        'K' => .King,
+        'R' => .Rook,
+        'P' => .Pawn,
+        else => return error.InvalidMove,
+    };
+}
+
+const PosInfo = struct {
+    hash: u64,
+    moveCount: std.AutoHashMap(Move, u64),
+};
+
+const Book = struct {
+    boards: std.AutoHashMap(u64, PosInfo),
+};

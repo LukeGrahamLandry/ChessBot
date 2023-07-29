@@ -26,6 +26,7 @@ pub const StratOpts = struct {
     doIterative: bool = true, // When false, it will play garbage moves if it runs out of time because it won't have other levels to fall back to.
     doMemo: bool = true,
     printUci: bool = false,
+    trackPv: bool = false,
     followCapturesDepth: i32 = 0,
 };
 
@@ -127,14 +128,14 @@ pub fn bestMove(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, max
             // Update a/b to pass better ones to walkEval but it would never be able to prune here because the we're always the same player.
             if (eval > alpha) {
                 alpha = eval;
-                if (opts.printUci) {
+                if (opts.trackPv) {
                     pv.items.len = line.items.len;
                     @memcpy(pv.items, line.items);
                 }
             }
         }
 
-        if (opts.printUci) assert(pv.items.len > 0); // There must be some best line.
+        if (opts.trackPv) assert(pv.items.len > 0); // There must be some best line.
 
         std.sort.insertionContext(0, topLevelMoves.items.len, PairContext{ .moves = topLevelMoves.items, .evals = ctx.evalGuesses.items });
         thinkTime = nanoTimestamp() - startTime;
@@ -146,14 +147,18 @@ pub fn bestMove(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, max
 
         if (opts.printUci) {
             var str = try std.BoundedArray(u8, 10000).init(0);
-            for (pv.items) |move| {
-                if ((try move.text())[4] == 0) {
-                    try str.appendSlice((try move.text())[0..4]);
-                } else {
-                    try str.appendSlice((try move.text())[0..]);
-                }
+            if (opts.trackPv) {
+                for (pv.items) |move| {
+                    if ((try move.text())[4] == 0) {
+                        try str.appendSlice((try move.text())[0..4]);
+                    } else {
+                        try str.appendSlice((try move.text())[0..]);
+                    }
 
-                try str.append(' ');
+                    try str.append(' ');
+                }
+            } else {
+                try str.appendSlice((try favourite.text())[0..4]);
             }
 
             const info: UCI.UciInfo = .{ .time = @intCast(@divFloor(thinkTime, std.time.ns_per_ms)), .depth = @intCast(depth + 1), .pvFirstMove = UCI.writeAlgebraic(favourite), .cp = ctx.evalGuesses.items[0], .pv = str.slice() };
@@ -249,15 +254,15 @@ pub fn walkEval(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, rem
     var memoKind: MemoKind = .Exact;
     _ = memoKind;
     var foundMove: ?Move = null;
-    var pv = if (opts.printUci) ctx.lists.copyOf(line) else try ctx.lists.get();
+    var pv = if (opts.trackPv) ctx.lists.copyOf(line) else try ctx.lists.get();
     defer ctx.lists.release(pv);
     for (moves.items) |move| {
-        var nextLine = if (opts.printUci) ctx.lists.copyOf(line) else try ctx.lists.get();
+        var nextLine = if (opts.trackPv) ctx.lists.copyOf(line) else try ctx.lists.get();
         defer ctx.lists.release(nextLine);
         try nextLine.append(move);
 
         const eval = e: {
-            if (remaining > 0) {
+            if (remaining > 1) { // TODO: decide if this should be 0 or 1
                 const unMove = game.play(move);
                 defer game.unplay(unMove);
                 break :e -(try walkEval(opts, ctx, game, remaining - 1, -beta, -alpha, stats, capturesOnly, endTime, &nextLine));
@@ -277,7 +282,7 @@ pub fn walkEval(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, rem
         if (eval > alpha) {
             alpha = eval;
             foundMove = move;
-            if (opts.printUci) {
+            if (opts.trackPv) {
                 pv.items.len = nextLine.items.len;
                 @memcpy(pv.items, nextLine.items);
             }
@@ -285,7 +290,7 @@ pub fn walkEval(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, rem
 
         if (opts.doPruning and eval >= beta) {
             // That move made this subtree super good so we probably won't get here.
-            if (opts.printUci) {
+            if (opts.trackPv) {
                 line.items.len = nextLine.items.len;
                 @memcpy(line.items, nextLine.items);
             }
@@ -306,7 +311,7 @@ pub fn walkEval(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, rem
         }
     }
 
-    if (opts.printUci) {
+    if (opts.trackPv) {
         line.items.len = pv.items.len;
         @memcpy(line.items, pv.items);
     }
@@ -349,15 +354,15 @@ pub fn lookForPeace(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board,
         }
     }
 
-    var pv = if (opts.printUci) ctx.lists.copyOf(line) else try ctx.lists.get();
+    var pv = if (opts.trackPv) ctx.lists.copyOf(line) else try ctx.lists.get();
     defer ctx.lists.release(pv);
     for (moves.items) |move| {
         if (!move.isCapture) continue;
-        var nextLine = if (opts.printUci) ctx.lists.copyOf(line) else try ctx.lists.get();
+        var nextLine = if (opts.trackPv) ctx.lists.copyOf(line) else try ctx.lists.get();
         defer ctx.lists.release(nextLine);
         try nextLine.append(move);
         const eval = e: {
-            if (remaining > 0) {
+            if (remaining > 1) {
                 const unMove = game.play(move);
                 defer game.unplay(unMove);
                 break :e -(try lookForPeace(opts, ctx, game, remaining - 1, -beta, -alpha, &nextLine));
@@ -372,7 +377,7 @@ pub fn lookForPeace(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board,
 
         if (eval > alpha) {
             alpha = eval;
-            if (opts.printUci) {
+            if (opts.trackPv) {
                 pv.items.len = nextLine.items.len;
                 @memcpy(pv.items, nextLine.items);
             }
@@ -380,7 +385,7 @@ pub fn lookForPeace(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board,
 
         if (opts.doPruning and eval >= beta) {
             // That move made this subtree super good so we probably won't get here.
-            if (opts.printUci) {
+            if (opts.trackPv) {
                 line.items.len = nextLine.items.len;
                 @memcpy(line.items, nextLine.items);
             }
@@ -388,7 +393,7 @@ pub fn lookForPeace(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board,
         }
     }
 
-    if (opts.printUci) {
+    if (opts.trackPv) {
         line.items.len = pv.items.len;
         @memcpy(line.items, pv.items);
     }
