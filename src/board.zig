@@ -10,7 +10,7 @@ const getChecksInfo = @import("movegen.zig").getChecksInfo;
 const movegen = @import("movegen.zig");
 const ListPool = movegen.ListPool;
 
-// Numbers matter because js sees them and for fen parsing.
+// Numbers matter because js sees them and for fen parsing and for indexes.
 pub const Kind = enum(u4) {
     Empty = 0,
     Pawn = 6,
@@ -189,15 +189,15 @@ comptime {
 const FrenchMove = union(enum) { none, file: u4 };
 // const slowTrackAllMoves = false;
 
-pub inline fn getZoidIndex(piece: Piece, square: u6) usize {
+pub inline fn getRawIndex(piece: Piece, square: u6) usize {
     const kindOffset: usize = @intCast(@intFromEnum(piece.kind));
     const colourOffset: usize = @intCast(@intFromEnum(piece.colour));
-    const offset = (kindOffset + (colourOffset * 6)) * 64;
-    return Learned.ZOID_PIECE_START + offset + square;
+    const offset = (kindOffset + (colourOffset * 7)) * 64;
+    return offset + square;
 }
 
 fn getZoidberg(piece: Piece, square: u6) u64 {
-    return Learned.ZOIDBERG[getZoidIndex(piece, square)];
+    return Learned.ZOIDBERG[Learned.ZOID_PIECE_START + getRawIndex(piece, square)];
 }
 
 // This is a chonker struct (if I store repititions inline) but that's fine because I only ever need one.
@@ -487,14 +487,14 @@ pub const Board = struct {
 
     fn pieceAdded(self: *Board, piece: Piece, index: u6) void {
         self.zoidberg ^= getZoidberg(piece, index);
-        self.simpleEval += piece.eval();
+        self.simpleEval += piece.eval() + Learned.Weights.ALL[getRawIndex(piece, index)];
         assert(piece.kind != .Empty);
         self.peicePositions.setBit(index, piece.colour);
     }
 
     fn pieceRemoved(self: *Board, piece: Piece, index: u6) void {
         self.zoidberg ^= getZoidberg(piece, index);
-        self.simpleEval -= piece.eval();
+        self.simpleEval -= piece.eval() + Learned.Weights.ALL[getRawIndex(piece, index)];
         assert(piece.kind != .Empty);
         self.peicePositions.unsetBit(index, piece.colour);
     }
@@ -671,7 +671,7 @@ pub fn inferPlayMove(board: *Board, fromIndex: u32, toIndex: u32, lists: *ListPo
                 else => {},
             }
         }
-        
+
         if (m.from == @as(u6, @intCast(fromIndex)) and m.to == @as(u6, @intCast(toIndex))) {
             realMove = m;
             break;

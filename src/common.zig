@@ -19,9 +19,9 @@ pub fn setup(memoSizeMB: usize) SearchGlobals {
     return SearchGlobals.init(memoSizeMB, alloc) catch panic("OOM memo", .{});
 }
 
-const getZoidIndex = @import("board.zig").getZoidIndex;
+const getRawIndex = @import("board.zig").getRawIndex;
 
-pub fn initZoidberg() void {
+fn initZoidberg() void {
     var rand: std.rand.Xoshiro256 = .{ .s = Learned.ZOIDBERG_SEED };
     for (&Learned.ZOIDBERG) |*ptr| {
         ptr.* = rand.next();
@@ -30,10 +30,11 @@ pub fn initZoidberg() void {
     // I want empty squares to be 0 because I don't trust that I rigorously track adds/removes of them.
     // Don't need this because I never call it with empty anyway because that would mess up the bitboards but doesn't hurt.
     for (0..64) |i| {
-        Learned.ZOIDBERG[getZoidIndex(.{ .kind = .Empty, .colour = .White }, @intCast(i))] = 0;
-        Learned.ZOIDBERG[getZoidIndex(.{ .kind = .Empty, .colour = .Black }, @intCast(i))] = 0;
+        Learned.ZOIDBERG[Learned.ZOID_PIECE_START + getRawIndex(.{ .kind = .Empty, .colour = .White }, @intCast(i))] = 0;
+        Learned.ZOIDBERG[Learned.ZOID_PIECE_START + getRawIndex(.{ .kind = .Empty, .colour = .Black }, @intCast(i))] = 0;
     }
 }
+
 
 pub fn nanoTimestamp() i128 {
     if (comptime isWasm) {

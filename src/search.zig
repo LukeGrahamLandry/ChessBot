@@ -27,7 +27,7 @@ pub const StratOpts = struct {
     doMemo: bool = true,
     printUci: bool = false,
     trackPv: bool = false,
-    followCapturesDepth: i32 = 0,
+    followCapturesDepth: i32 = 3,
 };
 
 pub const MoveErr = error{ GameOver, OutOfMemory, ForceStop, Overflow, ThisIsntThreadSafe };

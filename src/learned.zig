@@ -14,7 +14,7 @@ pub const CASTLE_REWARD: i32 = 0;
 // TODO: are there better numbers? experimentally run a bunch of games until I find the ones with least collissions?
 /// Magic numbers for Zobrist hashing. I think I'm so funny.
 /// https://en.wikipedia.org/wiki/Zobrist_hashing
-pub var ZOIDBERG: [781 + 64]u64 = undefined;
+pub var ZOIDBERG: [781 + 128]u64 = undefined;
 pub const ZOIDBERG_SEED: [4]u64 = [4]u64{ 11196532868861123662, 6132230720027805519, 14166148882366595784, 2320488099995370816 };
 
 // These indicate which segment of the Zobrist list is used for each feature of the board.
@@ -30,3 +30,83 @@ pub const ROOK_HASH_MUL = [64]u64{ 1648319562281639889, 716762571541290986, 6247
 pub const ROOK_SIZES = [64]u7{ 13, 13, 13, 13, 13, 13, 13, 14, 12, 11, 12, 12, 12, 11, 11, 12, 12, 11, 11, 11, 12, 12, 11, 12, 13, 11, 12, 12, 12, 11, 11, 12, 13, 11, 11, 11, 12, 11, 11, 12, 12, 11, 11, 11, 12, 12, 11, 12, 13, 12, 12, 12, 12, 11, 12, 13, 14, 13, 13, 13, 13, 13, 12, 13 };
 pub const BISHOP_HASH_MUL = [64]u64{ 11582492355852499456, 12558299208908555073, 9097550462990888451, 11561403248105289075, 18289065885704541864, 8363273114544538565, 15186339742768365615, 10626500893397221148, 401560881374776, 13817042318456526409, 4014871106002862154, 5764706755375319352, 7492922243744322700, 827453144548365, 12582111458770779971, 9796531790002192157, 848460863869456, 6037104454846544764, 8593751954604182985, 8362358569374310967, 10697894540527757531, 13864337366743220616, 16906795632970170303, 12350636178557874185, 2308595477176607448, 13673041431235064665, 11529211038480677772, 4554790810327420822, 6062796583317620591, 503514340056787566, 1960759235405183207, 10414185504101990293, 18445315036250571488, 2060892242396898913, 19140296088030449, 15780612909455568172, 298192578304283300, 17618345441161811978, 11337827472302114756, 14898481532836389927, 12682397367346380072, 17582092151370105705, 7400470212279224892, 3075114125714123738, 1287555305773864344, 11385305444569885229, 8821260121780006707, 327403804520034824, 16428859069771290766, 2159730120856906609, 15850698137882692466, 6486144437492151795, 13260285745981885620, 15852940687368104309, 3134496306693839647, 7270343771272955857, 14590469834645577747, 9357374989009944902, 7375310826858662714, 1317880813219458747, 14920420066885170092, 7749850382963949437, 15492663051099501758, 5115926443722359167 };
 pub const BISHOP_SIZES = [64]u7{ 6, 6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 5, 5, 6, 10, 11, 11, 11, 8, 5, 5, 6, 10, 12, 13, 11, 8, 5, 5, 6, 10, 13, 13, 11, 8, 5, 5, 7, 10, 11, 10, 10, 8, 5, 5, 7, 7, 7, 7, 7, 6, 5, 5, 6, 6, 6, 6, 6, 6, 5, 6 };
+
+/// These are from https://www.chessprogramming.org/Simplified_Evaluation_Function
+// TODO: try getting these from most popular squares from pgn files like book. 
+//       just copying table from the internet annoys me
+//       could also have it auto play games with random weights? trying to do an evolution thing would be cool 
+// TODO: assert enum order    Empty, King, Queen, Bishop, Knight, Rook, Pawn
+// TODO: web drop down to show these as a heat map 
+pub const Weights = struct {
+    pub var ALL = FILLER ++ KING ++ QUEEN ++ BISHOP ++ KNIGHT ++ ROOK ++ PAWN ++ 
+                FILLER ++ mirror(KING) ++ mirror(QUEEN) ++ mirror(BISHOP) 
+                ++ mirror(KNIGHT) ++ mirror(ROOK) ++ mirror(PAWN);
+    
+    pub const FILLER = @import("std").mem.zeroes([64] i32);
+    // TODO: passed pawns are better and it doesnt seem to appreciate 
+    pub const PAWN = [64] i32 {
+         0,  0,  0,  0,  0,  0,  0,  0,
+        50, 50, 50, 50, 50, 50, 50, 50,
+        10, 10, 20, 30, 30, 20, 10, 10,
+        5,  5, 10, 25, 25, 10,  5,  5,
+        0,  0,  0, 20, 20,  0,  0,  0,
+        5, -5,-10,  0,  0,-10, -5,  5,
+        5, 10, 10,-20,-20, 10, 10,  5,
+        0,  0,  0,  0,  0,  0,  0,  0
+    };
+    pub const KNIGHT = [64] i32 {
+        -50,-40,-30,-30,-30,-30,-40,-50,
+        -40,-20,  0,  0,  0,  0,-20,-40,
+        -30,  0, 10, 15, 15, 10,  0,-30,
+        -30,  5, 15, 20, 20, 15,  5,-30,
+        -30,  0, 15, 20, 20, 15,  0,-30,
+        -30,  5, 10, 15, 15, 10,  5,-30,
+        -40,-20,  0,  5,  5,  0,-20,-40,
+        -50,-40,-30,-30,-30,-30,-40,-50,
+    };
+    pub const BISHOP = [64] i32 {
+        -20,-10,-10,-10,-10,-10,-10,-20,
+        -10,  0,  0,  0,  0,  0,  0,-10,
+        -10,  0,  5, 10, 10,  5,  0,-10,
+        -10,  5,  5, 10, 10,  5,  5,-10,
+        -10,  0, 10, 10, 10, 10,  0,-10,
+        -10, 10, 10, 10, 10, 10, 10,-10,
+        -10,  5,  0,  0,  0,  0,  5,-10,
+        -20,-10,-10,-10,-10,-10,-10,-20,
+    };
+    pub const ROOK = [64] i32 {
+        0,  0,  0,  0,  0,  0,  0,  0,
+        5, 10, 10, 10, 10, 10, 10,  5,
+        -5,  0,  0,  0,  0,  0,  0, -5,
+        -5,  0,  0,  0,  0,  0,  0, -5,
+        -5,  0,  0,  0,  0,  0,  0, -5,
+        -5,  0,  0,  0,  0,  0,  0, -5,
+        -5,  0,  0,  0,  0,  0,  0, -5,
+        0,  0,  0,  5,  5,  0,  0,  0
+    };
+    pub const QUEEN = [64] i32 {
+        -20,-10,-10, -5, -5,-10,-10,-20,
+        -10,  0,  0,  0,  0,  0,  0,-10,
+        -10,  0,  5,  5,  5,  5,  0,-10,
+        -5,  0,  5,  5,  5,  5,  0, -5,
+        0,  0,  5,  5,  5,  5,  0, -5,
+        -10,  5,  5,  5,  5,  5,  0,-10,
+        -10,  0,  5,  0,  0,  0,  0,-10,
+        -20,-10,-10, -5, -5,-10,-10,-20
+    };
+    // TODO: havent done the king yet because it changes in the end game when you dont need to hide anymore 
+    //       this seems important. its really bad at king and pawn end games currently 
+    pub const KING = @import("std").mem.zeroes([64] i32);
+};
+
+/// Mirrors rank and negates value. 
+fn mirror(table: [64] i32) [64] i32 {
+    var mirrored: [64] i32 = undefined;
+    for (0..64) |i| {
+        const rank = i / 8;
+        const file = i % 8;
+        const m = (7-rank)*8 + file;
+        mirrored[i] = table[m] * -1;
+    }
+    return mirrored;
+}
