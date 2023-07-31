@@ -14,7 +14,7 @@ pub const CASTLE_REWARD: i32 = 0;
 // TODO: are there better numbers? experimentally run a bunch of games until I find the ones with least collissions?
 /// Magic numbers for Zobrist hashing. I think I'm so funny.
 /// https://en.wikipedia.org/wiki/Zobrist_hashing
-pub var ZOIDBERG: [781]u64 = undefined;
+pub var ZOIDBERG: [781 + 64]u64 = undefined;
 pub const ZOIDBERG_SEED: [4]u64 = [4]u64{ 11196532868861123662, 6132230720027805519, 14166148882366595784, 2320488099995370816 };
 
 // These indicate which segment of the Zobrist list is used for each feature of the board.

@@ -22,7 +22,8 @@ pub fn main() !void {
     try e.init();
     var forever = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     var lists = try ListPool.init(forever.allocator());
-    book = try @import("book.zig").loadBookFromFile("book.chess", forever.allocator());
+    const bookData = @embedFile("book.chess");
+    book = try @import("book.zig").deserializeBook(@import("book.zig").bytesToU64Slice(bookData[0..]), forever.allocator());
 
     while (true) {
         const cmd = waitForUciCommand(std.io.getStdIn().reader(), e.arena.allocator(), &lists) catch |err| {
@@ -83,7 +84,8 @@ const Engine = struct {
                 // TODO: ponder (think on opponent's turn about predicted move)
                 const inc = if (self.worker.board.nextPlayer == .White) info.winc else info.binc;
                 const time = if (self.worker.board.nextPlayer == .White) info.wtime else info.btime;
-                const thismove = (inc orelse 1000) + ((time orelse 0) / 100);
+                const lowTime = inc != null and time != null and inc.? > 500 and time.? < 5000;
+                const thismove = if (lowTime) inc.? * 9 / 10 else ((inc orelse 1000) + ((time orelse 0) / 100));
                 self.worker.maxDepth = 30; // info.maxDepthPly orelse 10;
                 self.worker.timeLimitMs = thismove; // info.maxSearchTimeMs orelse (3 * std.time.ms_per_s);
                 self.worker.isIdle.reset();
@@ -114,7 +116,7 @@ fn engineWorker(self: *Worker) !void {
         self.hasWork.reset();
         self.isIdle.reset();
 
-        if (self.board.fullMoves <= 6) {
+        if (self.board.fullMoves <= @import("book.zig").FULL_MOVE_DEPTH) {
             if (book.get(self.board.zoidberg)) |move| {
                 const info: UciInfo = .{ .time = 1, .depth = 1, .pvFirstMove = writeAlgebraic(move) };
                 const result: UciResult = .{ .Info = info };
@@ -142,7 +144,7 @@ fn waitForUciCommand(reader: anytype, alloc: std.mem.Allocator, lists: *ListPool
     // Don't care about the max because fixedBufferStream will give a write error if it overflows.
     try reader.streamUntilDelimiter(resultStream.writer(), '\n', null);
     const msg = resultStream.getWritten();
-    std.debug.print("[uci]: {s}\n", .{msg});
+    // std.debug.print("[uci]: {s}\n", .{msg});
     return try UciCommand.parse(msg, alloc, lists);
 }
 
@@ -612,7 +614,7 @@ pub fn playAlgebraic(board: *Board, moveStr: [5]u8, lists: *ListPool) !OldMove {
     const toRank = try letterToRank(moveStr[3]);
     const fromIndex = fromRank * 8 + fromFile;
     const toIndex = toRank * 8 + toFile;
-    return try inferPlayMove(board, fromIndex, toIndex, lists);
+    return try inferPlayMove(board, fromIndex, toIndex, lists, .Queen);
 }
 
 pub fn writeAlgebraic(move: Move) [5]u8 {

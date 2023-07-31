@@ -79,20 +79,22 @@ export fn destroyBoard(board: *Board) void {
 }
 
 export fn setup() void {
-    ctx = @import("common.zig").setup(100);  // TODO: slider for size
+    ctx = @import("common.zig").setup(100); // TODO: slider for size
 }
 
 export fn restartGame(board: *Board) void {
     board.* = Board.initial() catch webPanic("createBoard parse init fen failed", .{});
 }
 
-comptime { assert(@sizeOf(Piece) == @sizeOf(u8)); }
+comptime {
+    assert(@sizeOf(Piece) == @sizeOf(u8));
+}
 export fn getBoardData(board: *Board) [*]u8 {
     return @ptrCast(&board.squares);
 }
 
 /// Returns result code or game over string length
-export fn playBotMove(board: *Board, msgPtr: [*] u8, maxLen: u32) i32 {
+export fn playBotMove(board: *Board, msgPtr: [*]u8, maxLen: u32) i32 {
     const move = search.bestMove(.{}, &ctx, board, maxDepth, maxTimeMs) catch |err| {
         switch (err) {
             error.GameOver => {
@@ -112,7 +114,7 @@ export fn playBotMove(board: *Board, msgPtr: [*] u8, maxLen: u32) i32 {
     return if (len > 0) len else @intFromEnum(JsResult.Ok);
 }
 
-fn checkGameOver(board: *Board, msgPtr: [*] u8, maxLen: u32) i32 {
+fn checkGameOver(board: *Board, msgPtr: [*]u8, maxLen: u32) i32 {
     const reason = board.gameOverReason(&ctx.lists) catch return -1;
     if (reason == .Continue) return 0;
     const str = @tagName(reason);
@@ -138,7 +140,7 @@ export fn getPossibleMovesBB(board: *Board, from: i32) u64 {
     return result;
 }
 
-export fn setFromFen(board: *Board, ptr: [*] const u8, len: u32) bool {
+export fn setFromFen(board: *Board, ptr: [*]const u8, len: u32) bool {
     const fenSlice = ptr[0..@as(usize, len)];
     const temp = Board.fromFEN(fenSlice) catch |err| {
         logErr(err, "setFromFen");
@@ -149,7 +151,7 @@ export fn setFromFen(board: *Board, ptr: [*] const u8, len: u32) bool {
 }
 
 /// Returns the length of the string or 0 if error.
-export fn getFen(board: *const Board, out_ptr: [*] u8, maxLen: u32) u32 {
+export fn getFen(board: *const Board, out_ptr: [*]u8, maxLen: u32) u32 {
     var buffer = std.heap.FixedBufferAllocator.init(out_ptr[0..maxLen]);
     const fen = board.toFEN(buffer.allocator()) catch |err| {
         logErr(err, "getFen");
@@ -163,10 +165,11 @@ export fn getMaterialEval(board: *Board) i32 {
 }
 
 /// Returns result code or game over string length
-export fn playHumanMove(board: *Board, fromIndex: u32, toIndex: u32, msgPtr: [*] u8, maxLen: u32) i32 {
+export fn playHumanMove(board: *Board, fromIndex: u32, toIndex: u32, msgPtr: [*]u8, maxLen: u32) i32 {
     if (fromIndex >= 64 or toIndex >= 64) return @intFromEnum(JsResult.Error);
 
-    _ = @import("board.zig").inferPlayMove(board, fromIndex, toIndex, &ctx.lists) catch |err| {
+    // TODO: promotion ui
+    _ = @import("board.zig").inferPlayMove(board, fromIndex, toIndex, &ctx.lists, .Queen) catch |err| {
         switch (err) {
             error.IllegalMove => return @intFromEnum(JsResult.IllegalMove),
             else => logErr(err, "playHumanMove"),
@@ -231,7 +234,7 @@ export fn getFrenchMoveBB(board: *Board) u64 {
 export fn getAttackBB(board: *Board, colourI: u32) u64 {
     const colour: Colour = if (colourI == 0) .White else .Black;
     var out: @import("movegen.zig").GetAttackSquares = .{};
-    try @import("movegen.zig").genPossibleMoves(&out, board,colour);
+    try @import("movegen.zig").genPossibleMoves(&out, board, colour);
     return out.bb;
 }
 

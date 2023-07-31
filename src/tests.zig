@@ -91,22 +91,25 @@ test "write fen" {
 
 test "sane zobrist numbers" {
     _ = setup(0);
-    try expectNoDuplicates(u64, &@import("learned.zig").ZOIDBERG);
-}
 
-test "dir" {
-    try std.testing.expectEqual(Colour.White.dir(), 1);
-    try std.testing.expectEqual(Colour.Black.dir(), -1);
-}
-
-fn expectNoDuplicates(comptime T: type, items: []T) !void {
+    const items = &@import("learned.zig").ZOIDBERG;
     for (items) |val| {
         var count: usize = 0;
         for (items) |check| {
             if (std.meta.eql(val, check)) count += 1;
         }
-        try std.testing.expectEqual(count, 1);
+        if (val == 0) {
+            // 0 is used for empty squares that I don't want to change the hash because I don't think they're tracked rigorously. 64 squares for each colour.
+            try std.testing.expectEqual(count, 128);
+        } else {
+            try std.testing.expectEqual(count, 1);
+        }
     }
+}
+
+test "dir" {
+    try std.testing.expectEqual(Colour.White.dir(), 1);
+    try std.testing.expectEqual(Colour.Black.dir(), -1);
 }
 
 const TestCase = struct {
@@ -164,4 +167,19 @@ test "no iter makes best move" {
 
 test "precalc" {
     _ = @import("precalc.zig");
+}
+
+// TODO: should test all kinds of promotion
+test "parse uci moves promotion" {
+    var ctx = setup(0);
+    const moves = "position startpos moves d2d4 d7d5 e2e3 g8f6 b1c3 e7e6 g1f3 c7c5 f1b5 c8d7 d4c5 f8d6 c5d6 d7b5 c3b5 d8a5 b5c3 a5c5 d1d4 c5d6 d4a4 e8e7 a4b5 d6c7 b5b4 e7e8 c1d2 a7a5 b4d4 a5a4 d4e5 c7e5 f3e5 b8c6 e5c6 b7c6 c3d5 f6d5 e3e4 c6c5 e4d5 e6d5 e1c1 a4a3 h1e1 e8d7 b2b4 d7c6 b4c5 a8a4 d2c3 a4g4 e1e7 f7f6 e7e6 c6c5 e6a6 g4g2 c3d4 c5b5 a6d6 g2h2 d6d5 b5c6 d5c5 c6b7 c5b5 b7a6 b5b3 h8d8 b3a3 a6b5 a3a7 h2g2 a7b7 b5c6 b7f7 g2g4 d4c3 d8d1 c1d1 g4g2 c3d4 c6d5 c2c3 d5e6 f7a7 g2g1 d1c2 e6f5 a7d7 f5g6 f2f4 g1e1 f4f5 g6h6 c2b3 e1e2 d7f7 e2e8 a2a4 e8g8 d4e3 h6h5 e3f4 h5g4 f4d6 g4f5 f7b7 f5e4 b7d7 e4d5 d6g3 d5e4 g3d6 h7h5 a4a5 e4d5 d6c7 d5e6 d7d6 e6f5 d6d5 f5g4 d5d7 g4f3 c7d6 f3f2 c3c4 f2e3 a5a6 e3e2 a6a7 e2e3 d6b8 g8e8 a7a8q";
+    const expectedFenStart = "QB2r3/3R2p1/5p2/7p/2P5/1K2k3/8/8 b - - 0";
+    const cmd = try @import("uci.zig").UciCommand.parse(moves, arena.allocator(), &ctx.lists);
+    switch (cmd) {
+        .SetPositionMoves => |info| {
+            const foundFen = try info.board.toFEN(arena.allocator());
+            try std.testing.expect(std.mem.startsWith(u8, foundFen, expectedFenStart));
+        },
+        else => return error.TestExpectedEqual,
+    }
 }

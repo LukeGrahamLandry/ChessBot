@@ -1,3 +1,5 @@
+//! Parse pgn files to generate an opening book.
+
 const std = @import("std");
 const Move = @import("board.zig").Move;
 const Board = @import("board.zig").Board;
@@ -7,32 +9,41 @@ const UCI = @import("uci.zig");
 const movegen = @import("movegen.zig");
 const assert = std.debug.assert;
 
+const PGN_PATH = "zig-out/lichess_db_standard_rated_2016-04.pgn";
+pub const FULL_MOVE_DEPTH = 15;
+const MIN_ELO = 2000;
+const MIN_OCCURANCES = 1;
+
+// c_allocator is 8x as fast as GeneralPurposeAllocator! (raw_c_allocator is the same)
 pub fn main() !void {
+    const t = @import("common.zig").Timer.start();
     assert(@sizeOf(Move) == 8);
     std.debug.print("\nStart building book.\n", .{});
     var ctx = @import("common.zig").setup(0);
     // zig-out is just a good place to put stuff that's git ignored
-    const file = try std.fs.cwd().openFile("zig-out/lichess_db_standard_rated_2014-11.pgn", .{});
-    const buffered = std.io.bufferedReaderSize(1024 * 1024, file.reader());
+    const file = try std.fs.cwd().openFile(PGN_PATH, .{});
+    const buffered: Reader = .{ .unbuffered_reader = file.reader() };
 
     var pgn: PngReader = .{ .reader = buffered };
     try pgn.findNextInterestingGame();
 
-    var general = std.heap.GeneralPurposeAllocator(.{}){};
-    var seen = std.AutoHashMap(u64, PosInfo).init(general.allocator());
+    var seen = std.AutoHashMap(u64, PosInfo).init(std.heap.c_allocator);
 
     var gameCount: usize = 0;
-    while (gameCount < 300000) {
-        std.debug.print("{}\n", .{gameCount});
+    while (true) {
         const move = (pgn.getMove(&ctx.lists) catch |err| {
             if (err == error.GameOver) {
-                try pgn.findNextInterestingGame();
+                pgn.findNextInterestingGame() catch |errr| if (errr == error.EndOfStream) break;
                 gameCount += 1;
+                if (gameCount % 1000 == 0) std.debug.print("{}\n", .{gameCount});
                 continue;
+            }
+            if (err == error.EndOfStream) {
+                break;
             }
             return err;
         }) orelse {
-            try pgn.findNextInterestingGame();
+            pgn.findNextInterestingGame() catch |err| if (err == error.EndOfStream) break;
             gameCount += 1;
             continue;
         };
@@ -43,21 +54,21 @@ pub fn main() !void {
                 try info.moveCount.put(move, 1);
             }
         } else {
-            var info: PosInfo = .{ .hash = pgn.board.zoidberg, .moveCount = std.AutoHashMap(Move, u64).init(general.allocator()) };
+            var info: PosInfo = .{ .hash = pgn.board.zoidberg, .moveCount = std.AutoHashMap(Move, u64).init(std.heap.c_allocator) };
             try info.moveCount.put(move, 1);
             try seen.put(pgn.board.zoidberg, info);
         }
-        if (pgn.moveIndex > 6) {
-            try pgn.next();
-            try pgn.findNextInterestingGame();
+        if (pgn.moveIndex > (FULL_MOVE_DEPTH * 2)) {
+            pgn.next() catch |err| if (err == error.EndOfStream) break;
+            pgn.findNextInterestingGame() catch |err| if (err == error.EndOfStream) break;
             gameCount += 1;
-            // std.debug.print("{s}\n", .{pgn.line});
+            if (gameCount % 1000 == 0) std.debug.print("{}\n", .{gameCount});
             continue;
         }
         _ = pgn.board.play(move);
     }
 
-    var book = std.AutoHashMap(u64, Move).init(general.allocator());
+    var book = std.AutoHashMap(u64, Move).init(std.heap.c_allocator);
 
     var positions = seen.iterator();
     while (positions.next()) |pos| {
@@ -69,23 +80,26 @@ pub fn main() !void {
             count += move.value_ptr.*;
             if (move.value_ptr.* > bestCount) {
                 bestMove = move.key_ptr.*;
+                bestCount = move.value_ptr.*;
             }
         }
-        if (count > 1) {
+        if (count > MIN_OCCURANCES) {
             try book.put(pos.key_ptr.*, bestMove);
         }
     }
 
     std.debug.print("Positions in book: {}\n", .{book.count()});
     std.debug.print("Size: {} KB\n", .{book.capacity() * @sizeOf(@TypeOf(book).KV) / 1024});
+    std.debug.print("Built book in {}ms.\n", .{t.get()});
 
-    const data = try serializeBook(book, general.allocator());
-    const bookAgain = try deserializeBook(data, general.allocator());
+    const data = try serializeBook(book, std.heap.c_allocator);
+    const bookAgain = try deserializeBook(data, std.heap.c_allocator);
     try checkBookEql(book, bookAgain);
 
-    try writeBookToFile(book, "book.chess", general.allocator());
-    const bookFromFile = try loadBookFromFile("book.chess", general.allocator());
+    try writeBookToFile(book, "src/book.chess", std.heap.c_allocator);
+    const bookFromFile = try loadBookFromFile("src/book.chess", std.heap.c_allocator);
     try checkBookEql(book, bookFromFile);
+
     std.debug.print("It worked!\n", .{});
 }
 
@@ -107,13 +121,15 @@ pub fn loadBookFromFile(path: []const u8, alloc: std.mem.Allocator) !std.AutoHas
     var buffer = try alloc.alloc(u8, size);
     defer alloc.free(buffer);
     assert(size % 16 == 0);
+    var fileBytes = try std.fs.cwd().readFile(path, buffer);
+    return try deserializeBook(bytesToU64Slice(fileBytes), alloc);
+}
 
-    var fileBytes = try std.fs.cwd().readFile("book.chess", buffer);
-    var fileData: []u64 = undefined;
-    fileData.ptr = @ptrCast(@alignCast(fileBytes.ptr));
-    fileData.len = fileBytes.len / 8;
-
-    return try deserializeBook(fileData, alloc);
+pub fn bytesToU64Slice(bytes: []const u8) []const u64 {
+    var data: []u64 = undefined;
+    data.ptr = @constCast(@ptrCast(@alignCast(bytes.ptr)));
+    data.len = bytes.len / 8;
+    return data;
 }
 
 // Caller still owns the original book
@@ -131,7 +147,7 @@ pub fn writeBookToFile(book: std.AutoHashMap(u64, Move), path: []const u8, alloc
 
 // Caller owns the returned memory and still owns the original book
 fn serializeBook(book: std.AutoHashMap(u64, Move), alloc: std.mem.Allocator) ![]const u64 {
-    var data = std.ArrayList(u64).init(alloc);
+    var data = try std.ArrayList(u64).initCapacity(alloc, book.count() * 2);
     var bookIter = book.iterator();
     while (bookIter.next()) |entry| {
         try data.append(entry.key_ptr.*);
@@ -142,8 +158,9 @@ fn serializeBook(book: std.AutoHashMap(u64, Move), alloc: std.mem.Allocator) ![]
 }
 
 // Caller owns the returned memory
-fn deserializeBook(data: []const u64, alloc: std.mem.Allocator) !std.AutoHashMap(u64, Move) {
+pub fn deserializeBook(data: []const u64, alloc: std.mem.Allocator) !std.AutoHashMap(u64, Move) {
     var book = std.AutoHashMap(u64, Move).init(alloc);
+    try book.ensureTotalCapacity(@intCast(data.len / 2));
     assert(data.len % 2 == 0);
     var i: usize = 0;
     while (i < data.len) {
@@ -152,6 +169,7 @@ fn deserializeBook(data: []const u64, alloc: std.mem.Allocator) !std.AutoHashMap
         try book.put(key, value);
         i += 2;
     }
+    std.debug.print("Loaded book. {} words. Count={}.\n", .{ data.len, book.count() });
     return book;
 }
 
@@ -184,13 +202,17 @@ const PngReader = struct {
             const isElo = std.mem.eql(u8, key, "WhiteElo") or std.mem.eql(u8, key, "BlackElo");
             if (isElo) {
                 const value = std.fmt.parseInt(usize, try self.infoValue(), 10) catch 0;
-                if (value < 1600) {
+                if (value < MIN_ELO) {
                     try self.skipToMoves();
                     try self.next();
                     continue;
                 }
             }
             try self.next();
+        }
+        if (std.mem.indexOfAny(u8, self.line, "[]{}%?!")) |_| {
+            try self.findNextInterestingGame();
+            return;
         }
         try self.skipToMoves();
     }

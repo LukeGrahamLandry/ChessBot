@@ -4,3 +4,4 @@ zig-out
 .idea
 *.wasm
 *.wasm.o
+src/book.chess

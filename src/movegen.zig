@@ -365,6 +365,7 @@ const CollectMoves = struct {
         if (!board.emptyAt(toFile, toRank) and board.get(toFile, toRank).colour != colour) try self.maybePromote(board, fromIndex, toFile, toRank, colour);
     }
 
+    // TODO: make sure queen goes first in list? test that
     fn maybePromote(self: CollectMoves, board: *const Board, fromIndex: usize, toFile: usize, toRank: usize, colour: Colour) !void {
         const toFlag = @as(u64, 1) << @intCast(toRank * 8 + toFile);
         if ((board.checks.blockSingleCheck & toFlag) == 0) return;

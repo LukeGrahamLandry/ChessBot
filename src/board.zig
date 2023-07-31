@@ -189,12 +189,15 @@ comptime {
 const FrenchMove = union(enum) { none, file: u4 };
 // const slowTrackAllMoves = false;
 
-fn getZoidberg(piece: Piece, square: u6) u64 {
+pub inline fn getZoidIndex(piece: Piece, square: u6) usize {
     const kindOffset: usize = @intCast(@intFromEnum(piece.kind));
     const colourOffset: usize = @intCast(@intFromEnum(piece.colour));
-    const offset = (kindOffset + colourOffset) * 64;
-    const index = Learned.ZOID_PIECE_START + offset + square;
-    return Learned.ZOIDBERG[index];
+    const offset = (kindOffset + (colourOffset * 6)) * 64;
+    return Learned.ZOID_PIECE_START + offset + square;
+}
+
+fn getZoidberg(piece: Piece, square: u6) u64 {
+    return Learned.ZOIDBERG[getZoidIndex(piece, square)];
 }
 
 // This is a chonker struct (if I store repititions inline) but that's fine because I only ever need one.
@@ -230,12 +233,10 @@ pub const Board = struct {
     }
 
     pub fn set(self: *Board, file: u8, rank: u8, value: Piece) void {
-        assert(self.emptyAt(file, rank));
+        assert(self.emptyAt(file, rank)); // self.pieceRemoved(self.squares[index], index);
         const index: u6 = @intCast(rank * 8 + file);
-        self.peicePositions.setBit(index, value.colour);
-        self.simpleEval -= self.squares[index].eval();
+        self.pieceAdded(value, index);
         self.squares[index] = value;
-        self.simpleEval += value.eval();
         if (value.kind == .King) switch (value.colour) {
             .White => self.whiteKingIndex = index,
             .Black => self.blackKingIndex = index,
@@ -279,13 +280,7 @@ pub const Board = struct {
         const thisMove: OldMove = .{ .move = move, .taken = self.squares[move.to], .original = self.squares[move.from], .old_castling = self.castling, .debugPeicePositions = self.peicePositions, .debugSimpleEval = self.simpleEval, .frenchMove = self.frenchMove, .oldHalfMoveDraw = self.halfMoveDraw, .debugZoidberg = self.zoidberg, .lastMove = self.lastMove, .oldChecks = self.checks, .pastStartIndex = self.pastStartIndex };
         assert(thisMove.original.colour == self.nextPlayer);
         const colour = thisMove.original.colour;
-        self.simpleEval -= thisMove.taken.eval();
         self.frenchMove = .none;
-        self.simpleEval += move.bonus * colour.dir();
-
-        self.peicePositions.unsetBit(move.from, colour);
-        if (!thisMove.taken.empty()) self.peicePositions.unsetBit(move.to, thisMove.taken.colour);
-        self.peicePositions.setBit(move.to, colour);
 
         if (colour == .Black) self.fullMoves += 1;
         self.halfMoveDraw += 1;
@@ -348,9 +343,10 @@ pub const Board = struct {
         }
 
         self.zoidberg ^= Learned.ZOIDBERG[Learned.ZOID_TURN_INDEX];
-        self.zoidberg ^= getZoidberg(thisMove.original, move.from);
-        self.zoidberg ^= getZoidberg(thisMove.original, move.to);
-        if (!thisMove.taken.empty()) self.zoidberg ^= getZoidberg(thisMove.taken, move.to);
+
+        self.pieceRemoved(thisMove.original, move.from);
+        self.pieceAdded(thisMove.original, move.to);
+        if (!thisMove.taken.empty()) self.pieceRemoved(thisMove.taken, move.to);
 
         switch (move.action) {
             .none => {
@@ -361,21 +357,17 @@ pub const Board = struct {
             .promote => |kind| {
                 self.squares[move.to] = .{ .colour = colour, .kind = kind };
                 self.squares[move.from] = Piece.EMPTY;
-                self.simpleEval -= thisMove.original.eval();
-                self.simpleEval += self.squares[move.to].eval();
                 assert(move.isCapture == (thisMove.taken.kind != .Empty));
-                self.zoidberg ^= getZoidberg(thisMove.original, move.to); // undo the pawn at target square
-                self.zoidberg ^= getZoidberg(self.squares[move.to], move.to); // add the promoted thing
+                self.pieceRemoved(thisMove.original, move.to); // undo the pawn at target square
+                self.pieceAdded(self.squares[move.to], move.to); // add the promoted thing
             },
             .castle => |info| {
-                self.zoidberg ^= getZoidberg(self.squares[info.rookFrom], info.rookFrom); // remove the rook
+                self.pieceRemoved(self.squares[info.rookFrom], info.rookFrom); // remove the rook
                 assert(self.squares[move.from].is(colour, .King));
                 self.squares[move.to] = thisMove.original;
                 self.squares[move.from] = Piece.EMPTY;
 
                 assert(thisMove.taken.empty());
-                self.peicePositions.unsetBit(info.rookFrom, colour);
-                self.peicePositions.setBit(info.rookTo, colour);
                 assert(self.squares[info.rookTo].empty());
                 assert(self.squares[info.rookFrom].is(colour, .Rook));
                 self.squares[info.rookTo] = .{ .colour = colour, .kind = .Rook };
@@ -383,7 +375,7 @@ pub const Board = struct {
                 assert(!move.isCapture and (thisMove.taken.kind == .Empty));
                 self.simpleEval += Learned.CASTLE_REWARD * colour.dir();
 
-                self.zoidberg ^= getZoidberg(self.squares[info.rookTo], info.rookTo); // add rook back
+                self.pieceAdded(self.squares[info.rookTo], info.rookTo); // add rook back
             },
             .allowFrenchMove => {
                 assert(self.squares[move.from].is(colour, .Pawn));
@@ -395,18 +387,16 @@ pub const Board = struct {
                 self.zoidberg ^= Learned.ZOIDBERG[Learned.ZOID_FRENCH_START + file];
             },
             .useFrenchMove => |captureIndex| {
-                self.zoidberg ^= getZoidberg(self.squares[captureIndex], captureIndex); // remove the taken pawn
+                self.pieceRemoved(self.squares[captureIndex], captureIndex); // remove the taken pawn
 
                 assert(self.squares[move.from].is(colour, .Pawn));
                 assert(self.squares[move.to].empty());
                 assert(self.squares[captureIndex].is(colour.other(), .Pawn));
                 self.squares[move.to] = thisMove.original;
                 self.squares[move.from] = Piece.EMPTY;
-                self.simpleEval -= self.squares[captureIndex].eval();
                 self.squares[captureIndex] = Piece.EMPTY;
                 assert(move.isCapture and thisMove.taken.kind == .Empty); // confusing
                 self.squares[captureIndex] = Piece.EMPTY;
-                self.peicePositions.unsetBit(captureIndex, colour.other());
             },
         }
 
@@ -436,38 +426,28 @@ pub const Board = struct {
         // if (slowTrackAllMoves) assert(std.meta.eql(self.line.pop(), move));
         const colour = move.original.colour;
         self.castling = move.old_castling;
-        self.simpleEval += move.taken.eval();
         self.halfMoveDraw = move.oldHalfMoveDraw;
-        self.simpleEval -= move.move.bonus * colour.dir();
         self.frenchMove = move.frenchMove;
         self.pastStartIndex = move.pastStartIndex;
         self.pastEndIndex -= 1;
 
-        self.zoidberg ^= getZoidberg(move.original, move.move.from);
-        self.zoidberg ^= getZoidberg(move.original, move.move.to);
-        if (!move.taken.empty()) self.zoidberg ^= getZoidberg(move.taken, move.move.to);
-
         switch (move.move.action) {
             .none => {},
             .promote => |_| {
-                self.zoidberg ^= getZoidberg(self.squares[move.move.to], move.move.to); // undo the promoted thing
-                self.zoidberg ^= getZoidberg(move.original, move.move.to); // undo undoing the pawn at target square
-                self.simpleEval -= self.squares[move.move.to].eval();
-                self.simpleEval += move.original.eval();
+                self.pieceRemoved(self.squares[move.move.to], move.move.to); // undo the promoted thing
+                self.pieceAdded(move.original, move.move.to); // undo undoing the pawn at target square
             },
             .castle => |info| {
-                self.zoidberg ^= getZoidberg(self.squares[info.rookTo], info.rookTo);
+                self.pieceRemoved(self.squares[info.rookTo], info.rookTo);
                 assert(self.squares[info.rookTo].is(colour, .Rook));
                 assert(self.squares[info.rookFrom].empty());
                 assert(self.squares[move.move.to].is(colour, .King));
                 assert(self.squares[move.move.from].empty());
 
-                self.peicePositions.setBit(info.rookFrom, colour);
-                self.peicePositions.unsetBit(info.rookTo, colour);
                 self.squares[info.rookTo] = .{ .colour = .White, .kind = .Empty };
                 self.squares[info.rookFrom] = .{ .colour = colour, .kind = .Rook };
                 self.simpleEval -= Learned.CASTLE_REWARD * colour.dir();
-                self.zoidberg ^= getZoidberg(self.squares[info.rookFrom], info.rookFrom);
+                self.pieceAdded(self.squares[info.rookFrom], info.rookFrom);
             },
             .allowFrenchMove => {
                 const file: u4 = @intCast(@rem(move.move.to, 8));
@@ -475,18 +455,17 @@ pub const Board = struct {
             },
             .useFrenchMove => |captureIndex| {
                 self.squares[captureIndex] = .{ .kind = .Pawn, .colour = colour.other() };
-                self.simpleEval += self.squares[captureIndex].eval();
-                self.peicePositions.setBit(captureIndex, colour.other());
-                self.zoidberg ^= getZoidberg(self.squares[captureIndex], captureIndex); // add back the taken pawn
+                self.pieceAdded(self.squares[captureIndex], captureIndex); // add back the taken pawn
             },
         }
 
         self.squares[move.move.to] = move.taken;
         self.squares[move.move.from] = move.original;
 
-        self.peicePositions.setBit(move.move.from, colour);
-        if (!move.taken.empty()) self.peicePositions.setBit(move.move.to, move.taken.colour);
-        self.peicePositions.unsetBit(move.move.to, colour);
+        self.pieceAdded(move.original, move.move.from);
+        self.pieceRemoved(move.original, move.move.to);
+        if (!move.taken.empty()) self.pieceAdded(move.taken, move.move.to);
+
         if (colour == .Black) self.fullMoves -= 1;
 
         switch (move.original.kind) {
@@ -504,6 +483,20 @@ pub const Board = struct {
         assert(std.meta.eql(move.debugPeicePositions, self.peicePositions));
         assert(self.simpleEval == move.debugSimpleEval);
         assert(self.zoidberg == move.debugZoidberg);
+    }
+
+    fn pieceAdded(self: *Board, piece: Piece, index: u6) void {
+        self.zoidberg ^= getZoidberg(piece, index);
+        self.simpleEval += piece.eval();
+        assert(piece.kind != .Empty);
+        self.peicePositions.setBit(index, piece.colour);
+    }
+
+    fn pieceRemoved(self: *Board, piece: Piece, index: u6) void {
+        self.zoidberg ^= getZoidberg(piece, index);
+        self.simpleEval -= piece.eval();
+        assert(piece.kind != .Empty);
+        self.peicePositions.unsetBit(index, piece.colour);
     }
 
     pub fn slowSimpleEval(self: *Board) i32 {
@@ -633,7 +626,7 @@ pub const Move = struct {
         allowFrenchMove,
         useFrenchMove: u6, // capture index
     },
-    bonus: i8 = 0, // positive is good for the player moving.
+    // bonus: i8 = 0, // positive is good for the player moving.
     // evalGuess: i32 = 0,
 
     /// This assumes they are made in the same position.
@@ -652,7 +645,7 @@ const isWasm = @import("builtin").target.isWasm();
 
 pub const InferMoveErr = error{IllegalMove} || @import("search.zig").MoveErr;
 
-pub fn inferPlayMove(board: *Board, fromIndex: u32, toIndex: u32, lists: *ListPool) InferMoveErr!OldMove {
+pub fn inferPlayMove(board: *Board, fromIndex: u32, toIndex: u32, lists: *ListPool, promotionHint: ?Kind) InferMoveErr!OldMove {
     const colour = board.nextPlayer;
     if (board.squares[fromIndex].empty()) {
         print("empty\n", .{});
@@ -672,6 +665,13 @@ pub fn inferPlayMove(board: *Board, fromIndex: u32, toIndex: u32, lists: *ListPo
     defer lists.release(allMoves);
     var realMove: Move = undefined;
     for (allMoves.items) |m| {
+        if (promotionHint) |promo| {
+            switch (m.action) {
+                .promote => |target| if (promo != target) continue,
+                else => {},
+            }
+        }
+        
         if (m.from == @as(u6, @intCast(fromIndex)) and m.to == @as(u6, @intCast(toIndex))) {
             realMove = m;
             break;

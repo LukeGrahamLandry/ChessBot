@@ -5,10 +5,6 @@ const Learned = @import("learned.zig");
 const Timer = @import("common.zig").Timer;
 const print = @import("common.zig").print;
 
-// TODO: arena
-var allocatorT = std.heap.GeneralPurposeAllocator(.{}){};
-var alloc = allocatorT.allocator();
-
 const maxDepth = 6;
 const maxTime = 10000;
 var ctx: search.SearchGlobals = undefined;
@@ -40,8 +36,9 @@ fn replayGame(comptime opts: search.StratOpts) !std.ArrayList(board.Move) {
     var moves = std.mem.splitScalar(u8, gameStr, ' ');
     const t = Timer.start();
     var game = try board.Board.initial();
-    var bestMoves = std.ArrayList(board.Move).init(alloc);
-    var undoStack = std.ArrayList(board.OldMove).init(alloc);
+    const hash = game.zoidberg;
+    var bestMoves = std.ArrayList(board.Move).init(std.heap.c_allocator);
+    var undoStack = std.ArrayList(board.OldMove).init(std.heap.c_allocator);
     var m: usize = 0;
     while (true) {
         // TODO: catch gameover on last move.
@@ -62,7 +59,7 @@ fn replayGame(comptime opts: search.StratOpts) !std.ArrayList(board.Move) {
         game.unplay(undoStack.items[index]);
     }
 
-    try std.testing.expectEqual(game.zoidberg, 1);
+    try std.testing.expectEqual(hash, game.zoidberg);
     print("\nFinished game in {}ms. {}. {}\n", .{ t.get(), try game.gameOverReason(&ctx.lists), opts });
     return bestMoves;
 }
