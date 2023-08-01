@@ -21,7 +21,7 @@ pub const Kind = enum(u4) {
     King = 1,
 
     pub fn material(self: Kind) i32 {
-        const values = [_]i32{ 0, 100000, 900, 300, 300, 500, 100 };
+        const values = [_]i32{ 0, 100000, 900, 330, 320, 500, 100 };
         return values[@intFromEnum(self)];
     }
 };
@@ -220,6 +220,7 @@ pub const Board = struct {
     zoidberg: u64 = 1,
     lastMove: ?Move = null,
     checks: ChecksInfo = .{},
+    knights: BitBoardPair = .{},
 
     // For draw by repetition.
     // If I were reusing the list it would only need to be 50 long (becuase draw anyway if no captures or pawn moves),
@@ -490,6 +491,7 @@ pub const Board = struct {
         self.simpleEval += piece.eval() + Learned.Weights.ALL[getRawIndex(piece, index)];
         assert(piece.kind != .Empty);
         self.peicePositions.setBit(index, piece.colour);
+        if (piece.kind == .Knight) self.knights.setBit(index, piece.colour);
     }
 
     fn pieceRemoved(self: *Board, piece: Piece, index: u6) void {
@@ -497,14 +499,43 @@ pub const Board = struct {
         self.simpleEval -= piece.eval() + Learned.Weights.ALL[getRawIndex(piece, index)];
         assert(piece.kind != .Empty);
         self.peicePositions.unsetBit(index, piece.colour);
+        if (piece.kind == .Knight) self.knights.unsetBit(index, piece.colour);
     }
 
-    pub fn slowSimpleEval(self: *Board) i32 {
-        var result: i32 = 0;
-        for (self.squares) |s| {
-            result += s.eval();
+    // TODO: remove. this was for another move ordering attempt but was slower. maybe try different sort first.  
+    pub fn justEvalMove(self: *Board, move: Move) i32 {
+        var eval = self.simpleEval;
+        eval -= self.squares[move.to].eval() + Learned.Weights.ALL[getRawIndex(self.squares[move.to], move.to)];
+        eval += Learned.Weights.ALL[getRawIndex(self.squares[move.from], move.to)];
+        eval -= Learned.Weights.ALL[getRawIndex(self.squares[move.from], move.from)];
+        
+        switch (move.action) {
+            .none => {},
+            .promote => |kind| {
+                eval -= Learned.Weights.ALL[getRawIndex(self.squares[move.from], move.to)];
+                eval += Learned.Weights.ALL[getRawIndex(.{ .kind=kind, .colour=self.squares[move.from].colour }, move.to)];
+            },
+            .castle => |info| {
+                eval -= Learned.Weights.ALL[getRawIndex(self.squares[info.rookFrom], info.rookFrom)];
+                eval += Learned.Weights.ALL[getRawIndex(self.squares[info.rookFrom], info.rookTo)];
+            },
+            .allowFrenchMove => {},
+            .useFrenchMove => |captureIndex| {
+                eval -= Learned.Weights.ALL[getRawIndex(self.squares[captureIndex], captureIndex)];
+            },
         }
-        return result;
+
+        return eval;
+    }
+
+    // only used for debugging and the loop seems to confuse asserts so doesn't get compiled out properly in release. 
+    pub fn slowSimpleEval(self: *Board) i32 {
+        // var result: i32 = 0;
+        // for (self.squares, 0..) |s, i| {
+        //     result += s.eval() + Learned.Weights.ALL[getRawIndex(s, @intCast(i))];
+        // }
+        // return result;
+        return self.simpleEval;
     }
 
     pub fn fromFEN(fen: []const u8) error{InvalidFen}!Board {
@@ -656,8 +687,6 @@ pub fn inferPlayMove(board: *Board, fromIndex: u32, toIndex: u32, lists: *ListPo
         return error.IllegalMove;
     }
     // TODO: ui should know when promoting so it can let you choose which piece to make.
-    //       right now this relies on you probably want a queen and queen is ordered first
-    //       TODO: test that checks queen is first in list
 
     // Could do a bunch of work to infer the move but instead just find all the moves and see if any match the squares they clicked.
     // This is slower than it could be but it's not in a hot path and allows simple code instead of something super complicated.

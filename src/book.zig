@@ -27,6 +27,8 @@ pub fn main() !void {
     var pgn: PngReader = .{ .reader = buffered };
     try pgn.findNextInterestingGame();
 
+    // TODO: context that just uses the number as the hash instead of dumbly doing generic hash to my zobrhist key
+    //       but it doesnt matter because memory is the slow part. 
     var seen = std.AutoHashMap(u64, PosInfo).init(std.heap.c_allocator);
 
     var gameCount: usize = 0;
@@ -68,6 +70,7 @@ pub fn main() !void {
         _ = pgn.board.play(move);
     }
 
+    // TODO: would be interesting to compare this to what the weight tables would have done. 
     var book = std.AutoHashMap(u64, Move).init(std.heap.c_allocator);
 
     var positions = seen.iterator();
@@ -257,7 +260,7 @@ const PngReader = struct {
 
         if (self.nextMovePart) |blackMove| {
             self.nextMovePart = null;
-            const move = try parseMove(&self.board, blackMove, lists);
+            const move = try parsePgnMove(&self.board, blackMove, lists);
             self.moveIndex += 1;
             return move;
         }
@@ -269,7 +272,7 @@ const PngReader = struct {
             if (parts.next()) |blackMove| {
                 self.nextMovePart = blackMove;
             }
-            const move = try parseMove(&self.board, whiteMove, lists);
+            const move = try parsePgnMove(&self.board, whiteMove, lists);
             self.moveIndex += 1;
             return move;
         }
@@ -282,7 +285,7 @@ const PngReader = struct {
     }
 };
 
-fn parseMove(board: *Board, pgnText: []const u8, lists: *movegen.ListPool) !Move {
+pub fn parsePgnMove(board: *Board, pgnText: []const u8, lists: *movegen.ListPool) !Move {
     // std.debug.print("{s}\n", .{pgnText});
     const moves = try movegen.possibleMoves(board, board.nextPlayer, lists);
     defer lists.release(moves);
@@ -322,6 +325,7 @@ fn parseMove(board: *Board, pgnText: []const u8, lists: *movegen.ListPool) !Move
                 else => continue,
             }
         }
+        assert(board.squares[move.from].colour == board.nextPlayer);
         if (move.to == targetSquare and board.squares[move.from].kind == kind) try matchingMoves.append(move);
     }
     if (matchingMoves.items.len == 0) return error.InvalidMove; // no moves match
@@ -341,6 +345,12 @@ fn parseMove(board: *Board, pgnText: []const u8, lists: *movegen.ListPool) !Move
         }
     }
 
+    board.debugPrint();
+    std.debug.print("{s} matches multiple: ", .{pgnText});
+    for (matchingMoves.items) |move| {
+        std.debug.print("{s}, ", .{ try move.text() });
+    }
+    std.debug.print("\n", .{});
     return error.InvalidMove; // multiple moves match
 }
 

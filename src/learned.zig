@@ -37,6 +37,10 @@ pub const BISHOP_SIZES = [64]u7{ 6, 6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 5, 5,
 //       could also have it auto play games with random weights? trying to do an evolution thing would be cool 
 // TODO: assert enum order    Empty, King, Queen, Bishop, Knight, Rook, Pawn
 // TODO: web drop down to show these as a heat map 
+// TODO: should it depend on king position? surely which side you're castled on makes a difference for where your pieces should be.
+// TODO: if i add evals to these then i dont need to have an extra switch when playing moves  
+// TODO: try https://www.chessprogramming.org/PeSTO%27s_Evaluation_Function need to have a more consistant way of comparing strength first. 
+// TODO: need to have a bunch of sanity check best move test positions before messing with this more 
 pub const Weights = struct {
     pub var ALL = FILLER ++ KING ++ QUEEN ++ BISHOP ++ KNIGHT ++ ROOK ++ PAWN ++ 
                 FILLER ++ mirror(KING) ++ mirror(QUEEN) ++ mirror(BISHOP) 
@@ -94,9 +98,18 @@ pub const Weights = struct {
         -10,  0,  5,  0,  0,  0,  0,-10,
         -20,-10,-10, -5, -5,-10,-10,-20
     };
-    // TODO: havent done the king yet because it changes in the end game when you dont need to hide anymore 
+    pub const KING = [64] i32 {
+        -30,-40,-40,-50,-50,-40,-40,-30,
+        -30,-40,-40,-50,-50,-40,-40,-30,
+        -30,-40,-40,-50,-50,-40,-40,-30,
+        -30,-40,-40,-50,-50,-40,-40,-30,
+        -20,-30,-30,-40,-40,-30,-30,-20,
+        -10,-20,-20,-20,-20,-20,-20,-10,
+        20, 20,  0,  0,  0,  0, 20, 20,
+        20, 30, 10,  0,  0, 10, 30, 20
+    };
+    // TODO: it changes in the end game when you dont need to hide anymore 
     //       this seems important. its really bad at king and pawn end games currently 
-    pub const KING = @import("std").mem.zeroes([64] i32);
 };
 
 /// Mirrors rank and negates value. 

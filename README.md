@@ -16,6 +16,22 @@
 
 Running in Debug is super slow. ReleaseFast shouldn't be used when running the tests because you want assertions to be checked. Use ReleaseSafe instead, then if they fail, you can switch to Debug to get a stack trace.  
 
+These can each be run with a zig build step (`zig build -Doptimize=ReleaseFast <NAME>`). To build everything use `zig build -Doptimize=ReleaseFast install`, the executables will be in `zig-out/bin`.
+
+**web**
+
+**uci**
+
+**book**
+
+**precalc**
+
+**perft**
+
+**bestmoves**
+
+**fish**
+
 ## How It Works
 
 ### Alpha Beta Pruning

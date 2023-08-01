@@ -20,6 +20,24 @@ pub fn possibleMoves(board: *const Board, me: Colour, lists: *ListPool) !ListPoo
     return moves;
 }
 
+// TODO: test this. 
+// TODO: does the peace search need special handling for being in check? 
+pub fn capturesOnlyMoves(board: *Board, me: Colour, lists: *ListPool) !ListPool.List {
+    // For non-king pieces blockSingleCheck already acts as a filter for target squares so can reuse that for this as well. 
+    // For peace search 3, filtering this way instead of gening all moves and skipping captures is 1.25x as fast.
+    const realSlidingChecks = board.checks.blockSingleCheck;
+    defer board.checks.blockSingleCheck = realSlidingChecks;
+    const otherPieces = if (board.nextPlayer == .White) board.peicePositions.black else board.peicePositions.white;
+    board.checks.blockSingleCheck &= otherPieces;
+    board.checks.kingGetCapturesOnly = true;
+    defer board.checks.kingGetCapturesOnly = false;
+
+    var moves = try lists.get();
+    const out: CollectMoves = .{ .moves = &moves, .filter = .Any };
+    try genPossibleMoves(out, board, me);
+    return moves;
+}
+
 pub fn collectOnePieceMoves(board: *const Board, i: usize, lists: *ListPool) !ListPool.List {
     var moves = try lists.get();
     const out: CollectMoves = .{ .moves = &moves, .filter = .Any };
@@ -83,6 +101,7 @@ const MoveFilter = enum {
     CurrentlyCalcChecks,
 };
 
+// TODO: is it faster to have a bit board of each type of piece so you can do each kind all at once? 
 pub fn genOnePieceMoves(out: anytype, board: *const Board, i: usize) !void {
     const piece = board.squares[i];
     switch (piece.kind) {
@@ -232,11 +251,13 @@ fn kingMove(out: anytype, board: *const Board, i: usize, colour: Colour) !void {
     // Kings can't be pinned or block pins, don't need to check.
     const myPieces = board.peicePositions.getFlag(colour);
     const targets = tables.kings[i] & (~myPieces) & (~board.checks.targetedSquares);
-
-    try emitMoves(out, board, i, targets, colour);
-
-    try tryCastle(out, board, colour, true);
-    try tryCastle(out, board, colour, false);
+    if (board.checks.kingGetCapturesOnly){
+        try emitMoves(out, board, i, targets & board.checks.blockSingleCheck, colour);
+    } else {
+        try emitMoves(out, board, i, targets, colour);
+        try tryCastle(out, board, colour, true);
+        try tryCastle(out, board, colour, false);
+    }   
 }
 
 pub fn ff(i: anytype) u64 {
@@ -359,7 +380,6 @@ const directions = [8][2]isize{
 const CollectMoves = struct {
     moves: *ListPool.List,
     comptime filter: MoveFilter = .Any,
-    dramaticMovesOnly: bool = false,
 
     pub fn pawnAttack(self: CollectMoves, board: *const Board, fromIndex: usize, toFile: usize, toRank: usize, colour: Colour) !void {
         if (!board.emptyAt(toFile, toRank) and board.get(toFile, toRank).colour != colour) try self.maybePromote(board, fromIndex, toFile, toRank, colour);
@@ -446,6 +466,7 @@ pub const ChecksInfo = struct {
     // Pin lines like above but for enemy pawn that could have be captured en-passant but might reveal a check.
     frenchPinByBishop: u64 = 0,
     frenchPinByRook: u64 = 0,
+    kingGetCapturesOnly: bool = false,
 };
 
 // TODO: This is super branchy. Maybe I could do better if I had bit boards of each piece type.
@@ -506,24 +527,12 @@ pub fn getChecksInfo(game: *Board, defendingPlayer: Colour) ChecksInfo {
     }
 
     // Knights. Can't be blocked, they just take up one square in the flag and must be captured.
-    var knightTargets = tables.knights[myKingIndex] & otherSquares;
-    while (knightTargets != 0) {
-        const offset = @ctz(knightTargets);
-        var flag = @as(u64, 1) << @intCast(offset);
-        knightTargets = knightTargets ^ flag;
-
-        // TODO: It would be very convient if I had a bitboard for each piece type.
-        //       Then I could do this whole loop as blockSingleCheck |= knightTargets; if (@popCount(blockSingleCheck) > 1) doubleCheck = true;
-        const p = game.squares[@intCast(offset)];
-        if (p.kind == .Knight) {
-            if (result.blockSingleCheck == 0) {
-                result.blockSingleCheck |= flag;
-            } else {
-                result.doubleCheck = true;
-                break; // TODO: is it better to just not branch here?
-            }
-        }
+    // This is the same speed as the loop but it looks simpler. 
+    const knightTargets = tables.knights[myKingIndex] & game.knights.getFlag(defendingPlayer.other());
+    if (knightTargets != 0 and (result.blockSingleCheck != 0 or @popCount(knightTargets) > 1)) {
+        result.doubleCheck = true;
     }
+    result.blockSingleCheck |= knightTargets; 
 
     // Pawns. Don't care about going forward or french move because those can't capture a king.
     // They only move one so can't be blocked.
@@ -678,6 +687,31 @@ pub fn getFrenchPins(game: *Board, defendingPlayer: Colour, frenchFile: u4, resu
     }
 }
 
+const PairContext = @import("search.zig").PairContext;
+// not used because not convincingly better than just prefering captures and bubbling cached to the front 
+pub fn reorderMoves(board: *Board, moves: *ListPool.List, lists: *AnyListPool(i32), cacheHit: ?@import("search.zig").MemoValue) !void {
+    var evals = try lists.get();
+    defer lists.release(evals);
+    const dir = board.nextPlayer.dir();
+
+    if (cacheHit != null and cacheHit.?.move != null) {
+        const m = cacheHit.?.move.?;
+        for (moves.items) |move| {
+            if (m.from == move.from and m.to == move.to) {
+                try evals.append(11111);
+            } else {
+                try evals.append(board.justEvalMove(move) * dir);
+            }   
+        }
+    } else {
+        for (moves.items) |move| {
+            try evals.append(board.justEvalMove(move) * dir);
+        }
+    }
+    
+    std.sort.insertionContext(0, moves.items.len, PairContext{ .moves = moves.items, .evals = evals.items });
+}
+
 // TODO: barely used. just write the code.
 
 pub fn irf(fromIndex: usize, toFile: usize, toRank: usize, isCapture: bool) Move {
@@ -717,8 +751,8 @@ pub fn AnyListPool(comptime element: type) type {
         pub const List = ListType(element);
         const POOL_SIZE = 512;
 
-        pub fn init(alloc: std.mem.Allocator) !ListPool {
-            var self: ListPool = .{ .lists = try ListType(List).initCapacity(alloc, POOL_SIZE), .alloc = alloc };
+        pub fn init(alloc: std.mem.Allocator) !@This() {
+            var self: @This() = .{ .lists = try ListType(List).initCapacity(alloc, POOL_SIZE), .alloc = alloc };
             for (0..POOL_SIZE) |_| { // pre-allocate enough lists that we'll probably never need to make a new one. should be the expected depth number.
                 // If all 16 of your pieces were somehow a queen in the middle of the board with no other pieces blocking
                 // (maybe they're magic 4th dimensional queens, idk), that's still only 448 moves. So 512 will never overflow.
@@ -729,7 +763,7 @@ pub fn AnyListPool(comptime element: type) type {
         }
 
         /// Do not deinit the list! Return it to the pool with release
-        pub fn get(self: *ListPool) !List {
+        pub fn get(self: *@This()) !List {
             if (BE_EVIL) {
                 const hushdebugmode = self.lists.items[self.lists.items.len - 1];
                 self.lists.items.len -= 1;
@@ -744,19 +778,19 @@ pub fn AnyListPool(comptime element: type) type {
         }
 
         // TODO: do i need to errdefer this in functions that return one or is it already too messed up to recover if an allocation fails.
-        pub fn release(self: *ListPool, list: List) void {
+        pub fn release(self: *@This(), list: List) void {
             self.lists.append(list) catch @panic("OOM releasing list."); // If this fails you made like way too many lists.
             self.lists.items[self.lists.items.len - 1].clearRetainingCapacity();
         }
 
-        pub fn copyOf(self: *ListPool, other: *const List) List {
+        pub fn copyOf(self: *@This(), other: *const List) List {
             var new = try self.get();
             new.items.len = other.items.len;
             @memcpy(new.items, other.items);
             return new;
         }
 
-        pub fn noneLost(self: ListPool) bool {
+        pub fn noneLost(self: @This()) bool {
             return self.lists.items.len == POOL_SIZE;
         }
     };

@@ -607,14 +607,14 @@ pub fn writeFen(self: *const Board, writer: anytype) !void {
 }
 
 pub fn playAlgebraic(board: *Board, moveStr: [5]u8, lists: *ListPool) !OldMove {
-    // TODO: promote
     const fromFile = try letterToFile(moveStr[0]);
     const fromRank = try letterToRank(moveStr[1]);
     const toFile = try letterToFile(moveStr[2]);
     const toRank = try letterToRank(moveStr[3]);
     const fromIndex = fromRank * 8 + fromFile;
     const toIndex = toRank * 8 + toFile;
-    return try inferPlayMove(board, fromIndex, toIndex, lists, .Queen);
+    const promote = if (moveStr[4] != 0) (try Piece.fromChar(moveStr[4])).kind else null;
+    return try inferPlayMove(board, fromIndex, toIndex, lists, promote);
 }
 
 pub fn writeAlgebraic(move: Move) [5]u8 {

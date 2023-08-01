@@ -2,7 +2,10 @@ const std = @import("std");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
+    const optimize = b.option(std.builtin.Mode,
+            "optimize",
+            "Prioritize performance, safety, or binary size (-O flag)",
+        ) orelse .ReleaseSafe;
 
     // const wasm_target = std.zig.CrossTarget.parse(.{ .arch_os_abi = "wasm32-freestanding" }) catch @panic("wasm target not exist?");
     // const wasm_exe = b.addSharedLibrary(.{
@@ -19,6 +22,7 @@ pub fn build(b: *std.Build) void {
     makeBin(b, "perft", target, optimize);
     makeBin(b, "precalc", target, optimize);
     makeBin(b, "book", target, optimize);
+    makeBin(b, "bestmoves", target, optimize);
 
     const unit_tests = b.addTest(.{
         .root_source_file = .{ .path = "src/tests.zig" },
@@ -39,7 +43,7 @@ fn makeBin(b: *std.Build, comptime name: []const u8, target: std.zig.CrossTarget
     });
     b.installArtifact(exe);
     const run_cmd = b.addRunArtifact(exe);
-    run_cmd.step.dependOn(b.getInstallStep());
+    // run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
         run_cmd.addArgs(args);
     }

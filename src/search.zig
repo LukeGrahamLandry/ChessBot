@@ -27,7 +27,7 @@ pub const StratOpts = struct {
     doMemo: bool = true,
     printUci: bool = false,
     trackPv: bool = false,
-    followCapturesDepth: i32 = 3,
+    followCapturesDepth: i32 = 0,  // TODO: on 3 it fails more bestmoves tests (2 seconds/pos). too slow? ignoring checks?
 };
 
 pub const MoveErr = error{ GameOver, OutOfMemory, ForceStop, Overflow, ThisIsntThreadSafe };
@@ -43,9 +43,10 @@ pub const Stats = struct {
 const IM_MATED_EVAL: i32 = -1000000; // Add distance to prefer sooner mates
 const LOWEST_EVAL: i32 = -2000000;
 
+const IntListPool = @import("movegen.zig").AnyListPool(i32);
 pub const SearchGlobals = struct {
     lists: ListPool,
-    evalGuesses: std.ArrayList(i32),
+    evalLists: IntListPool,
     memoMap: MemoTable,
     forceStop: bool = false,
     uciResults: std.ArrayList(UCI.UciResult),
@@ -53,7 +54,7 @@ pub const SearchGlobals = struct {
 
     pub fn init(memoMapSizeMB: u64, alloc: std.mem.Allocator) !@This() {
         const seed: u64 = @truncate(@as(u128, @bitCast(nanoTimestamp())));
-        return .{ .memoMap = try MemoTable.initWithCapacity(memoMapSizeMB, alloc), .evalGuesses = try std.ArrayList(i32).initCapacity(alloc, 50), .lists = try ListPool.init(alloc), .uciResults = std.ArrayList(UCI.UciResult).init(alloc), .rng = std.rand.DefaultPrng.init(seed) };
+        return .{ .memoMap = try MemoTable.initWithCapacity(memoMapSizeMB, alloc), .lists = try ListPool.init(alloc), .evalLists = try IntListPool.init(alloc), .uciResults = std.ArrayList(UCI.UciResult).init(alloc), .rng = std.rand.DefaultPrng.init(seed) };
     }
 
     pub fn resetMemoTable(self: *@This()) void {
@@ -80,17 +81,17 @@ pub fn bestMove(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, max
         }
         return error.GameOver;
     }
-
-    try ctx.evalGuesses.ensureTotalCapacity(topLevelMoves.items.len);
-    defer ctx.evalGuesses.clearRetainingCapacity();
+    var evals = try ctx.evalLists.get();
+    defer ctx.evalLists.release(evals);
 
     for (topLevelMoves.items) |_| {
-        try ctx.evalGuesses.append(0);
+        try evals.append(0);
     }
 
     var thinkTime: i128 = -1;
     var favourite: Move = topLevelMoves.items[0];
     const startDepth = if (opts.doIterative) 0 else @min(maxDepth, 100);
+    // TODO: stop iteration if there's a forced mate. doesnt matter but offends me to do pointless work
     for (startDepth..(@min(maxDepth, 100) + 1)) |depth| { // @min is sanity check for list pool capacity
         var pv = try ctx.lists.get();
         defer ctx.lists.release(pv);
@@ -123,7 +124,7 @@ pub fn bestMove(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, max
                     return err;
                 }
             });
-            ctx.evalGuesses.items[i] = eval;
+            evals.items[i] = eval;
 
             // Update a/b to pass better ones to walkEval but it would never be able to prune here because the we're always the same player.
             if (eval > alpha) {
@@ -137,7 +138,7 @@ pub fn bestMove(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, max
 
         if (opts.trackPv) assert(pv.items.len > 0); // There must be some best line.
 
-        std.sort.insertionContext(0, topLevelMoves.items.len, PairContext{ .moves = topLevelMoves.items, .evals = ctx.evalGuesses.items });
+        std.sort.insertionContext(0, topLevelMoves.items.len, PairContext{ .moves = topLevelMoves.items, .evals = evals.items });
         thinkTime = nanoTimestamp() - startTime;
 
         // Using topLevelMoves.items[0] passed my simple test by coincidence because I put captures first in the list
@@ -161,7 +162,8 @@ pub fn bestMove(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, max
                 try str.appendSlice((try favourite.text())[0..4]);
             }
 
-            const info: UCI.UciInfo = .{ .time = @intCast(@divFloor(thinkTime, std.time.ns_per_ms)), .depth = @intCast(depth + 1), .pvFirstMove = UCI.writeAlgebraic(favourite), .cp = ctx.evalGuesses.items[0], .pv = str.slice() };
+            // TODO: report mate distance. don't mind branches here because its only at the top level. 
+            const info: UCI.UciInfo = .{ .time = @intCast(@divFloor(thinkTime, std.time.ns_per_ms)), .depth = @intCast(depth + 1), .pvFirstMove = UCI.writeAlgebraic(favourite), .cp = evals.items[0], .pv = str.slice() };
             const result: UCI.UciResult = .{ .Info = info };
             // try ctx.uciResults.append(result);
             try result.writeTo(std.io.getStdOut().writer());
@@ -178,7 +180,7 @@ pub fn bestMove(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, max
     return favourite;
 }
 
-const PairContext = struct {
+pub const PairContext = struct {
     moves: []Move,
     evals: []i32,
 
@@ -197,7 +199,6 @@ const PairContext = struct {
 // The alpha-beta values effect lower layers, not higher layers, so passed by value.
 // Returns the relative eval of <game>, positive means current player is winning, after game.nextPlayer makes a move.
 // Returns error.GameOver if there were no possible moves or other draws.
-// TODO: redo my captures only thing to be lookForPeace and only simpleEval if no captures on the board
 // TODO: pv doesnt need to copy the whole list every time
 pub fn walkEval(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, remaining: i32, alphaIn: i32, betaIn: i32, stats: *Stats, comptime capturesOnly: bool, endTime: i128, line: *ListPool.List) error{ OutOfMemory, ForceStop, Overflow }!i32 {
     const me = game.nextPlayer;
@@ -240,6 +241,11 @@ pub fn walkEval(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, rem
         }
     }
 
+    // If you add this you can to remove the ordering in movegen.addMoveOrdered 
+    // if (opts.followCapturesDepth > 0 or remaining > 1) {
+    //     try @import("movegen.zig").reorderMoves(game, &moves, &ctx.evalLists, cacheHit);
+    // }
+
     if (cacheHit) |cached| {
         if (cached.move) |move| {
             for (0..moves.items.len) |i| {
@@ -249,10 +255,8 @@ pub fn walkEval(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, rem
                 }
             }
         }
-    }
+    } 
 
-    var memoKind: MemoKind = .Exact;
-    _ = memoKind;
     var foundMove: ?Move = null;
     var pv = if (opts.trackPv) ctx.lists.copyOf(line) else try ctx.lists.get();
     defer ctx.lists.release(pv);
@@ -318,6 +322,8 @@ pub fn walkEval(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, rem
     return alpha;
 }
 
+// TODO: should this use the memo table? need flag to indicate it didn't consider all moves so walkEval can't trust it 
+// TODO: this is so similar to normal walkEval, can they be merged without making it more confusing? 
 pub fn lookForPeace(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, remaining: i32, alphaIn: i32, betaIn: i32, line: *ListPool.List) error{ OutOfMemory, ForceStop, Overflow }!i32 {
     const me = game.nextPlayer;
     if (ctx.forceStop) return error.ForceStop;
@@ -338,12 +344,7 @@ pub fn lookForPeace(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board,
         alpha = base;
     }
 
-    // this makes it worse. fair enough, extra work.
-    // const targets = movegen.getTargetedSquares(game, game.nextPlayer);
-    // const otherPieces = if (game.nextPlayer == .White) game.peicePositions.black else game.peicePositions.white;
-    // if ((targets & otherPieces) == 0) return game.simpleEval * me.dir();
-
-    var moves = try movegen.possibleMoves(game, me, &ctx.lists);
+    var moves = try movegen.capturesOnlyMoves(game, me, &ctx.lists);
     defer ctx.lists.release(moves);
 
     if (moves.items.len == 0) { // <me> can't make any moves. Either got checkmated or its a draw.
@@ -357,7 +358,7 @@ pub fn lookForPeace(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board,
     var pv = if (opts.trackPv) ctx.lists.copyOf(line) else try ctx.lists.get();
     defer ctx.lists.release(pv);
     for (moves.items) |move| {
-        if (!move.isCapture) continue;
+        assert(move.isCapture);
         var nextLine = if (opts.trackPv) ctx.lists.copyOf(line) else try ctx.lists.get();
         defer ctx.lists.release(nextLine);
         try nextLine.append(move);
