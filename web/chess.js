@@ -11,8 +11,6 @@ const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 let mainCanvas = document.getElementById("board").getContext("2d");
 
-// TODO: show the right player turn instead of always white. 
-const enableBot = false;
 // const minMoveTimeMs = 500;  // When computer vs computer, if the engine is faster than this, it will wait before playing again. 
 
 // TODO: select which colour is human or computer. button to switch mid game for testing. ai vs ai mode. 
@@ -27,11 +25,15 @@ const enableBot = false;
 // TODO: a board pointer and a canvas target could be a class instead of scattered global variables. 
 // TODO: could save the fen of the current board in the url fragment. should have checkbox to not fill up history. 
 
+function enableBot() {
+    return document.getElementById("enablebot").checked;
+}
+
 let ticker = null;
 let boardFenHistory = [];
 let gameOverMsg = null;
 function tickGame() {
-    if (!enableBot) return;
+    if (!enableBot()) return;
 
     const board = mainGame;
     const start = performance.now();
@@ -103,49 +105,82 @@ function getFenFromEngine(board) {
     return getWasmString(fenPtr, length);
 }
 
+// TODO: let you play as either colour
 function isHumanTurn() {
     // This could be done by parsing the fen but that's a lot of extra code just to be slightly slower. 
-    return !enableBot || Engine.isWhiteTurn(mainGame);
+    return !enableBot() || Engine.isWhiteTurn(mainGame);
 }
 
-let clicked = null;
+let clickedIndex = null;
+let promoteTargetIndex = null;
 function handleCanvasClick(e) {
+    if (promoteTargetIndex != null) {
+        cancelPromotion();
+        return;
+    }
+
     const squareSize = mainCanvas.canvas.getBoundingClientRect().width / 8;
     const file = Math.floor(e.offsetX / squareSize);
     const rank = 7 - Math.floor(e.offsetY / squareSize);
-    if (clicked === null){
-        clicked = [file, rank];  // TODO: dont like this. use index or be object
+    if (clickedIndex === null){
+        clickedIndex = frToIndex(file, rank);
         renderBoard(mainGame, mainCanvas);
     } else {
         if (!isHumanTurn()) {
-            clicked = [file, rank];
+            clickedIndex = frToIndex(file, rank);
             renderBoard(mainGame, mainCanvas);
             return;
         }
 
-        const fromIndex = frToIndex(clicked[0], clicked[1]);
+        const fromIndex = clickedIndex;
         const toIndex = frToIndex(file, rank);
 
-        // TODO: make sure trying to move while the engine is thinking doesn't let you use the wrong colour. 
-        const result = Engine.playHumanMove(mainGame, fromIndex, toIndex, msgPtr, STR_BUFFER_SIZE);
-        if (result == ENGINE_OK) { 
-            clicked = null;
-            boardFenHistory.push(getFenFromEngine(mainGame, fenPtr, STR_BUFFER_SIZE));
-            renderBoard(mainGame, mainCanvas);
-            // TODO: only do this if other player is engine. 
-            setTimeout(tickGame, 25);  // Give it a chance to render.
-        } else if (result == ENGINE_ILLEGAL_MOVE) {
-            console.log("Player tried illigal move.");
-            clicked = [file, rank];
-            renderBoard(mainGame, mainCanvas);
-        } else if (result > 0) {  // Game over
-            gameOverMsg = getWasmString(msgPtr, result);
-            console.log(gameOverMsg);
-            boardFenHistory.push(getFenFromEngine(mainGame, fenPtr, STR_BUFFER_SIZE));
-            renderBoard(mainGame, mainCanvas);;
+        const isPromotion = Engine.isPromotion(mainGame, fromIndex, toIndex);
+        if (isPromotion) {
+            promotionOverlay(mainCanvas);
+            document.getElementById("promote").style.display = "block";
+            promoteTargetIndex = toIndex;
         } else {
-            handleEngineError();
+            playHumanMove(mainGame, mainCanvas, fromIndex, toIndex);
         }
+    }
+}
+
+function cancelPromotion() {
+    document.getElementById("promote").style.display = "none";
+    promoteTargetIndex = null;
+    clickedIndex = null;
+    renderBoard(mainGame, mainCanvas);
+}
+
+function doPromote(kind) {
+    document.getElementById("promote").style.display = "none";
+    Engine.setPromotionHint(kind);
+    playHumanMove(mainGame, mainCanvas, clickedIndex, promoteTargetIndex);
+    promoteTargetIndex = null;
+}
+
+// Updates the board display and the global clickedIndex
+function playHumanMove(board, ctx, fromIndex, toIndex) {
+    // TODO: make sure trying to move while the engine is thinking doesn't let you use the wrong colour. 
+    const result = Engine.playHumanMove(board, fromIndex, toIndex, msgPtr, STR_BUFFER_SIZE);
+    if (result == ENGINE_OK) { 
+        clickedIndex = null;
+        boardFenHistory.push(getFenFromEngine(board, fenPtr, STR_BUFFER_SIZE));
+        renderBoard(board, ctx);
+        // TODO: only do this if other player is engine. 
+        setTimeout(tickGame, 25);  // Give it a chance to render.
+    } else if (result == ENGINE_ILLEGAL_MOVE) {
+        console.log("Player tried illigal move.");
+        clickedIndex = toIndex;
+        renderBoard(board, ctx);
+    } else if (result > 0) {  // Game over
+        gameOverMsg = getWasmString(msgPtr, result);
+        console.log(gameOverMsg);
+        boardFenHistory.push(getFenFromEngine(board, fenPtr, STR_BUFFER_SIZE));
+        renderBoard(board, ctx);;
+    } else {
+        handleEngineError();
     }
 }
 
@@ -210,14 +245,54 @@ function renderBoard(board, ctx) {
     const fen = getFenFromEngine(board);
     document.getElementById("fen").value = fen;
     document.getElementById("player").innerText = gameOverMsg != null ? gameOverMsg : (Engine.isWhiteTurn(board) ? "White" : "Black") + "'s Turn";
+    // TODO: show engine eval as well 
     document.getElementById("mEval").innerText = Engine.getMaterialEval(board);
 
     // TODO: If I really cared I could just render the diff instead of clearing the board
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
-    // TODO: Either put the magic numbers in the option value or have explicitly named functions (second one probably better!). 
-    //       Could make the option value be the function name to call on the engine... but that feels weird. 
-    switch (bitBoardInfo) {
+    renderInfoOverlay(board, ctx, bitBoardInfo);
+
+    if (clickedIndex != null) {
+        const whitePieces = BigInt(Engine.getPositionsBB(board, WHITE));
+        const blackPieces = BigInt(Engine.getPositionsBB(board, BLACK));
+        const allPieces = whitePieces | blackPieces;
+        const targetSquaresFlag = Engine.getPossibleMovesBB(board, Number(clickedIndex));
+        const clickedFlag = 1n << BigInt(clickedIndex);
+        if ((allPieces & clickedFlag) != 0) fillSquare(ctx, clickedIndex % 8, Math.floor(clickedIndex / 8), "yellow", true);
+        drawBitBoard(ctx, targetSquaresFlag, (whitePieces & clickedFlag) ? "lightblue" : "red");
+    }
+    
+    const pieces = new Uint8Array(Engine.memory.buffer, Engine.getBoardData(board));
+    for (let rank=0;rank<8;rank++){
+        for (let file=0;file<8;file++){
+            const p = pieces[rank*8 + file];
+            drawPiece(ctx, file, rank, p);
+
+            if (document.getElementById("showlabels").checked) {
+                const squareSize = ctx.canvas.width / 8;
+                ctx.font = "15px Arial";
+                ctx.fillStyle = "blue";
+                ctx.textAlign = "left";
+                ctx.fillText(letters[file] + "" + (rank+1), (file) * squareSize, (7 - rank + 0.2) * squareSize);
+            }
+        }
+    }
+}
+
+function promotionOverlay(ctx){
+    ctx.globalAlpha = 0.75;
+    ctx.fillStyle = "black";
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "red";
+    ctx.font = "30px Arial";
+    ctx.textAlign = "center";
+    ctx.fillText("^ Select Promotion Type ^", ctx.canvas.width / 2, ctx.canvas.height / 2);
+}
+
+function renderInfoOverlay(board, ctx, kind) {
+    switch (kind) {
         case "none":
             break;
         case "all": 
@@ -261,35 +336,8 @@ function renderBoard(board, ctx) {
             drawBitBoardPair(ctx, Engine.pinsFrenchByRookBB(board, WHITE), Engine.pinsFrenchByRookBB(board, BLACK));
             break;
         }
-        
         default: 
             console.log("Invalid bitBoardInfo string.");
-    }
-
-    if (clicked != null) {
-        const whitePieces = BigInt(Engine.getPositionsBB(board, WHITE));
-        const blackPieces = BigInt(Engine.getPositionsBB(board, BLACK));
-        const allPieces = whitePieces | blackPieces;
-        const clickedIndex = frToIndex(clicked[0], clicked[1]);
-        const targetSquaresFlag = Engine.getPossibleMovesBB(board, Number(clickedIndex));
-        const clickedFlag = 1n << BigInt(clickedIndex);
-        if ((allPieces & clickedFlag) != 0) fillSquare(ctx, clicked[0], clicked[1], "yellow", true);
-        drawBitBoard(ctx, targetSquaresFlag, (whitePieces & clickedFlag) ? "lightblue" : "red");
-    }
-    
-    const pieces = new Uint8Array(Engine.memory.buffer, Engine.getBoardData(board));
-    for (let rank=0;rank<8;rank++){
-        for (let file=0;file<8;file++){
-            const p = pieces[rank*8 + file];
-            drawPiece(ctx, file, rank, p);
-
-            if (document.getElementById("showlabels").checked) {
-                const squareSize = ctx.canvas.width / 8;
-                ctx.font = "15px Arial";
-                ctx.fillStyle = "blue";
-                ctx.fillText(letters[file] + "" + (rank+1), (file) * squareSize, (7 - rank + 0.2) * squareSize);
-            }
-        }
     }
 }
 
@@ -329,7 +377,7 @@ let fenPtr;
 let msgPtr;
 function startChess() {
     document.getElementById("loading").style.display = "none";
-    if (Engine.protocolVersion() != 3) {
+    if (Engine.protocolVersion() != 5) {
         const msg = "Unrecognised engine protocol version (" + Engine.protocolVersion()  + "). Try force reloading the page and hope cloudflare doesn't cache everything!";
         alert(msg);
         document.getElementById("controls").innerText = msg;

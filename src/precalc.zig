@@ -1,3 +1,5 @@
+//! Calculate good numbers to use in movegen lookup table hash functions.
+
 const std = @import("std");
 const Board = @import("board.zig").Board;
 const printBitBoard = @import("movegen.zig").printBitBoard;
@@ -314,17 +316,14 @@ const VisitBitPermutations = struct {
 
             switch (self.yielded) {
                 0 => { // A
-                    // print("A: {}\n", .{ self.depth });
                     self.yielded = 1;
                     return self.part | self.flag;
                 },
                 1 => { // B
-                    // print("B: {}\n", .{ self.depth });
                     self.yielded = 2;
                     return self.part;
                 },
-                2 => {
-                    // print("C: {}\n", .{ self.depth });
+                2 => {  // C
                     if (self.others[self.depth + 1].next()) |nextPart| { // C
                         self.yielded = 0;
                         self.part = nextPart;
@@ -335,7 +334,6 @@ const VisitBitPermutations = struct {
                     }
                 },
                 3 => { // D
-                    // print("D: {}\n", .{ self.depth });
                     if (self.bits.next()) |nextFlag| {
                         self.flag = nextFlag;
                         Inner.init(self.n & ~nextFlag, self.others, self.depth + 1);

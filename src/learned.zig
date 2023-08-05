@@ -40,7 +40,6 @@ pub const BISHOP_SIZES = [64]u7{ 6, 6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 5, 5,
 // TODO: should it depend on king position? surely which side you're castled on makes a difference for where your pieces should be.
 // TODO: if i add evals to these then i dont need to have an extra switch when playing moves  
 // TODO: try https://www.chessprogramming.org/PeSTO%27s_Evaluation_Function need to have a more consistant way of comparing strength first. 
-// TODO: need to have a bunch of sanity check best move test positions before messing with this more 
 pub const Weights = struct {
     pub var ALL = FILLER ++ KING ++ QUEEN ++ BISHOP ++ KNIGHT ++ ROOK ++ PAWN ++ 
                 FILLER ++ mirror(KING) ++ mirror(QUEEN) ++ mirror(BISHOP) 
@@ -112,7 +111,7 @@ pub const Weights = struct {
     //       this seems important. its really bad at king and pawn end games currently 
 };
 
-/// Mirrors rank and negates value. 
+/// Mirrors rank and negates value to convert square table from white to black.
 fn mirror(table: [64] i32) [64] i32 {
     var mirrored: [64] i32 = undefined;
     for (0..64) |i| {

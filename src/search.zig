@@ -16,7 +16,6 @@ const nanoTimestamp = @import("common.zig").nanoTimestamp;
 const ListPool = @import("movegen.zig").ListPool;
 const UCI = @import("uci.zig");
 
-// TODO: carefully audit any use of usize because wasm is 32 bit!
 const isWasm = @import("builtin").target.isWasm();
 
 const movegen = @import("movegen.zig");
@@ -49,12 +48,11 @@ pub const SearchGlobals = struct {
     evalLists: IntListPool,
     memoMap: MemoTable,
     forceStop: bool = false,
-    uciResults: std.ArrayList(UCI.UciResult),
     rng: std.rand.DefaultPrng,
 
     pub fn init(memoMapSizeMB: u64, alloc: std.mem.Allocator) !@This() {
         const seed: u64 = @truncate(@as(u128, @bitCast(nanoTimestamp())));
-        return .{ .memoMap = try MemoTable.initWithCapacity(memoMapSizeMB, alloc), .lists = try ListPool.init(alloc), .evalLists = try IntListPool.init(alloc), .uciResults = std.ArrayList(UCI.UciResult).init(alloc), .rng = std.rand.DefaultPrng.init(seed) };
+        return .{ .memoMap = try MemoTable.initWithCapacity(memoMapSizeMB, alloc), .lists = try ListPool.init(alloc), .evalLists = try IntListPool.init(alloc), .rng = std.rand.DefaultPrng.init(seed) };
     }
 
     pub fn resetMemoTable(self: *@This()) void {
@@ -67,7 +65,9 @@ pub const SearchGlobals = struct {
 pub fn bestMove(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, maxDepth: usize, timeLimitMs: i128) !Move {
     if (!opts.printUci and (game.halfMoveDraw >= 100 or game.hasInsufficientMaterial() or game.lastMoveWasRepetition())) return error.GameOver; // Draw
     const me = game.nextPlayer;
-    assert(ctx.lists.noneLost());
+    if (movegen.BE_EVIL and (!ctx.lists.noneLost() or !ctx.evalLists.noneLost())) {
+        panic("Unsafe ListPool leak.", .{});
+    }
 
     const startTime = nanoTimestamp();
     const endTime = startTime + (timeLimitMs * std.time.ns_per_ms);
@@ -76,7 +76,6 @@ pub fn bestMove(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, max
     if (topLevelMoves.items.len == 0) {
         if (opts.printUci) {
             const result: UCI.UciResult = .{ .BestMove = null };
-            // try ctx.uciResults.append(result);
             try result.writeTo(std.io.getStdOut().writer());
         }
         return error.GameOver;
@@ -116,7 +115,6 @@ pub fn bestMove(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, max
                     }
                     if (opts.printUci) {
                         const result: UCI.UciResult = .{ .BestMove = UCI.writeAlgebraic(favourite) };
-                        // try ctx.uciResults.append(result);
                         try result.writeTo(std.io.getStdOut().writer());
                     }
                     return favourite;
@@ -165,14 +163,12 @@ pub fn bestMove(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, max
             // TODO: report mate distance. don't mind branches here because its only at the top level. 
             const info: UCI.UciInfo = .{ .time = @intCast(@divFloor(thinkTime, std.time.ns_per_ms)), .depth = @intCast(depth + 1), .pvFirstMove = UCI.writeAlgebraic(favourite), .cp = evals.items[0], .pv = str.slice() };
             const result: UCI.UciResult = .{ .Info = info };
-            // try ctx.uciResults.append(result);
             try result.writeTo(std.io.getStdOut().writer());
         }
     }
 
     if (opts.printUci) {
         const result: UCI.UciResult = .{ .BestMove = UCI.writeAlgebraic(favourite) };
-        // try ctx.uciResults.append(result);
         try result.writeTo(std.io.getStdOut().writer());
     }
     if (isWasm) print("Reached max depth {} in {}ms.\n", .{ maxDepth, @divFloor(thinkTime, std.time.ns_per_ms) });
@@ -240,11 +236,6 @@ pub fn walkEval(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, rem
             return Learned.DRAW_EVAL;
         }
     }
-
-    // If you add this you can to remove the ordering in movegen.addMoveOrdered 
-    // if (opts.followCapturesDepth > 0 or remaining > 1) {
-    //     try @import("movegen.zig").reorderMoves(game, &moves, &ctx.evalLists, cacheHit);
-    // }
 
     if (cacheHit) |cached| {
         if (cached.move) |move| {

@@ -10,7 +10,7 @@ const getChecksInfo = @import("movegen.zig").getChecksInfo;
 const movegen = @import("movegen.zig");
 const ListPool = movegen.ListPool;
 
-// Numbers matter because js sees them and for fen parsing and for indexes.
+// Numbers matter because js sees them and for fen parsing and for indexes and promotion ui validation.
 pub const Kind = enum(u4) {
     Empty = 0,
     Pawn = 6,
@@ -20,6 +20,7 @@ pub const Kind = enum(u4) {
     Queen = 2,
     King = 1,
 
+    // TODO: do this as part of the square wieght lookup table
     pub fn material(self: Kind) i32 {
         const values = [_]i32{ 0, 100000, 900, 330, 320, 500, 100 };
         return values[@intFromEnum(self)];
@@ -150,6 +151,7 @@ const CastlingRights = packed struct(u8) {
     blackLeft: bool = true,
     blackRight: bool = true,
 
+    // Would probably fine cause not in a union but I don't trust it now. 
     _fuck: u4 = 0,
 
     pub const NONE: CastlingRights = @bitCast(@as(u8, 0));
@@ -408,7 +410,6 @@ pub const Board = struct {
         // Unsafe! This assumes capacity.
         self.pastBoardHashes[self.pastEndIndex] = self.zoidberg;
         self.pastEndIndex += 1;
-        assert(self.simpleEval == self.slowSimpleEval());
         return thisMove;
     }
 
@@ -500,42 +501,6 @@ pub const Board = struct {
         assert(piece.kind != .Empty);
         self.peicePositions.unsetBit(index, piece.colour);
         if (piece.kind == .Knight) self.knights.unsetBit(index, piece.colour);
-    }
-
-    // TODO: remove. this was for another move ordering attempt but was slower. maybe try different sort first.  
-    pub fn justEvalMove(self: *Board, move: Move) i32 {
-        var eval = self.simpleEval;
-        eval -= self.squares[move.to].eval() + Learned.Weights.ALL[getRawIndex(self.squares[move.to], move.to)];
-        eval += Learned.Weights.ALL[getRawIndex(self.squares[move.from], move.to)];
-        eval -= Learned.Weights.ALL[getRawIndex(self.squares[move.from], move.from)];
-        
-        switch (move.action) {
-            .none => {},
-            .promote => |kind| {
-                eval -= Learned.Weights.ALL[getRawIndex(self.squares[move.from], move.to)];
-                eval += Learned.Weights.ALL[getRawIndex(.{ .kind=kind, .colour=self.squares[move.from].colour }, move.to)];
-            },
-            .castle => |info| {
-                eval -= Learned.Weights.ALL[getRawIndex(self.squares[info.rookFrom], info.rookFrom)];
-                eval += Learned.Weights.ALL[getRawIndex(self.squares[info.rookFrom], info.rookTo)];
-            },
-            .allowFrenchMove => {},
-            .useFrenchMove => |captureIndex| {
-                eval -= Learned.Weights.ALL[getRawIndex(self.squares[captureIndex], captureIndex)];
-            },
-        }
-
-        return eval;
-    }
-
-    // only used for debugging and the loop seems to confuse asserts so doesn't get compiled out properly in release. 
-    pub fn slowSimpleEval(self: *Board) i32 {
-        // var result: i32 = 0;
-        // for (self.squares, 0..) |s, i| {
-        //     result += s.eval() + Learned.Weights.ALL[getRawIndex(s, @intCast(i))];
-        // }
-        // return result;
-        return self.simpleEval;
     }
 
     pub fn fromFEN(fen: []const u8) error{InvalidFen}!Board {
@@ -642,7 +607,9 @@ pub const Board = struct {
 
 pub const AppendErr = error{Overflow} || std.mem.Allocator.Error;
 
-// ? https://github.com/ziglang/zig/issues/16392
+// Compiler bug! Thought I was going crazy. 
+// https://github.com/ziglang/zig/issues/16392
+// LLVM doesn't like unholy integer sizes in unions. 
 pub const CastleMove = packed struct { rookFrom: u6, rookTo: u6, _fuck: u4 = 0 };
 
 // TODO: this seems much too big (8 bytes?). castling info is redunant cause other side can infer if king moves 2 squares, bool field is evil and redundant
@@ -679,14 +646,11 @@ pub const InferMoveErr = error{IllegalMove} || @import("search.zig").MoveErr;
 pub fn inferPlayMove(board: *Board, fromIndex: u32, toIndex: u32, lists: *ListPool, promotionHint: ?Kind) InferMoveErr!OldMove {
     const colour = board.nextPlayer;
     if (board.squares[fromIndex].empty()) {
-        print("empty\n", .{});
         return error.IllegalMove;
     }
     if (board.squares[fromIndex].colour != colour) {
-        print("wrong colour\n", .{});
         return error.IllegalMove;
     }
-    // TODO: ui should know when promoting so it can let you choose which piece to make.
 
     // Could do a bunch of work to infer the move but instead just find all the moves and see if any match the squares they clicked.
     // This is slower than it could be but it's not in a hot path and allows simple code instead of something super complicated.
@@ -706,7 +670,6 @@ pub fn inferPlayMove(board: *Board, fromIndex: u32, toIndex: u32, lists: *ListPo
             break;
         }
     } else {
-        print("not found\n", .{});
         return error.IllegalMove;
     }
 

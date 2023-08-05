@@ -5,17 +5,19 @@ const assert = std.debug.assert;
 const Colour = @import("board.zig").Colour;
 const Board = @import("board.zig").Board;
 const Piece = @import("board.zig").Piece;
+const Kind = @import("board.zig").Kind;
 const search = @import("search.zig");
 const Move = @import("board.zig").Move;
 const Learned = @import("learned.zig");
 const print = consolePrint;
-const ListPool = @import("movegen.zig").ListPool;
 const movegen = @import("movegen.zig");
 const SearchGlobals = @import("search.zig").SearchGlobals;
+const inferPlayMove = @import("board.zig").inferPlayMove;
 
+const NO_PRINT = true;  // Smaller binary but worse debugging. 
 var ctx: SearchGlobals = undefined;
-
 const walloc = std.heap.wasm_allocator;
+var promotionHint: Kind = .Queen;
 
 extern fn jsConsoleLog(ptr: [*]const u8, len: usize) void;
 extern fn jsAlert(ptr: [*]const u8, len: usize) void; // TODO: use for assertions if enabled
@@ -24,7 +26,7 @@ pub extern fn jsPerformaceNow() f64;
 
 // This lets js detect if something got cached and its using a version of the wasm blob with an API it won't understand.
 export fn protocolVersion() i32 {
-    return 3;
+    return 5;
 }
 
 const JsResult = enum(i32) {
@@ -33,14 +35,15 @@ const JsResult = enum(i32) {
     IllegalMove = -3,
 };
 
-// TODO: think about this more. since printing is a comptime thing, commenting these out saves ~45kb (out of ~250).
 pub fn consolePrint(comptime fmt: []const u8, args: anytype) void {
+    if (NO_PRINT) return;
     var buffer: [2048]u8 = undefined;
     var str = std.fmt.bufPrint(&buffer, fmt, args) catch "Error while printing!";
     jsConsoleLog(str.ptr, str.len);
 }
 
 pub fn alertPrint(comptime fmt: []const u8, args: anytype) void {
+    if (NO_PRINT) return;
     var buffer: [2048]u8 = undefined;
     var str = std.fmt.bufPrint(&buffer, fmt, args) catch "Error while printing!";
     jsAlert(str.ptr, str.len);
@@ -128,7 +131,7 @@ export fn getPossibleMovesBB(board: *Board, from: i32) u64 {
     const piece = board.squares[@intCast(from)];
     if (piece.empty()) return 0;
     var result: u64 = 0;
-    // TODO: check if in check and not moving king here because its done in genAllMoves
+    // TODO: check if in double check and not moving king here because its done in genAllMoves
     const allMoves = movegen.collectOnePieceMoves(board, @intCast(from), &ctx.lists) catch |err| {
         logErr(err, "getPossibleMoves");
         return 0;
@@ -168,8 +171,7 @@ export fn getMaterialEval(board: *Board) i32 {
 export fn playHumanMove(board: *Board, fromIndex: u32, toIndex: u32, msgPtr: [*]u8, maxLen: u32) i32 {
     if (fromIndex >= 64 or toIndex >= 64) return @intFromEnum(JsResult.Error);
 
-    // TODO: promotion ui
-    _ = @import("board.zig").inferPlayMove(board, fromIndex, toIndex, &ctx.lists, .Queen) catch |err| {
+    _ = inferPlayMove(board, fromIndex, toIndex, &ctx.lists, promotionHint) catch |err| {
         switch (err) {
             error.IllegalMove => return @intFromEnum(JsResult.IllegalMove),
             else => logErr(err, "playHumanMove"),
@@ -179,6 +181,19 @@ export fn playHumanMove(board: *Board, fromIndex: u32, toIndex: u32, msgPtr: [*]
 
     const len = checkGameOver(board, msgPtr, maxLen);
     return if (len > 0) len else @intFromEnum(JsResult.Ok);
+}
+
+export fn isPromotion(board: *Board, fromIndex: u32, toIndex: u32) bool {
+    if (fromIndex >= 64 or toIndex >= 64) return false;
+
+    const unMove = inferPlayMove(board, fromIndex, toIndex, &ctx.lists, null) catch return false;
+    defer board.unplay(unMove);
+    return std.meta.isTag(unMove.move.action, "promote");
+}
+
+export fn setPromotionHint(kindOrdinal: u32) void {
+    const valid = kindOrdinal >= 2 and kindOrdinal <= 5;
+    promotionHint = if (valid) @enumFromInt(kindOrdinal) else .Queen;
 }
 
 fn logErr(err: anyerror, func: []const u8) void {
@@ -233,34 +248,34 @@ export fn getFrenchMoveBB(board: *Board) u64 {
 
 export fn getAttackBB(board: *Board, colourI: u32) u64 {
     const colour: Colour = if (colourI == 0) .White else .Black;
-    var out: @import("movegen.zig").GetAttackSquares = .{};
-    try @import("movegen.zig").genPossibleMoves(&out, board, colour);
+    var out: movegen.GetAttackSquares = .{};
+    try movegen.genPossibleMoves(&out, board, colour);
     return out.bb;
 }
 
 export fn slidingChecksBB(board: *Board, colourI: u32) u64 {
     const colour: Colour = if (colourI == 0) .White else .Black;
-    return @import("movegen.zig").getChecksInfo(board, colour).blockSingleCheck;
+    return movegen.getChecksInfo(board, colour).blockSingleCheck;
 }
 
 export fn pinsByBishopBB(board: *Board, colourI: u32) u64 {
     const colour: Colour = if (colourI == 0) .White else .Black;
-    return @import("movegen.zig").getChecksInfo(board, colour).pinsByBishop;
+    return movegen.getChecksInfo(board, colour).pinsByBishop;
 }
 
 export fn pinsByRookBB(board: *Board, colourI: u32) u64 {
     const colour: Colour = if (colourI == 0) .White else .Black;
-    return @import("movegen.zig").getChecksInfo(board, colour).pinsByRook;
+    return movegen.getChecksInfo(board, colour).pinsByRook;
 }
 
 export fn pinsFrenchByBishopBB(board: *Board, colourI: u32) u64 {
     const colour: Colour = if (colourI == 0) .White else .Black;
-    return @import("movegen.zig").getChecksInfo(board, colour).frenchPinByBishop;
+    return movegen.getChecksInfo(board, colour).frenchPinByBishop;
 }
 
 export fn pinsFrenchByRookBB(board: *Board, colourI: u32) u64 {
     const colour: Colour = if (colourI == 0) .White else .Black;
-    return @import("movegen.zig").getChecksInfo(board, colour).frenchPinByRook;
+    return movegen.getChecksInfo(board, colour).frenchPinByRook;
 }
 
 export fn isWhiteTurn(board: *Board) bool {

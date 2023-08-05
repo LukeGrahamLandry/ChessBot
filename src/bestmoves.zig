@@ -1,3 +1,6 @@
+//! Test the search against the positions in bestmoves.txt
+//! It's only passing ~70% rn but will catch dumb mistakes.
+
 const std = @import("std");
 const Board = @import("board.zig").Board;
 const Move = @import("board.zig").Move;

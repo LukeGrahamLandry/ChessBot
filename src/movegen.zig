@@ -687,31 +687,6 @@ pub fn getFrenchPins(game: *Board, defendingPlayer: Colour, frenchFile: u4, resu
     }
 }
 
-const PairContext = @import("search.zig").PairContext;
-// not used because not convincingly better than just prefering captures and bubbling cached to the front 
-pub fn reorderMoves(board: *Board, moves: *ListPool.List, lists: *AnyListPool(i32), cacheHit: ?@import("search.zig").MemoValue) !void {
-    var evals = try lists.get();
-    defer lists.release(evals);
-    const dir = board.nextPlayer.dir();
-
-    if (cacheHit != null and cacheHit.?.move != null) {
-        const m = cacheHit.?.move.?;
-        for (moves.items) |move| {
-            if (m.from == move.from and m.to == move.to) {
-                try evals.append(11111);
-            } else {
-                try evals.append(board.justEvalMove(move) * dir);
-            }   
-        }
-    } else {
-        for (moves.items) |move| {
-            try evals.append(board.justEvalMove(move) * dir);
-        }
-    }
-    
-    std.sort.insertionContext(0, moves.items.len, PairContext{ .moves = moves.items, .evals = evals.items });
-}
-
 // TODO: barely used. just write the code.
 
 pub fn irf(fromIndex: usize, toFile: usize, toRank: usize, isCapture: bool) Move {
@@ -740,8 +715,9 @@ pub fn printBitBoard(bb: u64) void {
 }
 
 pub const ListPool = AnyListPool(Move);
-const BE_EVIL = true;
+pub const BE_EVIL = true;
 const ListType = if (BE_EVIL) UnsafeList else std.ArrayList;
+const LIST_SIZE = 512;
 
 pub fn AnyListPool(comptime element: type) type {
     return struct {
@@ -750,14 +726,15 @@ pub fn AnyListPool(comptime element: type) type {
 
         pub const List = ListType(element);
         const POOL_SIZE = 512;
+        comptime { assert(!BE_EVIL or POOL_SIZE <= LIST_SIZE); }
 
         pub fn init(alloc: std.mem.Allocator) !@This() {
             var self: @This() = .{ .lists = try ListType(List).initCapacity(alloc, POOL_SIZE), .alloc = alloc };
-            for (0..POOL_SIZE) |_| { // pre-allocate enough lists that we'll probably never need to make a new one. should be the expected depth number.
+            for (0..POOL_SIZE) |_| { // pre-allocate enough lists that we'll probably never need to make a new one. should be > the expected depth number.
                 // If all 16 of your pieces were somehow a queen in the middle of the board with no other pieces blocking
                 // (maybe they're magic 4th dimensional queens, idk), that's still only 448 moves. So 512 will never overflow.
                 // I'm sure there's a smaller upper bound than that but also nobody cares.
-                try self.lists.append(try List.initCapacity(self.alloc, if (BE_EVIL) 512 else 128));
+                try self.lists.append(try List.initCapacity(self.alloc, LIST_SIZE));
             }
             return self;
         }
@@ -772,12 +749,13 @@ pub fn AnyListPool(comptime element: type) type {
                 if (self.lists.popOrNull()) |list| {
                     return list;
                 } else {
-                    return try List.initCapacity(self.alloc, 128);
+                    return try List.initCapacity(self.alloc, LIST_SIZE);
                 }
             }
         }
 
         // TODO: do i need to errdefer this in functions that return one or is it already too messed up to recover if an allocation fails.
+        // Can't defer a 'try' so returning an error here is really annoying. 
         pub fn release(self: *@This(), list: List) void {
             self.lists.append(list) catch @panic("OOM releasing list."); // If this fails you made like way too many lists.
             self.lists.items[self.lists.items.len - 1].clearRetainingCapacity();
@@ -799,6 +777,9 @@ pub fn AnyListPool(comptime element: type) type {
 // This is a terrible idea but its also like 15% faster and probably fine.
 // Very disappointing. Clearly a sign that I shouldn't be putting so many things in lists
 // but not sure how to do that and still get move ordering.
+// I also don't really understand how the overhead of ArrayList could be that makes a difference. 
+// The capacity check should be the most predictable of branches. 
+// TODO: Maybe cause its bigger so copying more when using the pool? 
 fn UnsafeList(comptime element: type) type {
     return struct {
         items: []element,

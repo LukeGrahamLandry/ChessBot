@@ -7,6 +7,14 @@
   <body style="background-color: gray;">
     <div style="text-align: center;">
         <noscript> Your browser doesn't support JavaScript. Apperently it's 1995 where you live. </noscript>
+        <div id="promote" style="display: none;">
+            <b> Select Promotion Type </b> <br>
+            <button onclick="doPromote(2)"><b> Queen </b></button>
+            <button onclick="doPromote(4)">Knight</button>
+            <button onclick="doPromote(5)">Rook</button>
+            <button onclick="doPromote(3)">Bishop</button>
+            <button onclick="cancelPromotion()">Cancel</button>
+        </div>
         <canvas id="board" style="background:url(assets/board.svg); width: 90%; max-width: 500px;"> Your browser doesn't support canvas. Apperently it's 2004 where you live. </canvas>
         <div id="loading"> Loading... </div>
         <div id="controls">
@@ -32,10 +40,11 @@
             </select>
             Simple Eval: <span id="mEval"></span>. 
             <input type="checkbox" id="showlabels"> Show Square Labels <br>
+            <input type="checkbox" id="enablebot" checked> Enable Bot <br>
             <input type="range" id="depth" value="6" min="2" max="10" style="width: 50%;"> Max Depth: <span id="showdepth"></span> ply. <br>
             <input type="range" id="time" value="400" min="100" max="15000" style="width: 50%;">  Max Time: <span id="showtime"></span> ms.<br> <br>
         </div>
-        <textarea id="log" style="width: 80%;" rows="4"></textarea>
+        <a href="https://lichess.org/@/ZigZagZ" style="color: rgb(0, 204, 255);"> The bot also plays on Lichess. </a>
         <br> <a href="https://github.com/LukeGrahamLandry/ChessBot" style="color: rgb(0, 204, 255);"> Github </a>
     </div>
   <script>
@@ -60,8 +69,6 @@
             jsConsoleLog: function (ptr, len) {
                 const msgStr = getWasmString(ptr, len);
                 console.log(msgStr);
-                document.getElementById("log").value += msgStr;
-                document.getElementById("log").scrollTop = document.getElementById("log").scrollHeight;
             },
             jsAlert: function (ptr, len) {
                 const msgBuffer = new Uint8Array(Engine.memory.buffer, ptr, len);
