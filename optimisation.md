@@ -20,16 +20,6 @@ pprof bench prof.out
 
 Needs `brew install gperftools` and `brew install graphviz`.
 
-## Ideas
-
-- Be able to run tests in parrallel. Write custom test runner that just uses seperate processes? 
-- Have the UI show lines for debugging
-- Give yourself extra depth only looking at captures because it thinks hanging pieces on move n+1 is fine. 
-- Opening book. Maybe order by board hash and binary search because normal hashmap wastes space to avoid collissions. Only bother with lookup in first x moves. 
-- Endgame book. ^
-- Partial heap sort for move ordering. Then I can have a more complex eval function? 
-- Run engine on another thread so it doesn't hang the UI and can be canceled when it goes to long. Put a flag somewhere that it checks to break out of the recursion. 
-
 ## Learning Zig 
 
 - @truncate explicitly removes high bits but @intCast asserts that the number fits in the new type. So intCast is just better for my usize->u6 of board indexes because it means debug builds catch dumb mistakes and in release builds it becomes (i assume?) a no-op. 

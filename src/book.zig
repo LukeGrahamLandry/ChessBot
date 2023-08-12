@@ -18,12 +18,15 @@ const MIN_OCCURANCES = 1;
 pub fn main() !void {
     const t = @import("common.zig").Timer.start();
     assert(@sizeOf(Move) == 8);
-    std.debug.print("\nStart building book.\n", .{});
     var ctx = @import("common.zig").setup(0);
     // zig-out is just a good place to put stuff that's git ignored
-    const file = try std.fs.cwd().openFile(PGN_PATH, .{});
+    const file = std.fs.cwd().openFile(PGN_PATH, .{}) catch {
+        std.debug.print("Failed to open {s} \nDownload it from https://database.lichess.org\n", .{PGN_PATH});
+        return;
+    };
     const buffered: Reader = .{ .unbuffered_reader = file.reader() };
 
+    std.debug.print("\nStart building book.\n", .{});
     var pgn: PngReader = .{ .reader = buffered };
     try pgn.findNextInterestingGame();
 

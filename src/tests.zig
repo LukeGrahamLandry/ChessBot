@@ -1,3 +1,6 @@
+/// Main tests are in perft.zig and bestmoves.zig
+// TODO: split up this file so things are always near their definition
+
 const std = @import("std");
 const Board = @import("board.zig").Board;
 const Colour = @import("board.zig").Colour;
