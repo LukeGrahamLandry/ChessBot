@@ -16,7 +16,7 @@ const nanoTimestamp = @import("common.zig").nanoTimestamp;
 const ListPool = @import("movegen.zig").ListPool;
 const UCI = @import("uci.zig");
 
-const isWasm = @import("builtin").target.isWasm();
+const isWasm = @import("builtin").target.cpu.arch.isWasm();
 
 const movegen = @import("movegen.zig");
 
@@ -26,7 +26,7 @@ pub const StratOpts = struct {
     doMemo: bool = true,
     printUci: bool = false,
     trackPv: bool = false,
-    followCapturesDepth: i32 = 0,  // TODO: on 3 it fails more bestmoves tests (2 seconds/pos). too slow? ignoring checks?
+    followCapturesDepth: i32 = 0, // TODO: on 3 it fails more bestmoves tests (2 seconds/pos). too slow? ignoring checks?
 };
 
 pub const MoveErr = error{ GameOver, OutOfMemory, ForceStop, Overflow, ThisIsntThreadSafe };
@@ -48,11 +48,11 @@ pub const SearchGlobals = struct {
     evalLists: IntListPool,
     memoMap: MemoTable,
     forceStop: bool = false,
-    rng: std.rand.DefaultPrng,
+    rng: std.Random.DefaultPrng,
 
     pub fn init(memoMapSizeMB: u64, alloc: std.mem.Allocator) !@This() {
         const seed: u64 = @truncate(@as(u128, @bitCast(nanoTimestamp())));
-        return .{ .memoMap = try MemoTable.initWithCapacity(memoMapSizeMB, alloc), .lists = try ListPool.init(alloc), .evalLists = try IntListPool.init(alloc), .rng = std.rand.DefaultPrng.init(seed) };
+        return .{ .memoMap = try MemoTable.initWithCapacity(memoMapSizeMB, alloc), .lists = try ListPool.init(alloc), .evalLists = try IntListPool.init(alloc), .rng = std.Random.DefaultPrng.init(seed) };
     }
 
     pub fn resetMemoTable(self: *@This()) void {
@@ -71,7 +71,7 @@ pub fn bestMove(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, max
 
     const startTime = nanoTimestamp();
     const endTime = startTime + (timeLimitMs * std.time.ns_per_ms);
-    var topLevelMoves = try movegen.possibleMoves(game, me, &ctx.lists);
+    const topLevelMoves = try movegen.possibleMoves(game, me, &ctx.lists);
     defer ctx.lists.release(topLevelMoves);
     if (topLevelMoves.items.len == 0) {
         if (opts.printUci) {
@@ -96,7 +96,7 @@ pub fn bestMove(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, max
         defer ctx.lists.release(pv);
         var stats: Stats = .{};
         var alpha = LOWEST_EVAL;
-        var beta = -LOWEST_EVAL;
+        const beta = -LOWEST_EVAL;
         // TODO: this is almost the same as walkEval.
         for (topLevelMoves.items, 0..) |move, i| {
             var line = try ctx.lists.get();
@@ -160,7 +160,7 @@ pub fn bestMove(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, max
                 try str.appendSlice((try favourite.text())[0..4]);
             }
 
-            // TODO: report mate distance. don't mind branches here because its only at the top level. 
+            // TODO: report mate distance. don't mind branches here because its only at the top level.
             const info: UCI.UciInfo = .{ .time = @intCast(@divFloor(thinkTime, std.time.ns_per_ms)), .depth = @intCast(depth + 1), .pvFirstMove = UCI.writeAlgebraic(favourite), .cp = evals.items[0], .pv = str.slice() };
             const result: UCI.UciResult = .{ .Info = info };
             try result.writeTo(std.io.getStdOut().writer());
@@ -224,7 +224,7 @@ pub fn walkEval(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, rem
 
     // Want to mutate copies of values from parameters.
     var alpha = alphaIn;
-    var beta = betaIn;
+    const beta = betaIn;
 
     var moves = try movegen.possibleMoves(game, me, &ctx.lists);
     defer ctx.lists.release(moves);
@@ -246,7 +246,7 @@ pub fn walkEval(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, rem
                 }
             }
         }
-    } 
+    }
 
     var foundMove: ?Move = null;
     var pv = if (opts.trackPv) ctx.lists.copyOf(line) else try ctx.lists.get();
@@ -313,8 +313,8 @@ pub fn walkEval(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, rem
     return alpha;
 }
 
-// TODO: should this use the memo table? need flag to indicate it didn't consider all moves so walkEval can't trust it 
-// TODO: this is so similar to normal walkEval, can they be merged without making it more confusing? 
+// TODO: should this use the memo table? need flag to indicate it didn't consider all moves so walkEval can't trust it
+// TODO: this is so similar to normal walkEval, can they be merged without making it more confusing?
 pub fn lookForPeace(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board, remaining: i32, alphaIn: i32, betaIn: i32, line: *ListPool.List) error{ OutOfMemory, ForceStop, Overflow }!i32 {
     const me = game.nextPlayer;
     if (ctx.forceStop) return error.ForceStop;
@@ -325,7 +325,7 @@ pub fn lookForPeace(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board,
 
     // Want to mutate copies of values from parameters.
     var alpha = alphaIn;
-    var beta = betaIn;
+    const beta = betaIn;
 
     const base = game.simpleEval * me.dir();
     if (base >= beta) {
@@ -335,7 +335,7 @@ pub fn lookForPeace(comptime opts: StratOpts, ctx: *SearchGlobals, game: *Board,
         alpha = base;
     }
 
-    var moves = try movegen.capturesOnlyMoves(game, me, &ctx.lists);
+    const moves = try movegen.capturesOnlyMoves(game, me, &ctx.lists);
     defer ctx.lists.release(moves);
 
     if (moves.items.len == 0) { // <me> can't make any moves. Either got checkmated or its a draw.

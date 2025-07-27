@@ -26,7 +26,7 @@ const positionData = @embedFile("perft.txt");
 var foreverArena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 var forever = foreverArena.allocator();
 
-const Shared = std.atomic.Atomic(usize);
+const Shared = std.atomic.Value(usize);
 
 // TODO: CLI divide command like the fish
 pub fn main() !void {
@@ -100,7 +100,7 @@ fn workerFn(self: *Worker) !void {
     std.time.sleep(50); // Just make absolutly sure the other thread finishes setting the array.
     const startTime = std.time.nanoTimestamp();
     while (true) {
-        const nextTask = self.nextTask.fetchAdd(1, .SeqCst);
+        const nextTask = self.nextTask.fetchAdd(1, .seq_cst);
         if (nextTask >= self.tasks.len) break;
 
         const position = self.tasks[nextTask];
@@ -203,7 +203,7 @@ fn debugPerft(fish: *Stockfish, fen: []const u8, depth: u64, arena: *std.heap.Ar
 fn walkPerft(fish: *Stockfish, board: *Board, depth: u64, arena: *std.heap.ArenaAllocator, lists: *ListPool) !u64 {
     if (depth == 0) return 1;
 
-    var alloc = arena.allocator();
+    const alloc = arena.allocator();
     const fen = try board.toFEN(alloc);
 
     // First decide if this is the branch where we disagree about possible moves.

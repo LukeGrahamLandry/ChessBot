@@ -20,10 +20,10 @@ pub fn possibleMoves(board: *const Board, me: Colour, lists: *ListPool) !ListPoo
     return moves;
 }
 
-// TODO: test this. 
-// TODO: does the peace search need special handling for being in check? 
+// TODO: test this.
+// TODO: does the peace search need special handling for being in check?
 pub fn capturesOnlyMoves(board: *Board, me: Colour, lists: *ListPool) !ListPool.List {
-    // For non-king pieces blockSingleCheck already acts as a filter for target squares so can reuse that for this as well. 
+    // For non-king pieces blockSingleCheck already acts as a filter for target squares so can reuse that for this as well.
     // For peace search 3, filtering this way instead of gening all moves and skipping captures is 1.25x as fast.
     const realSlidingChecks = board.checks.blockSingleCheck;
     defer board.checks.blockSingleCheck = realSlidingChecks;
@@ -57,7 +57,7 @@ pub fn genPossibleMoves(out: anytype, board: *const Board, me: Colour) !void {
 
     while (mySquares != 0) {
         const offset = @ctz(mySquares);
-        var flag = @as(u64, 1) << @intCast(offset);
+        const flag = @as(u64, 1) << @intCast(offset);
         mySquares = mySquares ^ flag;
         try genOnePieceMoves(out, board, offset);
     }
@@ -83,7 +83,7 @@ pub const MoveIter = struct {
     pub fn next(self: *@This()) !?ListPool.List {
         if (self.targets != 0) {
             const offset = @ctz(self.targets);
-            var flag = @as(u64, 1) << @intCast(offset);
+            const flag = @as(u64, 1) << @intCast(offset);
             self.targets = self.targets ^ flag;
 
             var moves = try self.lists.get();
@@ -101,7 +101,7 @@ const MoveFilter = enum {
     CurrentlyCalcChecks,
 };
 
-// TODO: is it faster to have a bit board of each type of piece so you can do each kind all at once? 
+// TODO: is it faster to have a bit board of each type of piece so you can do each kind all at once?
 pub fn genOnePieceMoves(out: anytype, board: *const Board, i: usize) !void {
     const piece = board.squares[i];
     switch (piece.kind) {
@@ -153,7 +153,7 @@ fn sliderMoves(out: anytype, board: *const Board, i: usize, colour: Colour, comp
     const startFlag = @as(u64, 1) << @intCast(i);
     if ((otherPinKind & startFlag) != 0) return;
 
-    var pieces = board.peicePositions.black | board.peicePositions.white;
+    const pieces = board.peicePositions.black | board.peicePositions.white;
 
     const mask = pieces & masksTable[i];
     const myPieces = board.peicePositions.getFlag(colour);
@@ -251,13 +251,13 @@ fn kingMove(out: anytype, board: *const Board, i: usize, colour: Colour) !void {
     // Kings can't be pinned or block pins, don't need to check.
     const myPieces = board.peicePositions.getFlag(colour);
     const targets = tables.kings[i] & (~myPieces) & (~board.checks.targetedSquares);
-    if (board.checks.kingGetCapturesOnly){
+    if (board.checks.kingGetCapturesOnly) {
         try emitMoves(out, board, i, targets & board.checks.blockSingleCheck, colour);
     } else {
         try emitMoves(out, board, i, targets, colour);
         try tryCastle(out, board, colour, true);
         try tryCastle(out, board, colour, false);
-    }   
+    }
 }
 
 pub fn ff(i: anytype) u64 {
@@ -273,10 +273,10 @@ pub fn tryCastle(out: anytype, board: *const Board, colour: Colour, comptime goi
     const shift: u6 = if (colour == .Black) 7 * 8 else 0;
     const leftNoChecks = comptime (ff(2) | ff(3) | ff(4));
     const rightNoChecks = comptime (ff(6) | ff(5) | ff(4));
-    var pathFlag = (if (goingLeft) leftNoChecks else rightNoChecks) << shift;
+    const pathFlag = (if (goingLeft) leftNoChecks else rightNoChecks) << shift;
     const leftNoPieces = comptime (ff(1) | ff(2) | ff(3));
     const rightNoPieces = comptime (ff(5) | ff(6));
-    var emptyFlag = (if (goingLeft) leftNoPieces else rightNoPieces) << shift;
+    const emptyFlag = (if (goingLeft) leftNoPieces else rightNoPieces) << shift;
     const pieces = board.peicePositions.white | board.peicePositions.black;
     const bad = (pieces & emptyFlag) | (board.checks.targetedSquares & pathFlag);
     if (bad != 0) return;
@@ -319,7 +319,7 @@ fn emitMoves(out: anytype, board: *const Board, i: usize, _targets: u64, colour:
     var targets = _targets;
     while (targets != 0) {
         const offset = @ctz(targets);
-        var flag = @as(u64, 1) << @intCast(offset);
+        const flag = @as(u64, 1) << @intCast(offset);
         targets = targets ^ flag;
         try addMoveOrdered(out.moves, board, @intCast(i), @intCast(offset), flag, colour);
     }
@@ -527,18 +527,18 @@ pub fn getChecksInfo(game: *Board, defendingPlayer: Colour) ChecksInfo {
     }
 
     // Knights. Can't be blocked, they just take up one square in the flag and must be captured.
-    // This is the same speed as the loop but it looks simpler. 
+    // This is the same speed as the loop but it looks simpler.
     const knightTargets = tables.knights[myKingIndex] & game.knights.getFlag(defendingPlayer.other());
     if (knightTargets != 0 and (result.blockSingleCheck != 0 or @popCount(knightTargets) > 1)) {
         result.doubleCheck = true;
     }
-    result.blockSingleCheck |= knightTargets; 
+    result.blockSingleCheck |= knightTargets;
 
     // Pawns. Don't care about going forward or french move because those can't capture a king.
     // They only move one so can't be blocked.
     // TODO: this is kinda copy-paste-y
-    var kingRank = @as(usize, @intCast(myKingIndex / 8));
-    var kingFile = @as(usize, @intCast(myKingIndex % 8));
+    const kingRank = @as(usize, @intCast(myKingIndex / 8));
+    const kingFile = @as(usize, @intCast(myKingIndex % 8));
     const onEdge = if (defendingPlayer == .White) kingRank == 7 else kingRank == 0;
     if (!onEdge) {
         const targetRank = switch (defendingPlayer) {
@@ -719,6 +719,7 @@ pub const BE_EVIL = true;
 const ListType = if (BE_EVIL) UnsafeList else std.ArrayList;
 const LIST_SIZE = 512;
 
+// TODO: try heap.MemoryPool instead.
 pub fn AnyListPool(comptime element: type) type {
     return struct {
         lists: ListType(List),
@@ -726,7 +727,9 @@ pub fn AnyListPool(comptime element: type) type {
 
         pub const List = ListType(element);
         const POOL_SIZE = 512;
-        comptime { assert(!BE_EVIL or POOL_SIZE <= LIST_SIZE); }
+        comptime {
+            assert(!BE_EVIL or POOL_SIZE <= LIST_SIZE);
+        }
 
         pub fn init(alloc: std.mem.Allocator) !@This() {
             var self: @This() = .{ .lists = try ListType(List).initCapacity(alloc, POOL_SIZE), .alloc = alloc };
@@ -755,7 +758,7 @@ pub fn AnyListPool(comptime element: type) type {
         }
 
         // TODO: do i need to errdefer this in functions that return one or is it already too messed up to recover if an allocation fails.
-        // Can't defer a 'try' so returning an error here is really annoying. 
+        // Can't defer a 'try' so returning an error here is really annoying.
         pub fn release(self: *@This(), list: List) void {
             self.lists.append(list) catch @panic("OOM releasing list."); // If this fails you made like way too many lists.
             self.lists.items[self.lists.items.len - 1].clearRetainingCapacity();
@@ -777,9 +780,9 @@ pub fn AnyListPool(comptime element: type) type {
 // This is a terrible idea but its also like 15% faster and probably fine.
 // Very disappointing. Clearly a sign that I shouldn't be putting so many things in lists
 // but not sure how to do that and still get move ordering.
-// I also don't really understand how the overhead of ArrayList could be that makes a difference. 
-// The capacity check should be the most predictable of branches. 
-// TODO: Maybe cause its bigger so copying more when using the pool? 
+// I also don't really understand how the overhead of ArrayList could be that makes a difference.
+// The capacity check should be the most predictable of branches.
+// TODO: Maybe cause its bigger so copying more when using the pool?
 fn UnsafeList(comptime element: type) type {
     return struct {
         items: []element,

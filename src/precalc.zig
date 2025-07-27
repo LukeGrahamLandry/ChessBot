@@ -5,7 +5,7 @@ const Board = @import("board.zig").Board;
 const printBitBoard = @import("movegen.zig").printBitBoard;
 const print = @import("common.zig").print;
 const panic = @import("common.zig").panic;
-const isWasm = @import("builtin").target.isWasm();
+const isWasm = @import("builtin").target.cpu.arch.isWasm();
 const Learned = @import("learned.zig");
 
 // This is immutable so multiple threads can share one.
@@ -72,8 +72,8 @@ fn findBetterSliderAttackTable(alloc: std.mem.Allocator, oldSizes: [64]u7, oldMa
     var foundAny = false;
 
     var seed: u64 = undefined;
-    try std.os.getrandom(std.mem.asBytes(&seed));
-    var rng = std.rand.DefaultPrng.init(seed);
+    try std.posix.getrandom(std.mem.asBytes(&seed));
+    var rng = std.Random.DefaultPrng.init(seed);
 
     var arena = std.heap.ArenaAllocator.init(alloc);
     for (0..1000) |_| {
@@ -219,7 +219,7 @@ const VisitEachSetBit = struct {
 
     pub fn next(self: *@This()) ?u64 {
         if (self.offset < 64) {
-            var flag = @as(u64, 1) << @intCast(self.offset);
+            const flag = @as(u64, 1) << @intCast(self.offset);
             self.remaining = self.remaining ^ flag;
             self.offset = @ctz(self.remaining);
             return flag;
@@ -323,7 +323,7 @@ const VisitBitPermutations = struct {
                     self.yielded = 2;
                     return self.part;
                 },
-                2 => {  // C
+                2 => { // C
                     if (self.others[self.depth + 1].next()) |nextPart| { // C
                         self.yielded = 0;
                         self.part = nextPart;
@@ -409,7 +409,7 @@ test "unblocked rooks can move 14 squares" {
         var edgeCount: u7 = 4;
         if (file == 0 or file == 7) edgeCount -= 1;
         if (rank == 0 or rank == 7) edgeCount -= 1;
-        var expect = 14 - edgeCount;
+        const expect = 14 - edgeCount;
 
         const b = possibleRookTargets(i, 0, true);
         try std.testing.expectEqual(expect, @popCount(b));
@@ -434,8 +434,8 @@ fn possibleKnightTargets(i: u64) u64 {
     inline for (knightOffsets) |x| {
         inline for (knightOffsets) |y| {
             if (x != y and x != -y) {
-                var checkFile = @as(isize, @intCast(i % 8)) + x;
-                var checkRank = @as(isize, @intCast(i / 8)) + y;
+                const checkFile = @as(isize, @intCast(i % 8)) + x;
+                const checkRank = @as(isize, @intCast(i / 8)) + y;
                 const invalid = checkFile > 7 or checkRank > 7 or checkFile < 0 or checkRank < 0;
                 if (!invalid) result |= @as(u64, 1) << @intCast(checkRank * 8 + checkFile);
             }
@@ -467,7 +467,7 @@ pub const OneTable = struct {
     // Zero is a possible value since there might be no possible moves so have the default be all ones
     // (nobody can teleport to all squares of the board), so I can detect it while building the map.
     fn allocOnes(alloc: std.mem.Allocator, bits: u7) ![]u64 {
-        var buffer = try alloc.alloc(u64, try std.math.powi(usize, 2, bits));
+        const buffer = try alloc.alloc(u64, try std.math.powi(usize, 2, bits));
         for (buffer) |*e| {
             e.* = EMPTY;
         }

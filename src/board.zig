@@ -151,7 +151,7 @@ const CastlingRights = packed struct(u8) {
     blackLeft: bool = true,
     blackRight: bool = true,
 
-    // Would probably fine cause not in a union but I don't trust it now. 
+    // Would probably fine cause not in a union but I don't trust it now.
     _fuck: u4 = 0,
 
     pub const NONE: CastlingRights = @bitCast(@as(u8, 0));
@@ -607,9 +607,9 @@ pub const Board = struct {
 
 pub const AppendErr = error{Overflow} || std.mem.Allocator.Error;
 
-// Compiler bug! Thought I was going crazy. 
+// Compiler bug! Thought I was going crazy.
 // https://github.com/ziglang/zig/issues/16392
-// LLVM doesn't like unholy integer sizes in unions. 
+// LLVM doesn't like unholy integer sizes in unions.
 pub const CastleMove = packed struct { rookFrom: u6, rookTo: u6, _fuck: u4 = 0 };
 
 // TODO: this seems much too big (8 bytes?). castling info is redunant cause other side can infer if king moves 2 squares, bool field is evil and redundant
@@ -617,13 +617,7 @@ pub const Move = struct {
     from: u6,
     to: u6,
     isCapture: bool, // french move says true but to square isnt the captured one
-    action: union(enum(u3)) {
-        none,
-        promote: Kind,
-        castle: CastleMove,
-        allowFrenchMove,
-        useFrenchMove: u6, // capture index
-    },
+    action: Action,
     // bonus: i8 = 0, // positive is good for the player moving.
     // evalGuess: i32 = 0,
 
@@ -635,11 +629,19 @@ pub const Move = struct {
     pub fn text(self: Move) ![5]u8 {
         return UCI.writeAlgebraic(self);
     }
+
+    pub const Action = union(enum(u3)) {
+        none,
+        promote: Kind,
+        castle: CastleMove,
+        allowFrenchMove,
+        useFrenchMove: u6, // capture index
+    };
 };
 
 pub const GameOver = enum { Continue, Stalemate, FiftyMoveDraw, MaterialDraw, RepetitionDraw, WhiteWins, BlackWins };
 
-const isWasm = @import("builtin").target.isWasm();
+const isWasm = @import("builtin").target.cpu.arch.isWasm();
 
 pub const InferMoveErr = error{IllegalMove} || @import("search.zig").MoveErr;
 

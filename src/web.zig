@@ -14,7 +14,7 @@ const movegen = @import("movegen.zig");
 const SearchGlobals = @import("search.zig").SearchGlobals;
 const inferPlayMove = @import("board.zig").inferPlayMove;
 
-const NO_PRINT = true;  // Smaller binary but worse debugging. 
+const NO_PRINT = true; // Smaller binary but worse debugging.
 var ctx: SearchGlobals = undefined;
 const walloc = std.heap.wasm_allocator;
 var promotionHint: Kind = .Queen;
@@ -38,14 +38,14 @@ const JsResult = enum(i32) {
 pub fn consolePrint(comptime fmt: []const u8, args: anytype) void {
     if (NO_PRINT) return;
     var buffer: [2048]u8 = undefined;
-    var str = std.fmt.bufPrint(&buffer, fmt, args) catch "Error while printing!";
+    const str = std.fmt.bufPrint(&buffer, fmt, args) catch "Error while printing!";
     jsConsoleLog(str.ptr, str.len);
 }
 
 pub fn alertPrint(comptime fmt: []const u8, args: anytype) void {
     if (NO_PRINT) return;
     var buffer: [2048]u8 = undefined;
-    var str = std.fmt.bufPrint(&buffer, fmt, args) catch "Error while printing!";
+    const str = std.fmt.bufPrint(&buffer, fmt, args) catch "Error while printing!";
     jsAlert(str.ptr, str.len);
 }
 
@@ -69,7 +69,7 @@ export fn drop(ptr: ?[*]u8, len: u32) void {
 }
 
 export fn createBoard() ?*Board {
-    var board = walloc.create(Board) catch |err| {
+    const board = walloc.create(Board) catch |err| {
         logErr(err, "createBoard");
         return null;
     };
@@ -188,7 +188,7 @@ export fn isPromotion(board: *Board, fromIndex: u32, toIndex: u32) bool {
 
     const unMove = inferPlayMove(board, fromIndex, toIndex, &ctx.lists, null) catch return false;
     defer board.unplay(unMove);
-    return std.meta.isTag(unMove.move.action, "promote");
+    return unMove.move.action == @field(Move.Action, "promote");
 }
 
 export fn setPromotionHint(kindOrdinal: u32) void {

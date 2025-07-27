@@ -21,14 +21,14 @@ const parsePgnMove = @import("book.zig").parsePgnMove;
 
 const MAX_DEPTH = 10;
 const TIME_LIMIT = 2000;
-const CORES = 5;  // Threads work on different tests so more cores makes it finish faster but doesn't make it play better.
+const CORES = 5; // Threads work on different tests so more cores makes it finish faster but doesn't make it play better.
 const positionData = @embedFile("bestmoves.txt");
 
 // For things I don't care about freeing.
 var foreverArena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
 var forever = foreverArena.allocator();
 
-const Shared = std.atomic.Atomic(usize);
+const Shared = std.atomic.Value(usize);
 
 pub fn main() !void {
     _ = @import("common.zig").setup(0);
@@ -62,7 +62,7 @@ pub fn main() !void {
     if (failed == 0) {
         print("Passed All {}.\n", .{tasks.len});
     } else {
-        print("Failed {}/{} (Passed {}%).\n", .{ failed, tasks.len, (tasks.len - failed) * 100 / tasks.len});
+        print("Failed {}/{} (Passed {}%).\n", .{ failed, tasks.len, (tasks.len - failed) * 100 / tasks.len });
     }
 }
 
@@ -85,12 +85,12 @@ const Worker = struct {
     endTime: i128 = 0,
 };
 
-// TODO: if i fail, ask stockfish because if it fails the test is probably dumb. 
+// TODO: if i fail, ask stockfish because if it fails the test is probably dumb.
 fn workerFn(self: *Worker) !void {
     std.time.sleep(50); // Just make absolutly sure the other thread finishes setting the array.
     const startTime = std.time.nanoTimestamp();
     while (true) {
-        const nextTask = self.nextTask.fetchAdd(1, .SeqCst);
+        const nextTask = self.nextTask.fetchAdd(1, .seq_cst);
         if (nextTask >= self.tasks.len) break;
 
         const position = self.tasks[nextTask];
@@ -132,13 +132,13 @@ fn parsePositions(lists: *ListPool) !std.ArrayList(Position) {
     var tasks = std.ArrayList(Position).init(forever);
 
     var lines = std.mem.splitScalar(u8, positionData, '\n');
-   
+
     while (lines.next()) |line| {
         if (line.len == 0 or std.mem.startsWith(u8, line, "//")) continue;
         var parts = std.mem.splitScalar(u8, line, ';');
         const fen = parts.next() orelse unreachable;
         var game = Board.fromFEN(fen) catch |err| std.debug.panic("{}. Failed to parse fen: {s}", .{ err, fen });
-        var pos: Position = .{ .fen=fen, .line=line, .bestMoves=std.ArrayList(Move).init(forever), .worstMoves=std.ArrayList(Move).init(forever) };
+        var pos: Position = .{ .fen = fen, .line = line, .bestMoves = std.ArrayList(Move).init(forever), .worstMoves = std.ArrayList(Move).init(forever) };
         while (parts.next()) |info| {
             var words = std.mem.splitScalar(u8, info, ' ');
             assert(words.next().?.len == 0);

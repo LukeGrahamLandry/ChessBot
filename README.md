@@ -4,7 +4,7 @@
 - A simple website that loads a wasm version of the engine that you can play against. [Try it now!](https://lukegrahamlandry.ca/chess/).
 
 > This is my first project learning Zig! 
-> Tested with Zig version `0.11.0-dev.3937+78eb3c561`. 
+> Tested with Zig version 0.14.1 
 
 ## Entry Points 
 
@@ -16,7 +16,7 @@ These (other than `web`) can each be run with a zig build step (`zig build -Dopt
 
 Functions, with wasm compatible signatures, exported for the GUI to interact with the engine. 
 
-> zig build-lib src/web.zig -target wasm32-freestanding -dynamic -rdynamic -O ReleaseFast && mv web.wasm web/main.wasm
+> zig build-exe src/web.zig -target wasm32-freestanding -fstrip -O ReleaseFast -femit-bin=web/main.wasm -fno-entry -rdynamic
 
 **uci**
 

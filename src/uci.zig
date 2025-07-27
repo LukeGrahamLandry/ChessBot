@@ -29,7 +29,7 @@ pub fn main() !void {
         const bookData = @embedFile("book.chess");
         openings = try book.deserializeBook(book.bytesToU64Slice(bookData[0..]), forever.allocator());
     }
-    
+
     while (true) {
         const cmd = waitForUciCommand(std.io.getStdIn().reader(), e.arena.allocator(), &lists) catch |err| {
             std.debug.print("[uci] {}\n", .{err});
@@ -97,8 +97,8 @@ const Engine = struct {
                     const lowTime = inc != null and time != null and inc.? > 500 and time.? < 5000;
                     const thismove = if (lowTime) inc.? * 9 / 10 else ((inc orelse 1000) + ((time orelse 0) / 100));
                     self.worker.timeLimitMs = @min(thismove, self.worker.timeLimitMs);
-                } 
-                
+                }
+
                 self.worker.isIdle.reset();
                 self.worker.hasWork.set();
             },
@@ -109,7 +109,7 @@ const Engine = struct {
             },
             .Quit => {
                 self.worker.ctx.forceStop = true;
-                std.os.exit(0);
+                std.posix.exit(0);
             },
             else => panic("TODO: other uci commands {}", .{cmd}),
         }
@@ -242,12 +242,12 @@ pub const UciCommand = union(enum) {
         } else if (std.mem.eql(u8, str, "position startpos")) {
             return .SetPositionInitial;
         } else if (std.mem.startsWith(u8, str, "position fen ")) {
-            if (std.mem.indexOf(u8, str, "moves") != null){
+            if (std.mem.indexOf(u8, str, "moves") != null) {
                 panic("TODO: support moves after fen starting position. currently only supports startpos.", .{});
             }
 
             const startingWithFen = str[13..];
-            var board = try alloc.create(Board);
+            const board = try alloc.create(Board);
             board.* = try Board.fromFEN(startingWithFen);
             return .{ .SetPositionMoves = .{ .board = board } };
         } else if (std.mem.startsWith(u8, str, "position startpos moves ")) {
@@ -255,7 +255,7 @@ pub const UciCommand = union(enum) {
             assert(std.mem.eql(u8, words.next().?, "position"));
             assert(std.mem.eql(u8, words.next().?, "startpos"));
             assert(std.mem.eql(u8, words.next().?, "moves"));
-            var board = try alloc.create(Board);
+            const board = try alloc.create(Board);
             board.* = try Board.initial();
             while (words.next()) |word| {
                 if (word.len <= 5) {

@@ -1,5 +1,5 @@
 const std = @import("std");
-pub const isWasm = @import("builtin").target.isWasm();
+pub const isWasm = @import("builtin").target.cpu.arch.isWasm();
 pub const isTest = @import("builtin").is_test;
 
 pub const print = if (isWasm) @import("web.zig").consolePrint else std.debug.print;
@@ -22,7 +22,7 @@ pub fn setup(memoSizeMB: usize) SearchGlobals {
 const getRawIndex = @import("board.zig").getRawIndex;
 
 fn initZoidberg() void {
-    var rand: std.rand.Xoshiro256 = .{ .s = Learned.ZOIDBERG_SEED };
+    var rand: std.Random.Xoshiro256 = .{ .s = Learned.ZOIDBERG_SEED };
     for (&Learned.ZOIDBERG) |*ptr| {
         ptr.* = rand.next();
     }
@@ -34,7 +34,6 @@ fn initZoidberg() void {
         Learned.ZOIDBERG[Learned.ZOID_PIECE_START + getRawIndex(.{ .kind = .Empty, .colour = .Black }, @intCast(i))] = 0;
     }
 }
-
 
 pub fn nanoTimestamp() i128 {
     if (comptime isWasm) {

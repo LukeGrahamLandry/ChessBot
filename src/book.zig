@@ -31,7 +31,7 @@ pub fn main() !void {
     try pgn.findNextInterestingGame();
 
     // TODO: context that just uses the number as the hash instead of dumbly doing generic hash to my zobrhist key
-    //       but it doesnt matter because memory is the slow part. 
+    //       but it doesnt matter because memory is the slow part.
     var seen = std.AutoHashMap(u64, PosInfo).init(std.heap.c_allocator);
 
     var gameCount: usize = 0;
@@ -73,7 +73,7 @@ pub fn main() !void {
         _ = pgn.board.play(move);
     }
 
-    // TODO: would be interesting to compare this to what the weight tables would have done. 
+    // TODO: would be interesting to compare this to what the weight tables would have done.
     var book = std.AutoHashMap(u64, Move).init(std.heap.c_allocator);
 
     var positions = seen.iterator();
@@ -124,10 +124,10 @@ fn checkBookEql(a: std.AutoHashMap(u64, Move), b: std.AutoHashMap(u64, Move)) !v
 // Caller owns the returned memory
 pub fn loadBookFromFile(path: []const u8, alloc: std.mem.Allocator) !std.AutoHashMap(u64, Move) {
     const size = (try std.fs.cwd().statFile(path)).size;
-    var buffer = try alloc.alloc(u8, size);
+    const buffer = try alloc.alloc(u8, size);
     defer alloc.free(buffer);
     assert(size % 16 == 0);
-    var fileBytes = try std.fs.cwd().readFile(path, buffer);
+    const fileBytes = try std.fs.cwd().readFile(path, buffer);
     return try deserializeBook(bytesToU64Slice(fileBytes), alloc);
 }
 
@@ -140,7 +140,7 @@ pub fn bytesToU64Slice(bytes: []const u8) []const u64 {
 
 // Caller still owns the original book
 pub fn writeBookToFile(book: std.AutoHashMap(u64, Move), path: []const u8, alloc: std.mem.Allocator) !void {
-    var data = try serializeBook(book, alloc);
+    const data = try serializeBook(book, alloc);
     defer alloc.free(data);
     var bytes: []u8 = undefined;
     bytes.len = data.len * 8;
@@ -351,7 +351,7 @@ pub fn parsePgnMove(board: *Board, pgnText: []const u8, lists: *movegen.ListPool
     board.debugPrint();
     std.debug.print("{s} matches multiple: ", .{pgnText});
     for (matchingMoves.items) |move| {
-        std.debug.print("{s}, ", .{ try move.text() });
+        std.debug.print("{s}, ", .{try move.text()});
     }
     std.debug.print("\n", .{});
     return error.InvalidMove; // multiple moves match

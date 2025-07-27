@@ -65,7 +65,7 @@ pub fn main() !void {
     print("[info]: Done! Played {} games in {}ms.\n", .{ config.gameCount, gt.get() });
 }
 
-const Shared = std.atomic.Atomic(usize);
+const Shared = std.atomic.Value(usize);
 
 const Stats = struct {
     winA: Shared = Shared.init(0),
@@ -74,7 +74,7 @@ const Stats = struct {
     fail: Shared = Shared.init(0),
 
     fn log(self: Stats) void {
-        print("[info]: A Wins {}. B Wins {}. Draw {}. Error {}.\n", .{ self.winA.loadUnchecked(), self.winB.loadUnchecked(), self.draw.loadUnchecked(), self.fail.loadUnchecked() });
+        print("[info]: A Wins {}. B Wins {}. Draw {}. Error {}.\n", .{ self.winA.raw, self.winB.raw, self.draw.raw, self.fail.raw });
     }
 };
 
@@ -102,22 +102,22 @@ pub fn workerFn(self: *Worker) !void {
     // try self.engineA.send(.{ .SetOption = .{ .name = "Skill Level", .value = fishLevelStr } });
 
     while (true) {
-        const g = self.gamesPlayed.fetchAdd(1, .SeqCst);
+        const g = self.gamesPlayed.fetchAdd(1, .seq_cst);
         if (g >= self.config.gameCount) break;
         print("[info]: Game {}/{}.\n", .{ g, self.config.gameCount });
         self.ctx.resetMemoTable();
 
         const result = playOneGame(self) catch |err| {
-            _ = self.stats.fail.fetchAdd(1, .SeqCst);
+            _ = self.stats.fail.fetchAdd(1, .seq_cst);
             print("[info]: Game failed! {}\n", .{err});
             continue;
         };
 
         _ = switch (result) {
             .Continue => @panic("game done but continue?"),
-            .WhiteWins => self.stats.winA.fetchAdd(1, .SeqCst),
-            .BlackWins => self.stats.winB.fetchAdd(1, .SeqCst),
-            else => self.stats.draw.fetchAdd(1, .SeqCst),
+            .WhiteWins => self.stats.winA.fetchAdd(1, .seq_cst),
+            .BlackWins => self.stats.winB.fetchAdd(1, .seq_cst),
+            else => self.stats.draw.fetchAdd(1, .seq_cst),
         };
 
         self.stats.log();
@@ -252,7 +252,7 @@ fn playUciMove(self: *Worker, engine: *Stockfish, timeLimitMS: u64, board: *Boar
 }
 
 pub const Stockfish = struct {
-    process: std.ChildProcess,
+    process: std.process.Child,
 
     // I think the allocator is just used for arg strings and stuff.
     // TODO: make sure its not putting all output there but that seems dumb and I think I would notice.
@@ -262,7 +262,7 @@ pub const Stockfish = struct {
     }
 
     pub fn initOther(command: []const u8, alloc: std.mem.Allocator) !@This() {
-        var process = std.ChildProcess.init(&[_][]const u8{command}, alloc);
+        var process = std.process.Child.init(&[_][]const u8{command}, alloc);
         process.stdin_behavior = .Pipe;
         process.stdout_behavior = .Pipe;
         process.stderr_behavior = .Inherit;
