@@ -199,7 +199,10 @@ pub inline fn getRawIndex(piece: Piece, square: u6) usize {
 }
 
 fn getZoidberg(piece: Piece, square: u6) u64 {
-    return Learned.ZOIDBERG[Learned.ZOID_PIECE_START + getRawIndex(piece, square)];
+    // ??? https://github.com/ziglang/zig/issues/13938
+    // TODO: profile this again next time i update zig.... make sure perft doesn't spend 66% of its time in memmove. 
+    const lolthisisgarbagebutyouhavetoprofilebeforetakingitout = &Learned.ZOIDBERG;
+    return lolthisisgarbagebutyouhavetoprofilebeforetakingitout[Learned.ZOID_PIECE_START + getRawIndex(piece, square)];
 }
 
 // This is a chonker struct (if I store repititions inline) but that's fine because I only ever need one.
