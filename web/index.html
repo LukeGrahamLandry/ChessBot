@@ -42,7 +42,12 @@
             <input type="checkbox" id="showlabels"> Show Square Labels <br>
             <input type="checkbox" id="enablebot" checked> Enable Bot <br>
             <input type="range" id="depth" value="6" min="2" max="10" style="width: 50%;"> Max Depth: <span id="showdepth"></span> ply. <br>
-            <input type="range" id="time" value="400" min="100" max="15000" style="width: 50%;">  Max Time: <span id="showtime"></span> ms.<br> <br>
+            <input type="range" id="time" value="400" min="100" max="15000" style="width: 50%;"> Max Time: <span id="showtime"></span> ms.<br> 
+            Engine Version: <select id="engine_impl" onchange="handleChangeEngine()">
+                <option value="main.wasm" selected>Zig</option>
+                <option value="main_fr.wasm">Franca</option>
+            </select> <br>
+            <br>
         </div>
         <a href="https://lichess.org/@/ZigZagZ" style="color: rgb(0, 204, 255);"> The bot also plays on Lichess. </a>
         <br> <a href="https://github.com/LukeGrahamLandry/ChessBot" style="color: rgb(0, 204, 255);"> Github </a>
@@ -65,12 +70,15 @@
     }
 
     const callbacks = { 
+        main: { memory: createNewMemory(), },  // only used by engine_impl=Franca
         env: {
+            null: () => {throw new Error("null");},  // only used by engine_impl=Franca
             jsConsoleLog: function (ptr, len) {
                 const msgStr = getWasmString(ptr, len);
                 console.log(msgStr);
             },
             jsAlert: function (ptr, len) {
+                console.trace();
                 const msgBuffer = new Uint8Array(Engine.memory.buffer, ptr, len);
                 const msgStr = textDecoder.decode(msgBuffer);
                 alert(getWasmString(ptr, len));
@@ -84,6 +92,9 @@
     } else {
         document.getElementById("controls").style.display = "none";
         document.getElementById("loading").innerText = "Your browser doesn't support WASM. Apperently it's 2015 where you live.";
+    }
+    function createNewMemory() {
+        return new WebAssembly.Memory({ initial: 200, maximum: 10000, });
     }
     
     const chessImg = new Image();

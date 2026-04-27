@@ -240,7 +240,7 @@ function drawBitBoardPair(ctx, w, b) {
     }
 }
 
-const letters = ["A", "B", "C", "D", "E", "F", "G", "H"];
+const letters = "ABCDEFGH".split("");
 function renderBoard(board, ctx) {
     const fen = getFenFromEngine(board);
     document.getElementById("fen").value = fen;
@@ -248,7 +248,6 @@ function renderBoard(board, ctx) {
     // TODO: show engine eval as well 
     document.getElementById("mEval").innerText = Engine.getMaterialEval(board);
 
-    // TODO: If I really cared I could just render the diff instead of clearing the board
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
     renderInfoOverlay(board, ctx, bitBoardInfo);
@@ -367,8 +366,22 @@ function handleSettingsChange() {
     Engine.changeSettings(maxTimeMs, maxDepth);
 }
 
+async function handleChangeEngine() {
+    const e = document.getElementById("engine_impl");
+    e.disabled = true;
+    document.getElementById("player").innerText = "Loading...";
+    const fen = getFenFromEngine(mainGame);
+    const engine_path = e.value;
+    callbacks.main.memory = createNewMemory();
+    const wasm = await WebAssembly.instantiateStreaming(fetch(engine_path), callbacks);
+    handleWasmLoaded(wasm);
+    document.getElementById("fen").value = fen;
+    handleSetFromFen();
+    e.disabled = false;
+}
+
 function getWasmString(ptr, len) {
-    const buffer = new Uint8Array(Engine.memory.buffer, ptr, len);
+    const buffer = new Uint8Array(Engine.memory.buffer, Number(ptr), Number(len));
     return textDecoder.decode(buffer);
 }
 

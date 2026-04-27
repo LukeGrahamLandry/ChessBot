@@ -45,6 +45,7 @@ fn makeBin(b: *std.Build, comptime name: []const u8, target: std.Build.ResolvedT
         .optimize = optimize,
         .use_llvm = use_llvm,
     });
+    exe.linkLibC();
     b.installArtifact(exe);
     const run_cmd = b.addRunArtifact(exe);
     // run_cmd.step.dependOn(b.getInstallStep());
